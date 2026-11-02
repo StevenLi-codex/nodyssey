@@ -10,6 +10,29 @@ plugins {
     alias(libs.plugins.spotless)
 }
 
+// CMP-10727 is an iOS keyboard-layout defect. Keep Android/desktop production graphs unchanged;
+// only iOS targets consume alpha02's official fix. The JVM test configurations of :designsys
+// exercise that same shared Skiko node without requiring an iPhone or copying its implementation.
+val iosImeComposeVersion = libs.versions.composeIosIme.get()
+val upstreamComposeVersion = libs.versions.composeMultiplatform.get()
+subprojects {
+    configurations.configureEach {
+        val iosTarget = name.startsWith("iosArm64") || name.startsWith("iosSimulatorArm64")
+        val keyboardRegression = project.name == "designsys" &&
+            name in setOf("jvmTestCompileClasspath", "jvmTestRuntimeClasspath")
+        if (iosTarget || keyboardRegression) {
+            resolutionStrategy.eachDependency {
+                if (requested.group.startsWith("org.jetbrains.compose.") &&
+                    requested.version == upstreamComposeVersion
+                ) {
+                    useVersion(iosImeComposeVersion)
+                    because("iOS keyboard-offset settling fix: CMP-10727, compose-multiplatform-core #3406")
+                }
+            }
+        }
+    }
+}
+
 /**
  * ktlint rule configuration.
  *

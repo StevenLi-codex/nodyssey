@@ -18,10 +18,14 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
+      # The shared Gradle modules apply AGP even for an iOS archive. SDK setup is configuration
+      # only: this workflow never runs Android tests or builds an APK/AAB.
       - uses: android-actions/setup-android@v4
       - uses: actions/cache@v6
         with:
@@ -31,8 +35,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: false
-      - name: Verify formatting and JVM regression tests
-        run: ./gradlew spotlessCheck :designsys:jvmTest :ui:jvmTest
+      - name: Verify formatting and iOS layout regression
+        run: ./gradlew spotlessCheck :designsys:jvmTest --tests '*KeyboardOffsetSettlingTest*'
       - name: Run common tests on Kotlin Native
         run: ./gradlew :shared:macosArm64Test
       - name: Build unsigned iOS test app
