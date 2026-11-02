@@ -1,0 +1,79 @@
+name: iOS IME regression and unsigned build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ios-wechat-ime-freeze]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: ios-ime-konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: ios-ime-konan-${{ runner.os }}-
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: false
+      - name: Verify formatting and JVM regression tests
+        run: ./gradlew spotlessCheck :designsys:jvmTest :ui:jvmTest
+      - name: Run common tests on Kotlin Native
+        run: ./gradlew :shared:macosArm64Test
+      - name: Build unsigned iOS test app
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8"
+        run: |
+          xcodebuild \
+            -project iosapp/Nodyssey.xcodeproj \
+            -scheme Nodyssey \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="1.2.22-ime.1" \
+            CURRENT_PROJECT_VERSION="52"
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry nodyssey-1.2.22-ime.1-unsigned.ipa Payload)
+          shasum -a 256 "$RUNNER_TEMP/nodyssey-1.2.22-ime.1-unsigned.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nodyssey-ios-ime-unsigned
+          path: ${{ runner.temp }}/nodyssey-1.2.22-ime.1-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ime-test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Stop Gradle daemons
+        if: always()
+        run: ./gradlew --stop
