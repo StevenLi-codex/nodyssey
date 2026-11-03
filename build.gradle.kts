@@ -12,7 +12,7 @@ plugins {
 
 // CMP-10727 is an iOS keyboard-layout defect. Keep Android/desktop production graphs unchanged;
 // only iOS targets consume alpha02's official fix. The JVM test configurations of :designsys
-// exercise that same shared Skiko node without requiring an iPhone or copying its implementation.
+// and :ui exercise the same iOS shared implementation without requiring an iPhone.
 val iosImeComposeVersion = libs.versions.composeIosIme.get()
 val upstreamComposeVersion = libs.versions.composeMultiplatform.get()
 subprojects {
@@ -23,7 +23,7 @@ subprojects {
     }
     configurations.configureEach {
         val iosTarget = name.startsWith("iosArm64") || name.startsWith("iosSimulatorArm64")
-        val keyboardRegression = project.name == "designsys" &&
+        val keyboardRegression = project.name in setOf("designsys", "ui") &&
             name in setOf("jvmTestCompileClasspath", "jvmTestRuntimeClasspath")
         if (iosTarget || keyboardRegression) {
             resolutionStrategy.eachDependency {

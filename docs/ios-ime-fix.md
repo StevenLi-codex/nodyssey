@@ -10,7 +10,7 @@
 
 官方补丁 [compose-multiplatform-core #3406](https://github.com/JetBrains/compose-multiplatform-core/pull/3406) 限制一次普通测量所引发的 settling 重测，避免 settling 再次触发自己。`1.13.0-alpha02` 已包含该补丁，并包含相关键盘几何修复 [#3407](https://github.com/JetBrains/compose-multiplatform-core/pull/3407)。
 
-只升级 iOS 设备与模拟器的依赖图到 `1.13.0-alpha02`，引入官方补丁；Android、桌面 JVM、macOS 的生产依赖保持上游原版。为在无手机的环境验证同一共享布局节点，只有 `:designsys` 的 JVM 测试 classpath 也使用修复版。这不是维护或构建另一个客户端版本。
+只升级 iOS 设备与模拟器的依赖图到 `1.13.0-alpha02`，引入官方补丁；Android、桌面 JVM、macOS 的生产依赖保持上游原版。为在无手机的环境验证同一共享布局节点，只有 `:designsys` 与 `:ui` 的 JVM 测试 classpath 也使用修复版。这不是维护或构建另一个客户端版本。
 
 ## 不纳入本次修复的内容
 
