@@ -35,10 +35,39 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: false
-      - name: Verify formatting and iOS layout regression
-        run: ./gradlew spotlessCheck :designsys:jvmTest --tests '*KeyboardOffsetSettlingTest*'
+      - name: Verify formatting and iOS regressions on JVM
+        run: ./gradlew spotlessCheck :designsys:jvmTest :shared:jvmTest :ui:jvmTest
       - name: Run common tests on Kotlin Native
         run: ./gradlew :shared:macosArm64Test
+      - name: Boot iOS test simulator
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
+          iphones = [d for runtime, rows in devices.items() if '.iOS-' in runtime for d in rows if d['name'].startswith('iPhone') and d.get('isAvailable')]
+          if not iphones:
+              raise SystemExit('No available iPhone simulator')
+          device = next((d for d in iphones if d['state'] == 'Booted'), iphones[0])
+          if device['state'] != 'Booted':
+              subprocess.run(['xcrun', 'simctl', 'boot', device['udid']], check=True)
+          subprocess.run(['xcrun', 'simctl', 'bootstatus', device['udid'], '-b'], check=True)
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('IOS_TEST_DEVICE=' + device['udid'] + '\n')
+          print('Simulator:', device['name'], device['udid'])
+          PY
+      - name: Run iOS editor and SVG integration tests
+        run: ./gradlew :designsys:iosSimulatorArm64Test :iosapp:iosSimulatorArm64Test -PiosTestDevice="$IOS_TEST_DEVICE"
+      - name: Verify iOS integration tests executed
+        run: |
+          python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          for module, required in [('designsys', 'EditorTextFieldPlatformTest'), ('iosapp', 'WebKitSvgRasterizerTest')]:
+              files = list(pathlib.Path(module, 'build/test-results/iosSimulatorArm64Test').glob('**/*.xml'))
+              cases = [c for f in files for c in ET.parse(f).getroot().iter('testcase') if required in c.attrib.get('classname', '')]
+              if not cases or any(c.find('skipped') is not None for c in cases):
+                  raise SystemExit(required + ' did not execute')
+              print(required, 'executed:', len(cases))
+          PY
       - name: Build unsigned iOS test app
         env:
           GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8"
@@ -54,18 +83,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.22-ime.1" \
-            CURRENT_PROJECT_VERSION="52"
+            MARKETING_VERSION="1.2.22-ime.2" \
+            CURRENT_PROJECT_VERSION="53"
       - name: Package unsigned IPA
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
-          (cd "$RUNNER_TEMP" && zip -qry nodyssey-1.2.22-ime.1-unsigned.ipa Payload)
-          shasum -a 256 "$RUNNER_TEMP/nodyssey-1.2.22-ime.1-unsigned.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry nodyssey-1.2.22-ime.2-unsigned.ipa Payload)
+          shasum -a 256 "$RUNNER_TEMP/nodyssey-1.2.22-ime.2-unsigned.ipa"
       - uses: actions/upload-artifact@v7
         with:
           name: nodyssey-ios-ime-unsigned
-          path: ${{ runner.temp }}/nodyssey-1.2.22-ime.1-unsigned.ipa
+          path: ${{ runner.temp }}/nodyssey-1.2.22-ime.2-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
       - name: Upload test reports

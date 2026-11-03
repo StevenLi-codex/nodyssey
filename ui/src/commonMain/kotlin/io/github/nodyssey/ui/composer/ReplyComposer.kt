@@ -46,7 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -286,13 +286,18 @@ private fun ReplyEditorSheet(
     onInsertVote: () -> Unit,
     onInsertStardust: () -> Unit,
 ) {
-    val keyboard = LocalSoftwareKeyboardController.current
+    val inputStates = listOf(bodyState)
+    val dismissInput = composerInputAction(inputStates, action = onDismiss)
+    val publishInput = composerInputAction(inputStates, action = onPublish)
+    // Other platforms retain their existing preview-only hide behavior.
+    val previewInput = composerInputAction(inputStates, hideOnOtherPlatforms = true, action = onPreview)
+    val panelInput = composerInputAction(inputStates) {}
     val stickerPictures = rememberStickerPictures()
 
     ModalBottomSheet(
         // Guarded like the close button and the BackHandler: while a publish is in flight, a swipe
         // or scrim tap must not be the one dismiss path that still works.
-        onDismissRequest = { if (!state.isPublishing) onDismiss() },
+        onDismissRequest = { if (!state.isPublishing) dismissInput() },
         sheetState = rememberBottomSheetState(
             initialValue = SheetValue.Hidden,
             enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
@@ -312,7 +317,7 @@ private fun ReplyEditorSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                IconButton(onClick = onDismiss, enabled = !state.isPublishing) {
+                IconButton(onClick = dismissInput, enabled = !state.isPublishing) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = stringResource(Res.string.action_close),
@@ -333,12 +338,7 @@ private fun ReplyEditorSheet(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = {
-                        // The preview covers the sheet, so the IME has to be gone before it rises —
-                        // otherwise it comes back to a keyboard over a screen that has no field.
-                        keyboard?.hide()
-                        onPreview()
-                    },
+                    onClick = previewInput,
                     enabled = !state.isPublishing,
                 ) {
                     Icon(
@@ -351,7 +351,7 @@ private fun ReplyEditorSheet(
                 PublishReplyButton(
                     isPublishing = state.isPublishing,
                     enabled = state.canPublish,
-                    onClick = onPublish,
+                    onClick = publishInput,
                 )
             }
             // The dismissible 回复 target (6d), recessed into the sheet (2c): it is a reference to
@@ -386,6 +386,9 @@ private fun ReplyEditorSheet(
                 hintStyle = CommentBody,
                 inlinePictures = stickerPictures,
                 modifier = Modifier
+                    .onFocusChanged {
+                        if (iosComposerFocusHandoff && it.isFocused) editorState.closePanels()
+                    }
                     .readableWidth()
                     .heightIn(min = MIN_EDITOR_HEIGHT, max = MAX_EDITOR_HEIGHT)
                     .padding(start = Spacing.lg, end = Spacing.lg, top = Spacing.md, bottom = Spacing.sm),
@@ -422,6 +425,7 @@ private fun ReplyEditorSheet(
                 actions = state.toolbar.enabled,
                 bodyState = bodyState,
                 editorState = editorState,
+                beforePanel = if (iosComposerFocusHandoff) panelInput else null,
                 onPickImages = onPickImages,
                 onPickHostedImages = onPickHostedImages,
                 onCustomize = onCustomize,

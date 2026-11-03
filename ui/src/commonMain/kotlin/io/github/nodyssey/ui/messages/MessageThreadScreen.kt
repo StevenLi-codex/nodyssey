@@ -103,6 +103,8 @@ import io.github.nodyssey.ui.common.webViewUrl
 import io.github.nodyssey.ui.composer.AttachmentTray
 import io.github.nodyssey.ui.composer.HostedImagePickerSheet
 import io.github.nodyssey.ui.composer.NodeSeekEmojiPanel
+import io.github.nodyssey.ui.composer.composerInputAction
+import io.github.nodyssey.ui.composer.iosComposerFocusHandoff
 import io.github.nodyssey.ui.composer.rememberImagePicker
 import io.github.nodyssey.ui.composer.rememberStickerPictures
 import io.github.nodyssey.ui.notifications.previewText
@@ -902,6 +904,8 @@ private fun MessageComposer(
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val fieldFocus = remember { FocusRequester() }
+    val panelInput = composerInputAction(listOf(draftState)) {}
+    val beforePanel = if (iosComposerFocusHandoff) panelInput else null
     val stickerPictures = rememberStickerPictures()
     // The grid is this bar's format card, and the emoji panel takes its place as it does under the
     // post editor's: [MarkdownEditorState] keeps the two exclusive.
@@ -955,9 +959,11 @@ private fun MessageComposer(
                     // Focus goes with the keyboard: a field that kept it would bring the keyboard
                     // straight back up over the grid on the next recomposition, and tapping the field
                     // is how the grid closes.
-                    focusManager.clearFocus()
-                    keyboard?.hide()
-                    editorState.toggleFormat()
+                    if (beforePanel == null) {
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    }
+                    editorState.toggleFormat(beforePanel)
                 }
             },
             fieldFocus = fieldFocus,
@@ -980,6 +986,7 @@ private fun MessageComposer(
                             fieldFocus.requestFocus()
                         },
                         hideKeyboard = { keyboard?.hide() },
+                        beforePanel = beforePanel,
                     )
                 },
                 onCustomize = onCustomize,

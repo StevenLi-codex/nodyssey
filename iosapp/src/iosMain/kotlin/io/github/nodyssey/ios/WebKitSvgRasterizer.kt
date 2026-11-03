@@ -2,6 +2,7 @@
 
 package io.github.nodyssey.ios
 
+import io.github.plaza.core.image.SvgRasterPipeline
 import io.github.plaza.core.image.SvgSize
 import io.github.plaza.core.toByteArray
 import io.github.plaza.core.toNSData
@@ -9,14 +10,19 @@ import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.autoreleasepool
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import platform.CoreFoundation.CFDataCreateMutable
+import platform.CoreFoundation.CFDataGetBytePtr
+import platform.CoreFoundation.CFDataGetLength
+import platform.CoreFoundation.CFRelease
+import platform.CoreFoundation.CFStringCreateWithCString
+import platform.CoreFoundation.kCFStringEncodingUTF8
 import platform.CoreGraphics.CGBitmapContextCreate
 import platform.CoreGraphics.CGBitmapContextCreateImage
 import platform.CoreGraphics.CGColorSpaceCreateDeviceRGB
@@ -27,6 +33,7 @@ import platform.CoreGraphics.CGContextScaleCTM
 import platform.CoreGraphics.CGDataProviderCreateWithData
 import platform.CoreGraphics.CGDataProviderRelease
 import platform.CoreGraphics.CGImageAlphaInfo
+import platform.CoreGraphics.CGImageRef
 import platform.CoreGraphics.CGImageRelease
 import platform.CoreGraphics.CGPDFDocumentCreateWithProvider
 import platform.CoreGraphics.CGPDFDocumentGetPage
@@ -38,9 +45,10 @@ import platform.CoreGraphics.kCGPDFMediaBox
 import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.Foundation.base64EncodedStringWithOptions
+import platform.ImageIO.CGImageDestinationAddImage
+import platform.ImageIO.CGImageDestinationCreateWithData
+import platform.ImageIO.CGImageDestinationFinalize
 import platform.UIKit.UIColor
-import platform.UIKit.UIImage
-import platform.UIKit.UIImagePNGRepresentation
 import platform.UIKit.UIScrollViewContentInsetAdjustmentBehavior
 import platform.WebKit.WKNavigation
 import platform.WebKit.WKNavigationDelegateProtocol
@@ -49,6 +57,7 @@ import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
+import platform.posix.memcpy
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
@@ -75,11 +84,11 @@ import kotlin.math.roundToInt
  * out to hide it. `createPDF` renders the page itself, offscreen, with the view in no window at all;
  * the page comes back as vector, and rasterising it here is the one place the output size is decided.
  *
- * **One at a time.** The [gate] holds this to a single render: a feed scrolling past twenty badges
+ * **One at a time.** The [pipeline] holds this to a single render: a feed scrolling past twenty badges
  * must not have twenty web views alive at once, and each of these is a process.
  */
 internal class WebKitSvgRasterizer {
-    private val gate = Mutex()
+    private val pipeline = SvgRasterPipeline(Dispatchers.Main, Dispatchers.Default)
 
     /**
      * Renders [markup] into PNG bytes [widthPx] × [heightPx], or null when it could not be done — a
@@ -94,22 +103,35 @@ internal class WebKitSvgRasterizer {
         widthPx: Int,
         heightPx: Int,
     ): ByteArray? =
-        gate.withLock {
-            // WebKit's own API contract: a `WKWebView` is a main-thread object from `init` onwards.
-            withContext(Dispatchers.Main) {
-                withTimeoutOrNull(RENDER_TIMEOUT_MILLIS) { render(markup, intrinsic, widthPx, heightPx) }
-            }
-        }
+        pipeline.render(
+            widthPx,
+            heightPx,
+            // WebKit init/load/PDF and finally cleanup all finish on Main. Only immutable PDF data
+            // crosses to the worker; even its copy to a Kotlin byte array happens off Main.
+            capture = { renderPdf(markup, intrinsic) },
+            rasterize = { pdf ->
+                val job = currentCoroutineContext()
+                job.ensureActive()
+                autoreleasepool {
+                    if (pdf.length > Int.MAX_VALUE.toULong()) return@autoreleasepool null
+                    pdf.toByteArray().toPng(widthPx, heightPx) { job.ensureActive() }
+                }
+            },
+        )
 
-    private suspend fun render(
+    private suspend fun renderPdf(
         markup: ByteArray,
         intrinsic: SvgSize,
-        widthPx: Int,
-        heightPx: Int,
-    ): ByteArray? {
+    ): NSData? {
+        if (!intrinsic.width.isFinite() || !intrinsic.height.isFinite() ||
+            intrinsic.width <= 0f || intrinsic.height <= 0f
+        ) {
+            return null
+        }
         // The frame is the document's own size, in points, so that one CSS pixel is one point and the
         // page needs no scaling of its own. Nothing is drawn at this size — the PDF is vector, and the
-        // pixels are decided when it is rasterised — so a big document costs no memory here.
+        // pixels are decided when it is rasterised. The bitmap budget does not bound WebKit layout,
+        // embedded image decoding, SVG filters, PDF data or encoder scratch allocations.
         val frame = CGRectMake(0.0, 0.0, intrinsic.width.toDouble(), intrinsic.height.toDouble())
         val webView = offscreenWebView(frame)
         // Held for the length of the render: `navigationDelegate` is a weak reference, and a delegate
@@ -119,8 +141,7 @@ internal class WebKitSvgRasterizer {
         try {
             val page = wrapperPage(markup, intrinsic)
             if (!delegate.awaitLoad { webView.loadHTMLString(page, baseURL = null) }) return null
-            val pdf = printToPdf(webView, frame) ?: return null
-            return pdf.toByteArray().toPng(widthPx, heightPx)
+            return printToPdf(webView, frame)
         } finally {
             webView.stopLoading()
             webView.navigationDelegate = null
@@ -154,7 +175,7 @@ internal class WebKitSvgRasterizer {
         suspendCancellableCoroutine { continuation ->
             val configuration = WKPDFConfiguration().apply { rect = frame }
             webView.createPDFWithConfiguration(configuration) { data, _ ->
-                continuation.resume(data)
+                if (continuation.isActive) continuation.resume(data)
             }
         }
 
@@ -165,9 +186,12 @@ internal class WebKitSvgRasterizer {
      * No flip: a bitmap context and a PDF page both put their origin in the bottom-left corner, and
      * the flip this had at first drew the card upside down.
      */
-    private fun ByteArray.toPng(widthPx: Int, heightPx: Int): ByteArray? =
+    private fun ByteArray.toPng(widthPx: Int, heightPx: Int, checkActive: () -> Unit): ByteArray? =
         usePinned { pinned ->
+            checkActive()
+            if (isEmpty()) return@usePinned null
             val provider = CGDataProviderCreateWithData(null, pinned.addressOf(0), size.toULong(), null)
+                ?: return@usePinned null
             val document = CGPDFDocumentCreateWithProvider(provider)
             CGDataProviderRelease(provider)
             if (document == null) return@usePinned null
@@ -176,16 +200,17 @@ internal class WebKitSvgRasterizer {
                 val box = CGPDFPageGetBoxRect(page, kCGPDFMediaBox)
                 val boxWidth = box.useContents { size.width }
                 val boxHeight = box.useContents { size.height }
-                if (boxWidth <= 0.0 || boxHeight <= 0.0) return@usePinned null
+                if (!boxWidth.isFinite() || !boxHeight.isFinite() || boxWidth <= 0.0 || boxHeight <= 0.0) return@usePinned null
 
-                val colorSpace = CGColorSpaceCreateDeviceRGB()
+                checkActive()
+                val colorSpace = CGColorSpaceCreateDeviceRGB() ?: return@usePinned null
                 val context =
                     CGBitmapContextCreate(
                         data = null,
                         width = widthPx.toULong(),
                         height = heightPx.toULong(),
                         bitsPerComponent = 8u,
-                        bytesPerRow = 0u,
+                        bytesPerRow = widthPx.toULong() * 4u,
                         space = colorSpace,
                         bitmapInfo = CGImageAlphaInfo.kCGImageAlphaPremultipliedLast.value,
                     )
@@ -194,9 +219,12 @@ internal class WebKitSvgRasterizer {
                 try {
                     CGContextScaleCTM(context, widthPx / boxWidth, heightPx / boxHeight)
                     CGContextDrawPDFPage(context, page)
+                    // Native drawing/encoding cannot be interrupted inside the call. Keep the gate
+                    // until finally releases everything, and stop before starting the next stage.
+                    checkActive()
                     val image = CGBitmapContextCreateImage(context) ?: return@usePinned null
                     try {
-                        UIImagePNGRepresentation(UIImage.imageWithCGImage(image))?.toByteArray()
+                        encodePng(image, checkActive)
                     } finally {
                         CGImageRelease(image)
                     }
@@ -207,6 +235,35 @@ internal class WebKitSvgRasterizer {
                 CGPDFDocumentRelease(document)
             }
         }
+
+    /** ImageIO encodes a task-local CGImage directly, without creating any UIKit object. */
+    private fun encodePng(image: CGImageRef, checkActive: () -> Unit): ByteArray? {
+        checkActive()
+        val data = CFDataCreateMutable(null, 0) ?: return null
+        try {
+            val pngType = CFStringCreateWithCString(null, "public.png", kCFStringEncodingUTF8) ?: return null
+            val destination = try {
+                CGImageDestinationCreateWithData(data, pngType, 1u, null)
+            } finally {
+                CFRelease(pngType)
+            } ?: return null
+            try {
+                CGImageDestinationAddImage(destination, image, null)
+                checkActive()
+                if (!CGImageDestinationFinalize(destination)) return null
+                checkActive()
+                val length = CFDataGetLength(data)
+                if (length <= 0 || length > Int.MAX_VALUE.toLong()) return null
+                return ByteArray(length.toInt()).apply {
+                    usePinned { pinned -> memcpy(pinned.addressOf(0), CFDataGetBytePtr(data), length.toULong()) }
+                }
+            } finally {
+                CFRelease(destination)
+            }
+        } finally {
+            CFRelease(data)
+        }
+    }
 
     /**
      * The page the document is drawn in: the SVG at its own size, on a viewport of that same width.
@@ -243,7 +300,7 @@ internal class WebKitSvgRasterizer {
             suspendCancellableCoroutine { continuation ->
                 pending = { finished ->
                     pending = null
-                    continuation.resume(finished)
+                    if (continuation.isActive) continuation.resume(finished)
                 }
                 start()
             }
@@ -271,13 +328,5 @@ internal class WebKitSvgRasterizer {
         ) {
             pending?.invoke(false)
         }
-    }
-
-    private companion object {
-        /**
-         * Long enough for a document with a megabyte of embedded bitmaps in it, short enough that a
-         * renderer that has wedged does not hold the gate against every image behind it.
-         */
-        const val RENDER_TIMEOUT_MILLIS = 8_000L
     }
 }

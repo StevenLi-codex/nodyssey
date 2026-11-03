@@ -16,6 +16,11 @@ plugins {
 val iosImeComposeVersion = libs.versions.composeIosIme.get()
 val upstreamComposeVersion = libs.versions.composeMultiplatform.get()
 subprojects {
+    // Simulator tests are iOS checks, not another application build. CI supplies an available
+    // booted device UDID rather than relying on a model name that changes with Xcode images.
+    tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+        providers.gradleProperty("iosTestDevice").orNull?.let { device.set(it) }
+    }
     configurations.configureEach {
         val iosTarget = name.startsWith("iosArm64") || name.startsWith("iosSimulatorArm64")
         val keyboardRegression = project.name == "designsys" &&

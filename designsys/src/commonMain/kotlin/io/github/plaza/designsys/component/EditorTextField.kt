@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,17 +60,43 @@ fun EditorTextField(
         Box(Modifier.fillMaxWidth()) { content() }
     },
 ) {
+    val optimized = LocalEditorTextFieldOptimization.current
+    // Most edits contain no stickers, even in a sticker-enabled body. Skip the picture layer and
+    // layout callback for ordinary typing, but retain the transformation for the field's lifetime.
+    val activePictures = if (optimized && inlinePictures != null) {
+        val hasPictures by remember(state, inlinePictures) {
+            derivedStateOf { inlinePictures.find(state.text).isNotEmpty() }
+        }
+        inlinePictures.takeIf { hasPictures }
+    } else {
+        inlinePictures
+    }
+    // BasicTextField keys its transformed state (and platform input session) by this identity.
+    // Never toggle it when the first/last sticker changes; an empty find is already a no-op.
     val output = remember(inlinePictures) { inlinePictures?.let { InlinePictureOutput(it.find) } }
     // Hoisted only so the pictures can follow the text when the field scrolls under them.
     val scrollState = rememberScrollState()
-    var layout by remember { mutableStateOf<(() -> TextLayoutResult?)?>(null) }
+    // CMP's state-based callback supplies a live snapshot-backed getter, not a frozen result.
+    // Its TextLayoutState is replaced when state/output changes (BasicTextField alpha02). On iOS,
+    // retain that getter once per such lifetime instead of publishing a fresh closure every measure.
+    var layout by if (optimized) {
+        remember(state, output) { mutableStateOf<(() -> TextLayoutResult?)?>(null) }
+    } else {
+        remember { mutableStateOf<(() -> TextLayoutResult?)?>(null) }
+    }
     BasicTextField(
         state = state,
         lineLimits = lineLimits,
         inputTransformation = inputTransformation,
         outputTransformation = output,
         scrollState = scrollState,
-        onTextLayout = if (inlinePictures == null) null else { result -> layout = result },
+        onTextLayout = if (activePictures == null) {
+            null
+        } else {
+            { result ->
+                if (!optimized || layout == null) layout = result
+            }
+        },
         keyboardOptions = keyboardOptions,
         onKeyboardAction = onKeyboardAction,
         textStyle = textStyle,
@@ -89,9 +116,13 @@ fun EditorTextField(
                 if (inlinePictures == null) {
                     inner()
                 } else {
+                    // Keep the inner field at the same slot when the first/last sticker changes,
+                    // so the plain-text fast path does not replace the focus/IME attachment.
                     Box {
                         inner()
-                        layout?.let { InlinePictureLayer(state, inlinePictures, scrollState, it) }
+                        if (activePictures != null) {
+                            layout?.let { InlinePictureLayer(state, activePictures, scrollState, it) }
+                        }
                     }
                 }
             }
