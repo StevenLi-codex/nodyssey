@@ -14,12 +14,22 @@ concurrency:
 
 jobs:
   ios:
-    runs-on: macos-latest
+    # Use the separate macOS 15 image after repeated macos-latest ARM capacity failures.
+    # This remains a standard free public-repository runner, not a larger/paid machine.
+    runs-on: macos-15
     timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Verify Apple toolchain
+        run: |
+          test -d "$DEVELOPER_DIR"
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
