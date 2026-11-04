@@ -105,6 +105,10 @@ kotlin {
             implementation(libs.compose.ui.backhandler)
         }
 
+        jvmTest.dependencies {
+            implementation(kotlin("test-junit"))
+        }
+
         androidHostTest.dependencies {
             implementation(libs.junit)
             implementation(libs.kotlinx.coroutines.test)

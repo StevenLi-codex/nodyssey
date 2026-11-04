@@ -21,6 +21,9 @@ androidxMaterialIcons = "1.7.8"
 # on Android alone, while the other targets stayed on 1.12 throughout. This keeps every target on one
 # Compose, alpha as it is. Its Android pointers ask for androidx ui 1.13.0-alpha02.
 composeMultiplatform = "1.13.0-alpha01"
+# Only iOS target graphs and the focused JVM regression harness opt into the keyboard fix.
+# Android and desktop production dependencies keep the upstream versions above/below.
+composeIosIme = "1.13.0-alpha02"
 # Material 3 is versioned on its own line in Compose Multiplatform and usually trails the rest of it;
 # at 1.13.0-alpha01 the two happen to meet. On Android it asks for androidx material3 1.5.0-alpha27,
 # which loses to the alpha29 above.

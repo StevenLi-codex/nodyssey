@@ -66,12 +66,14 @@ fun ComposerEditorBar(
     emojiPanel: @Composable (EmojiPanelScope) -> Unit = {},
     /** What the body field draws as pictures — the same value it was handed. */
     inlinePictures: InlinePictures?,
+    /** Optional input handoff before opening a panel; closing never releases focus again. */
+    beforePanel: (() -> Unit)? = null,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     // The panel stands in for the keyboard, and back puts it away before it leaves.
     PlazaBackHandler(enabled = editorState.emojiOpen) { editorState.closePanels() }
     val onAction: (EditorAction) -> Unit = { action ->
-        editorState.dispatch(action, bodyState, onPickImages, onPickHostedImages, onFormatted) { keyboard?.hide() }
+        editorState.dispatch(action, bodyState, onPickImages, onPickHostedImages, onFormatted, beforePanel) { keyboard?.hide() }
     }
 
     Column(modifier) {
