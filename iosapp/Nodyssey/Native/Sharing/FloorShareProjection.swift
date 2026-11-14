@@ -42,6 +42,10 @@ struct FloorShareProjection {
     private var visited = 0
     let copy: FloorShareCopy
 
+    init(copy: FloorShareCopy) {
+        self.copy = copy
+    }
+
     mutating func append(_ value: String) {
         guard !truncated else { return }
         for character in value {
