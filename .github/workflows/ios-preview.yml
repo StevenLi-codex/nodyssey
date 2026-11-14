@@ -1,0 +1,69 @@
+name: Guest-only unsigned iPhone preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ios-swiftui-preview]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: macos-26
+    timeout-minutes: 50
+    env:
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -Dorg.gradle.workers.max=2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: xcodebuild -version
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: false
+      - name: Archive real unsigned device application
+        run: |
+          set -o pipefail
+          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/NodysseyPreview.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="1.2.22" CURRENT_PROJECT_VERSION="55" \
+            | tee "$RUNNER_TEMP/preview-archive.log"
+      - name: Verify guest policy and independent sandbox
+        run: |
+          python3 iosapp/tests/preview_guest_test.py
+          python3 iosapp/scripts/package_preview.py "$RUNNER_TEMP/NodysseyPreview.xcarchive" "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nodyssey-preview-unsigned
+          path: |
+            ${{ runner.temp }}/nodyssey-preview-unsigned.ipa
+            ${{ runner.temp }}/preview-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload archive diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodyssey-preview-archive-evidence
+          path: ${{ runner.temp }}/preview-archive.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: always()
+        run: ./gradlew --stop

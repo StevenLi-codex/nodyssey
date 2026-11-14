@@ -8,6 +8,9 @@ struct NativeRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Text("preview_guest_notice", tableName: "Foundation")
+                .font(.caption).padding(8).frame(maxWidth: .infinity)
+                .background(Color.orange.opacity(0.15))
             if app.isReady {
                 if let failure = app.lifecycleFailure {
                     NativeFailureView(failure: failure, retry: { restart += 1 })

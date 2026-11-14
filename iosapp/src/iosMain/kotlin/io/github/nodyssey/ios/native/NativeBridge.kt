@@ -47,6 +47,7 @@ object NativeBridge {
 
     fun request(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest =
         start(completion) {
+            previewRequireOperation(operation, argumentsJson, false)
             val args = nativeArguments(argumentsJson)
             val graph = NodysseyApp.ensureContainer()
             val session = reconcile(graph)
@@ -78,6 +79,7 @@ object NativeBridge {
 
     fun observe(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest =
         start(completion) {
+            previewRequireOperation(operation, argumentsJson, true)
             val args = nativeArguments(argumentsJson)
             val graph = NodysseyApp.ensureContainer()
             // collectLatest cancels old readers before reconciling or exposing the next account.
@@ -122,6 +124,7 @@ object NativeBridge {
 
     private suspend fun reconcile(graph: IosAppContainer): SessionState = reconciliation.withLock {
         val session = graph.sessionRepository.peek()
+        if (!PreviewGuestPolicy.sessionAllowed(session.isSignedIn)) throw NativeFailure("PREVIEW_GUEST_ONLY")
         val old = reconciled
         val cleared = graph.postRepository.reconcileSession(session.isSignedIn, session.fingerprint)
         if (old != null && old != session && session.isSignedIn && !cleared) {
@@ -133,7 +136,13 @@ object NativeBridge {
     }
 }
 
+internal fun previewRequireOperation(operation: String, argumentsJson: String, observing: Boolean) {
+    val key = if (operation == "settings.set") nativeArguments(argumentsJson).nativeOptionalText("key") else null
+    if (!PreviewGuestPolicy.allows(operation, observing, key)) throw NativeFailure("PREVIEW_GUEST_ONLY")
+}
+
 internal fun nativeCheckSession(before: SessionState, after: SessionState) {
+    if (!PreviewGuestPolicy.sessionAllowed(after.isSignedIn)) throw NativeFailure("PREVIEW_GUEST_ONLY")
     if (before.isSignedIn != after.isSignedIn || before.fingerprint != after.fingerprint) {
         throw NativeFailure("SESSION_CHANGED")
     }

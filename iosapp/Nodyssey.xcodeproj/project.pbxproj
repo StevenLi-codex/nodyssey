@@ -471,7 +471,7 @@
 					"-framework",
 					NodysseyShell,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.nodyssey;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.nodyssey.preview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -500,7 +500,7 @@
 					"-framework",
 					NodysseyShell,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.nodyssey;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.nodyssey.preview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

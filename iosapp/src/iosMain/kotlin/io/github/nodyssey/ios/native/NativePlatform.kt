@@ -126,6 +126,7 @@ object NativePlatform {
                 require(nativeImageUrlAllowed(url))
                 val graph = NodysseyApp.ensureContainer()
                 val baseline = graph.sessionRepository.peek()
+                if (!PreviewGuestPolicy.sessionAllowed(baseline.isSignedIn)) throw NativeFailure("PREVIEW_GUEST_ONLY")
                 // Same persisted session provenance gate as NativeBridge, before a cached byte is exposed.
                 if (graph.postRepository.reconcileSession(baseline.isSignedIn, baseline.fingerprint)) {
                     graph.notificationRepository.clearCounts()
@@ -235,6 +236,11 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
     )
 
     fun start(completion: (NativePlatformContext?, String?) -> Unit) {
+        // No WebKit cookie seeding, observer, drain or login in this shipping preview.
+        if (!PreviewGuestPolicy.browserAllowed(goal)) {
+            completion(null, "PREVIEW_GUEST_ONLY")
+            return
+        }
         if (opening || closing) {
             completion(null, "BROWSER_CLOSED")
             return

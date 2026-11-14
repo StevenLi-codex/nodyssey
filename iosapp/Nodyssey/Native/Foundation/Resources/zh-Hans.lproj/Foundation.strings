@@ -1,5 +1,6 @@
 "native_foundation_failure" = "操作未能完成。";
 "native_foundation_invalid" = "请求的数据或地址无效。";
-"native_foundation_welcome" = "社区的原生阅读客户端。登录、已保存数据及网络访问继续使用现有共享服务。";
+"native_foundation_welcome" = "独立安装的游客预览版，不开放登录及账户操作。";
+"preview_guest_notice" = "预览版 · 仅限游客。登录、网页认证、上传、转账及重置均已禁用。公开浏览可能受 Cloudflare 限制。";
 "native_foundation_help" = "使用帮助";
 "native_foundation_privacy" = "隐私政策";
