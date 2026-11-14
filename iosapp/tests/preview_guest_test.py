@@ -41,6 +41,7 @@ bridge = (source.parent / 'NativeBridge.kt').read_text()
 assert bridge.count('previewRequireOperation(operation, argumentsJson,') == 2
 assert 'PreviewGuestPolicy.sessionAllowed(session.isSignedIn)' in bridge
 platform = (source.parent / 'NativePlatform.kt').read_text()
+assert 'PreviewGuestPolicy.browserAllowed("external")' in platform, 'External image browser can still reach authenticated Safari pages'
 start = platform.split('fun start(completion:', 1)[1]
 assert start.index('PreviewGuestPolicy.browserAllowed(goal)') < start.index('lifecycle.open()')
 print('PASS: production request/observe and browser gate wiring')

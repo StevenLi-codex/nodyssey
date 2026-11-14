@@ -76,7 +76,7 @@ object NativePlatform {
     fun isTrustedBrowserUrl(url: String): Boolean =
         url == url.trim() && NodeSeekSite.isTrustedWebViewUrl(url)
 
-    fun isExternalBrowserUrl(url: String): Boolean = nativeImageUrlAllowed(url)
+    fun isExternalBrowserUrl(url: String): Boolean = PreviewGuestPolicy.browserAllowed("external") && nativeImageUrlAllowed(url)
 
     fun isBrowserUrl(url: String, goal: String): Boolean = isTrustedBrowserUrl(url) ||
         ((goal == "manage" || goal == "telegramBind") && url == url.trim() && NodeSeekSite.isTelegramOAuthUrl(url))
