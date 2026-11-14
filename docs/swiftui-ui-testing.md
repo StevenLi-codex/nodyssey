@@ -10,7 +10,7 @@ The production controls need these accessibility identifiers (do not replace the
 | --- | --- | --- |
 | Foundation | `native.root` | Native app shell, not Compose |
 | Foundation | `native.tab.home`, `native.tab.notifications`, `native.tab.profile` | Actual tappable tab controls, including while Settings is pushed |
-| Foundation | `native.screen.PostList`, `.Notifications`, `.Profile`, `.Settings`, `.SignIn` | `native.screen.<route>` wrapper for the current screen; preserve child accessibility; active screen must be reachable |
+| Foundation | `native.screen.PostList`, `.Notifications`, `.Profile`, `.Settings`, `.SignIn` | `native.screen.<route>` identifies the routed screen; preserve child accessibility. Profile reachability additionally requires both real guest actions below, not a hit point on its List container. |
 | Account | `native.profile.settings`, `native.profile.signin` | Actual profile navigation actions; sign-in present for a guest |
 | Account | `native.signin.account`, `native.signin.password` | Real form fields; tests never type into them |
 | **Account / sheet owner: requested** | **`native.signin.cancel`** | Real cancel/close action, dismissing SignIn back to the originating tab without authenticating |
@@ -61,6 +61,35 @@ Preserve the `.xcresult` even on failure. CI should stop Gradle in its always-ru
 Run `43558825991` at `d30f9e8ec7e60eafebb11d879923f04c48b468c0` built and launched the actual app, compiled the UI test target, and executed all **3 XCUITests: 3 failed**. Each failed the startup wait: `Neither native tabs nor the real onboarding action became available`. The revision still used the old application entry; the complete SwiftUI entry and page domains were not committed in this run. This is a genuine behavioral RED, not navigation acceptance. It closes the earlier test-target compilation/discovery uncertainty only.
 
 Evidence: `native/14_Execute real native navigation tests.txt` and the uploaded `NativeNavigation.xcresult` under `/home/hermes/.hermes/cache/scratch/nodyssey-ci-43558825991/`. The next integrated application must run these unchanged behavioral checks successfully; do not skip the startup assertion or replace the real root to obtain green.
+
+## Integrated app failure diagnosis and pending rerun
+
+Run `43565737701`, commit `6a171529d43efb38bfde7fd71e932685ad1ff31b`, built and launched the complete SwiftUI app using Xcode 26.6 / iPhone 17 Pro simulator (iOS 26.4.1). All **3 real navigation tests failed at the first Profile screen check**; Home and Notifications checks reached their content. This is different from the earlier old-root startup failure.
+
+The downloaded artifact `14103077365` contains the actual `NativeNavigation.xcresult`. Its failure element descriptions resolve `native.screen.Profile` to a full-screen `CollectionView`, while the query hierarchy shows `native.tab.profile` **Selected**, `native.profile.signin`, and `native.profile.settings`. There are 22 complete hierarchy snapshots across the three test app PIDs with this state; two additional partial element descriptions do not contain the full query output. The three failure screenshot attachments reference two distinct PNG payloads, both showing the unobstructed guest My space screen with Me selected. These establish that route selection and rendering occurred, **not** that either action was tapped successfully. The old assertion stopped before those taps.
+
+The confirmed failing predicate was the generic screen container's `exists && isHittable`. Apple's [`isHittable`](https://developer.apple.com/documentation/xcuiautomation/xcuielement/ishittable) asks whether a hit point can be computed; it is not a general screen-visibility assertion. `NativeScreen` attaches `.accessibilityElement(children: .contain)` to the domain `AnyView`; Apple's [contain contract](https://developer.apple.com/documentation/swiftui/accessibilitychildbehavior/contain) allows modification of an existing accessibility element rather than creation of a new wrapper. In this run the marker is on the List CollectionView. The precise SwiftUI/UIKit reason that container lacks a hit point remains unproven; neither a navigation reset nor combined/hidden guest actions is established by these failures. No production wrapping, hit-test overlay, route bypass or account-domain change was made to force a green marker.
+
+The test now requires Profile's route identity **plus both real guest action hit points**, and verifies the actual selected tab on every tab transition. It also checks that Profile actions are not hittable in Home/Notifications and that returning to Profile restores reachability. Existing Settings push/preservation and sign-in open/cancel/reopen checks remain real taps, with no skips or credential input. The other screen hit-point checks remain unchanged; failure there must be diagnosed from the next result, not preemptively waived. Failure attachments now include the full application accessibility hierarchy as well as the screenshot.
+
+Verification of this edit: the existing approved Mac structural validator and Swift parser exited 0, but XCTest APIs and iOS execution are **not** verified on that CLT-only host. A full Xcode rerun must execute all three tests with zero failures/skips and retain its xcresult before calling this navigation GREEN. No current iOS pass is claimed.
+
+### Separate confirmed FA5 lifecycle defect — backend contract required
+
+`SessionRepository.sync()` increments its reload `generation` when `hasClearance` changes, even with unchanged fingerprint/sign-in status (`shared/.../SessionRepository.kt:65–75,132–138`). `NativeAppModel.session.didSet` treats that counter as identity and invokes `invalidateSession()`: all paths/sheets are cleared and local `app.generation` increments, remounting tabs and restarting editor tasks. This is a real defect, but **not evidence for the Profile test failure above**.
+
+The exported `SessionState.accountDto()` currently exposes only `isSignedIn`, `hasClearance`, and `generation`. Swift cannot safely decide whether a signed-in→signed-in transition is clearance-only or account A→B. Do not use equal `isSignedIn` booleans, a change in `hasClearance`, or guessed profile UID to suppress invalidation.
+
+Required coordinated bridge contract before the production fix:
+
+- Add an authoritative opaque `identityEpoch` (proposed name, exact JSON integer/Int64), scoped to the running graph/site. Compare only for equality; never export cookie values, the cookie fingerprint, or a hash derived from secrets.
+- Keep it stable for clearance-only refresh/reload changes; change it for actual authentication identity replacement, sign-out and supersession, including signed-in A→B. Computing this belongs in the shared/bridge identity owner, not Swift. Site changes and null/revoked sessions must still fail closed.
+- Include the same epoch consistently in `session.state`, `session.snapshot`, `session.sync`, sign-in/2FA/sign-out responses (including nested `session`), from an atomic authoritative snapshot. A peek must not pair a new account with an old epoch.
+- Retain the existing reload `generation` separately. Swift's path/editor identity and privacy invalidation must follow the identity epoch, while clearance-dependent content retry must not remount the shell or discard editor state. Missing/invalid identity epoch must not silently become "same identity".
+
+The unrealistic clearance test was corrected to advance shared generation 1→2 and preserve the PostComposer path, Profile Settings path, challenge sheet, selected tab and local UI identity. Real Mac execution now produces **14 passing tests and 1 failing test (4 assertion failures)**: both paths are emptied, sheet becomes nil, and local generation changes. The existing signed-in→signed-in account-generation test still passes and must remain an invalidation gate once the new epoch is added. This is deliberately retained **RED**, not skipped or weakened; the production fix is blocked on the backend contract. No Kotlin or production Foundation file was changed.
+
+Evidence files for this diagnosis live under `/home/hermes/.hermes/cache/scratch/`: `nodyssey-ci-43565737701/artifacts/_temp/NativeNavigation.xcresult`, `nodyssey-ci-43565737701/artifacts/_temp/navigation-decoded/`, `nodyssey-navigation-structural-validation.log`, `nodyssey-navigation-foundation-tests.log` (original fixture, 15 pass), and `nodyssey-navigation-fa5-red.log` (corrected fixture, 1 fail). CLT linker search-path and Testing deployment-target warnings are present; these are not clean iOS build logs.
 
 ## Original delegated verification status
 

@@ -33,6 +33,10 @@ final class NativeNavigationUITests: XCTestCase {
             attachment.name = "Guest navigation failure"
             attachment.lifetime = .keepAlways
             add(attachment)
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Guest navigation accessibility hierarchy"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
         }
         app?.terminate()
         app = nil
@@ -44,7 +48,12 @@ final class NativeNavigationUITests: XCTestCase {
         selectTab("profile", route: "Profile")
         assertHittable("native.profile.signin") // Fail rather than test a signed-in account.
         selectTab("home", route: "PostList")
+        assertNotHittable("native.profile.signin")
+        assertNotHittable("native.profile.settings")
         selectTab("notifications", route: "Notifications")
+        assertNotHittable("native.profile.signin")
+        assertNotHittable("native.profile.settings")
+        selectTab("profile", route: "Profile")
         selectTab("home", route: "PostList")
     }
 
@@ -97,7 +106,14 @@ final class NativeNavigationUITests: XCTestCase {
 
     private func selectTab(_ tab: String, route: String,
                            file: StaticString = #filePath, line: UInt = #line) {
-        tap("native.tab.\(tab)", file: file, line: line)
+        let identifier = "native.tab.\(tab)"
+        tap(identifier, file: file, line: line)
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND selected == true"),
+            object: app.tabBars.buttons.matching(identifier: identifier).firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 15), .completed,
+                       "Tab tap did not select: \(tab)", file: file, line: line)
         assertScreen(route, file: file, line: line)
     }
 
@@ -113,7 +129,18 @@ final class NativeNavigationUITests: XCTestCase {
 
     private func assertScreen(_ route: String,
                               file: StaticString = #filePath, line: UInt = #line) {
-        assertHittable("native.screen.\(route)", file: file, line: line)
+        if route == "Profile" {
+            // The iOS List marker can resolve to a non-hittable CollectionView
+            // even when its guest rows are visible (CI 43565737701). A container
+            // hit point is not the user's navigation action. Require BOTH the
+            // routed screen and its real actions, never mere marker existence.
+            XCTAssertTrue(element("native.screen.Profile").waitForExistence(timeout: 15),
+                          "Profile route is missing", file: file, line: line)
+            assertHittable("native.profile.signin", file: file, line: line)
+            assertHittable("native.profile.settings", file: file, line: line)
+        } else {
+            assertHittable("native.screen.\(route)", file: file, line: line)
+        }
     }
 
     private func assertHittable(_ identifier: String,
