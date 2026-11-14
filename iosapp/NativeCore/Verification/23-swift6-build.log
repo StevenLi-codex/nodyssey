@@ -1,0 +1,12 @@
+[0/1] Planning build
+Building for debugging...
+[0/1] Write swift-version--1AB21518FC5DEDBE.txt
+[2/8] Compiling NodysseyNativeCore JSONValue.swift
+[3/8] Compiling NodysseyNativeCore NativeTransport.swift
+[4/8] Compiling NodysseyNativeCore NativeRequestState.swift
+[5/8] Compiling NodysseyNativeCore NativeMutationState.swift
+[6/8] Emitting module NodysseyNativeCore
+[7/8] Compiling NodysseyNativeCore NativeRoute.swift
+[8/8] Compiling NodysseyNativeCore NativeFailure.swift
+Build of target: 'NodysseyNativeCore' complete! (0.66s)
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.

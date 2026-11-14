@@ -1,0 +1,56 @@
+Building for debugging...
+[Computing dependencies]
+Build complete! (0.76秒)
+◇ Test run started.
+↳ Testing Library Version: swift-6.0-DEVELOPMENT-SNAPSHOT-2024-12-03-a
+◇ Suite RouteTests started.
+◇ Suite MutationStateTests started.
+◇ Suite RequestStateTests started.
+◇ Suite TransportTests started.
+◇ Suite JSONValueTests started.
+◇ Test successfulSubmitClearsOnlyTheSubmittedDraft() started.
+◇ Test invalidationNeverNotifiesObserversWithOldPrivateData() started.
+◇ Test olderLoadCannotOverwriteNewerResult() started.
+◇ Test cancellationIsNotPresentedAsLoadFailure() started.
+◇ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() started.
+◇ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() started.
+◇ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() started.
+◇ Test overlappingSendIsRejectedAndFailedDraftSurvives() started.
+◇ Test canonicalLinksPreserveIdentityAndPage() started.
+◇ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() started.
+◇ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() started.
+◇ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() started.
+◇ Test encodedAuthorityCannotAliasTheAllowedSite() started.
+◇ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() started.
+◇ Test cancelledObserverReleasesHandleWithoutServerCallback() started.
+◇ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() started.
+◇ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() started.
+◇ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() started.
+◇ Test observationDeliversValuesThenFailureReleasesHandle() started.
+◇ Test requiredIdentityRejectsMissingAndWrongTypes() started.
+✔ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() passed after 0.001 seconds.
+✔ Test encodedAuthorityCannotAliasTheAllowedSite() passed after 0.001 seconds.
+✔ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() passed after 0.001 seconds.
+✔ Test canonicalLinksPreserveIdentityAndPage() passed after 0.001 seconds.
+✔ Suite RouteTests passed after 0.001 seconds.
+✔ Test requiredIdentityRejectsMissingAndWrongTypes() passed after 0.001 seconds.
+✔ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() passed after 0.001 seconds.
+✔ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() passed after 0.002 seconds.
+✔ Suite JSONValueTests passed after 0.003 seconds.
+✔ Test cancelledObserverReleasesHandleWithoutServerCallback() passed after 0.003 seconds.
+✔ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() passed after 0.003 seconds.
+✔ Test invalidationNeverNotifiesObserversWithOldPrivateData() passed after 0.003 seconds.
+✔ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() passed after 0.003 seconds.
+✔ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() passed after 0.003 seconds.
+✔ Test cancellationIsNotPresentedAsLoadFailure() passed after 0.004 seconds.
+✔ Test overlappingSendIsRejectedAndFailedDraftSurvives() passed after 0.004 seconds.
+✔ Test olderLoadCannotOverwriteNewerResult() passed after 0.004 seconds.
+✔ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() passed after 0.004 seconds.
+✔ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() passed after 0.004 seconds.
+✔ Test successfulSubmitClearsOnlyTheSubmittedDraft() passed after 0.006 seconds.
+✔ Test observationDeliversValuesThenFailureReleasesHandle() passed after 0.005 seconds.
+✔ Suite MutationStateTests passed after 0.006 seconds.
+✔ Suite TransportTests passed after 0.006 seconds.
+✔ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() passed after 0.006 seconds.
+✔ Suite RequestStateTests passed after 0.006 seconds.
+✔ Test run with 20 tests passed after 0.006 seconds.

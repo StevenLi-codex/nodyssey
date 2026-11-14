@@ -1,0 +1,74 @@
+[0/1] Planning build
+Building for debugging...
+[0/4] Write sources
+[1/4] Write swift-version--1AB21518FC5DEDBE.txt
+[3/10] Compiling NodysseyNativeCore NativeTransport.swift
+[4/10] Compiling NodysseyNativeCore NativeFailure.swift
+[5/10] Emitting module NodysseyNativeCore
+[6/10] Compiling NodysseyNativeCore NativeRequestState.swift
+[7/10] Compiling NodysseyNativeCore NativeMutationState.swift
+[8/10] Compiling NodysseyNativeCore NativeRoute.swift
+[9/10] Compiling NodysseyNativeCore JSONValue.swift
+[10/13] Compiling NodysseyNativeCoreTests RouteTests.swift
+[11/13] Emitting module NodysseyNativeCoreTests
+[11/13] Write Objects.LinkFileList
+[12/13] Linking NativeCorePackageTests
+Build complete! (3.05s)
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+◇ Test run started.
+↳ Testing Library Version: swift-6.0-DEVELOPMENT-SNAPSHOT-2024-12-03-a
+◇ Suite JSONValueTests started.
+◇ Suite TransportTests started.
+◇ Suite RouteTests started.
+◇ Suite RequestStateTests started.
+◇ Suite MutationStateTests started.
+◇ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() started.
+◇ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() started.
+◇ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() started.
+◇ Test canonicalLinksPreserveIdentityAndPage() started.
+◇ Test observationDeliversValuesThenFailureReleasesHandle() started.
+◇ Test encodedAuthorityCannotAliasTheAllowedSite() started.
+◇ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() started.
+◇ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() started.
+◇ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() started.
+◇ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() started.
+◇ Test requiredIdentityRejectsMissingAndWrongTypes() started.
+◇ Test cancelledObserverReleasesHandleWithoutServerCallback() started.
+◇ Test olderLoadCannotOverwriteNewerResult() started.
+◇ Test cancellationIsNotPresentedAsLoadFailure() started.
+◇ Test invalidationNeverNotifiesObserversWithOldPrivateData() started.
+◇ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() started.
+◇ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() started.
+◇ Test overlappingSendIsRejectedAndFailedDraftSurvives() started.
+◇ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() started.
+◇ Test successfulSubmitClearsOnlyTheSubmittedDraft() started.
+✔ Test canonicalLinksPreserveIdentityAndPage() passed after 0.001 seconds.
+✔ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() passed after 0.001 seconds.
+✔ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() passed after 0.001 seconds.
+✔ Test requiredIdentityRejectsMissingAndWrongTypes() passed after 0.001 seconds.
+✔ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() passed after 0.002 seconds.
+✘ Test encodedAuthorityCannotAliasTheAllowedSite() recorded an issue at RouteTests.swift:36:9: Expectation failed: (NativeDeepLink.parse("https://%6eodeseek.com/post-1") → .post(id: 1, page: 1)) == nil
+✔ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() passed after 0.002 seconds.
+✔ Suite JSONValueTests passed after 0.002 seconds.
+✘ Test encodedAuthorityCannotAliasTheAllowedSite() recorded an issue at RouteTests.swift:37:9: Expectation failed: (NativeDeepLink.parse("https://nodeseek%2ecom/post-1") → .post(id: 1, page: 1)) == nil
+✘ Test encodedAuthorityCannotAliasTheAllowedSite() failed after 0.002 seconds with 2 issues.
+✘ Suite RouteTests failed after 0.002 seconds with 2 issues.
+✔ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() passed after 0.004 seconds.
+✔ Test cancelledObserverReleasesHandleWithoutServerCallback() passed after 0.003 seconds.
+✔ Test invalidationNeverNotifiesObserversWithOldPrivateData() passed after 0.003 seconds.
+✔ Test cancellationIsNotPresentedAsLoadFailure() passed after 0.004 seconds.
+✔ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() passed after 0.003 seconds.
+✔ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() passed after 0.004 seconds.
+✔ Test overlappingSendIsRejectedAndFailedDraftSurvives() passed after 0.003 seconds.
+✔ Test successfulSubmitClearsOnlyTheSubmittedDraft() passed after 0.005 seconds.
+✔ Test observationDeliversValuesThenFailureReleasesHandle() passed after 0.006 seconds.
+✔ Suite TransportTests passed after 0.006 seconds.
+✔ Test olderLoadCannotOverwriteNewerResult() passed after 0.006 seconds.
+✔ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() passed after 0.005 seconds.
+✔ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() passed after 0.005 seconds.
+✔ Suite MutationStateTests passed after 0.006 seconds.
+✔ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() passed after 0.008 seconds.
+✔ Suite RequestStateTests passed after 0.008 seconds.
+✘ Test run with 20 tests failed after 0.009 seconds with 2 issues.
+Note: Some test targets reported failures:
+  - NativeCorePackageTests (Swift Testing)

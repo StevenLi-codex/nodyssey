@@ -3,10 +3,11 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A2000000000000000000001 /* NodysseyNativeCore in Frameworks */ = {isa = PBXBuildFile; productRef = A2000000000000000000002 /* NodysseyNativeCore */; };
 		A1000000000000000000001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000010 /* App.swift */; };
 		A1000000000000000000002 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000012 /* AppIcon.icon */; };
 /* End PBXBuildFile section */
@@ -18,11 +19,20 @@
 		A1000000000000000000020 /* Nodyssey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nodyssey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A2000000000000000000003 /* Native */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Native;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		A1000000000000000000030 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A2000000000000000000001 /* NodysseyNativeCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -43,6 +53,7 @@
 				A1000000000000000000010 /* App.swift */,
 				A1000000000000000000011 /* Info.plist */,
 				A1000000000000000000012 /* AppIcon.icon */,
+				A2000000000000000000003 /* Native */,
 			);
 			path = Nodyssey;
 			sourceTree = "<group>";
@@ -72,6 +83,12 @@
 			dependencies = (
 			);
 			name = Nodyssey;
+			fileSystemSynchronizedGroups = (
+				A2000000000000000000003 /* Native */,
+			);
+			packageProductDependencies = (
+				A2000000000000000000002 /* NodysseyNativeCore */,
+			);
 			productName = Nodyssey;
 			productReference = A1000000000000000000020 /* Nodyssey.app */;
 			productType = "com.apple.product-type.application";
@@ -93,16 +110,21 @@
 			};
 			buildConfigurationList = A1000000000000000000110 /* Build configuration list for PBXProject "Nodyssey" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
+				"zh-Hant",
 				Base,
 			);
 			mainGroup = A1000000000000000000040;
 			productRefGroup = A1000000000000000000042 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				A2000000000000000000004 /* XCLocalSwiftPackageReference "NativeCore" */,
+			);
 			targets = (
 				A1000000000000000000050 /* Nodyssey */,
 			);
@@ -270,6 +292,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A2000000000000000000004 /* XCLocalSwiftPackageReference "NativeCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = NativeCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A2000000000000000000002 /* NodysseyNativeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NodysseyNativeCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A1000000000000000000100 /* Project object */;
 }

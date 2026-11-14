@@ -2,6 +2,11 @@ name: SwiftUI iOS build and native verification
 
 on:
   workflow_dispatch:
+    inputs:
+      archive:
+        description: Build and package the unsigned device archive
+        type: boolean
+        default: true
   push:
     branches: [feat/ios-swiftui-liquid-glass]
     paths:
@@ -56,8 +61,12 @@ jobs:
           else
             printf '%s\n' 'Baseline toolchain run: SwiftUI core not introduced in this revision.' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Native rich document behavior tests
+        run: sh iosapp/NativeRenderingTests/run-tests.sh
       - name: Compile Kotlin iOS bridge and native tests
         run: ./gradlew :iosapp:compileKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
+      - name: Execute Kotlin simulator behavior tests
+        run: ./gradlew :iosapp:iosSimulatorArm64Test
       - name: Build simulator app
         run: |
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
@@ -85,6 +94,7 @@ jobs:
               report.write('\nInstalled and launched on ' + phone['name'] + '. Launch alone is not full interaction/login acceptance.\n')
           PY
       - name: Build unsigned iPhone archive
+        if: github.event_name == 'workflow_dispatch' && inputs.archive
         run: |
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
@@ -92,12 +102,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             MARKETING_VERSION="1.2.22-swiftui.1" CURRENT_PROJECT_VERSION="54"
       - name: Package unsigned test IPA
+        if: github.event_name == 'workflow_dispatch' && inputs.archive
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
           (cd "$RUNNER_TEMP" && zip -qry nodyssey-swiftui-unsigned.ipa Payload)
           shasum -a 256 "$RUNNER_TEMP/nodyssey-swiftui-unsigned.ipa"
       - uses: actions/upload-artifact@v7
+        if: github.event_name == 'workflow_dispatch' && inputs.archive
         with:
           name: nodyssey-swiftui-unsigned
           path: ${{ runner.temp }}/nodyssey-swiftui-unsigned.ipa

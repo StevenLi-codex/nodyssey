@@ -1,0 +1,66 @@
+[0/1] Planning build
+Building for debugging...
+[0/4] Write sources
+[1/4] Write swift-version--1AB21518FC5DEDBE.txt
+[3/6] Compiling NodysseyNativeCoreTests MutationStateTests.swift
+[4/6] Emitting module NodysseyNativeCoreTests
+[5/6] Compiling NodysseyNativeCoreTests RequestStateTests.swift
+[5/7] Write Objects.LinkFileList
+[6/7] Linking NativeCorePackageTests
+Build complete! (2.45s)
+warning: '--build-system native' has been deprecated and will be removed in a future release; please report an issue at https://github.com/swiftlang/swift-package-manager/issues if you are unable to adopt the default build system.
+◇ Test run started.
+↳ Testing Library Version: swift-6.0-DEVELOPMENT-SNAPSHOT-2024-12-03-a
+◇ Suite JSONValueTests started.
+◇ Suite RequestStateTests started.
+◇ Suite RouteTests started.
+◇ Suite MutationStateTests started.
+◇ Suite TransportTests started.
+◇ Test requiredIdentityRejectsMissingAndWrongTypes() started.
+◇ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() started.
+◇ Test olderLoadCannotOverwriteNewerResult() started.
+◇ Test invalidationNeverNotifiesObserversWithOldPrivateData() started.
+◇ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() started.
+◇ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() started.
+◇ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() started.
+◇ Test cancelledObserverReleasesHandleWithoutServerCallback() started.
+◇ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() started.
+◇ Test observationDeliversValuesThenFailureReleasesHandle() started.
+◇ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() started.
+◇ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() started.
+◇ Test cancellationIsNotPresentedAsLoadFailure() started.
+◇ Test successfulSubmitClearsOnlyTheSubmittedDraft() started.
+◇ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() started.
+◇ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() started.
+◇ Test canonicalLinksPreserveIdentityAndPage() started.
+◇ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() started.
+◇ Test overlappingSendIsRejectedAndFailedDraftSurvives() started.
+✔ Test requiredIdentityRejectsMissingAndWrongTypes() passed after 0.001 seconds.
+✔ Test sameNumericIDOnAnotherSiteIsNotTheSameDestination() passed after 0.001 seconds.
+✔ Test untrustedOrAmbiguousLinksNeverBecomeNativeIdentities() passed after 0.001 seconds.
+✔ Test canonicalLinksPreserveIdentityAndPage() passed after 0.001 seconds.
+✔ Suite RouteTests passed after 0.001 seconds.
+✔ Test nestedPayloadRoundTripsIntegerIdentityWithoutDoubleRounding() passed after 0.001 seconds.
+✔ Test envelopesDistinguishAcknowledgementFailureAndMalformedPayload() passed after 0.002 seconds.
+✔ Suite JSONValueTests passed after 0.002 seconds.
+✔ Test requestDecodesEnvelopeAndIgnoresDuplicateCallbacks() passed after 0.003 seconds.
+✔ Test cancelledObserverReleasesHandleWithoutServerCallback() passed after 0.004 seconds.
+✘ Test invalidationNeverNotifiesObserversWithOldPrivateData() recorded an issue at RequestStateTests.swift:61:9: Expectation failed: emitted.allSatisfy { $0 == nil }
+✘ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() recorded an issue at MutationStateTests.swift:15:9: Expectation failed: (state.draft → "") == "same text"
+✔ Test cancellationIsNotPresentedAsLoadFailure() passed after 0.004 seconds.
+✘ Test invalidationNeverNotifiesObserversWithOldPrivateData() failed after 0.004 seconds with 1 issue.
+✘ Test editingThenRestoringTextDoesNotEraseNewDraftOnCompletion() failed after 0.004 seconds with 1 issue.
+✔ Test requestCancellationResumesWithoutCallbackAndCancelsHandleOnce() passed after 0.004 seconds.
+✔ Test overlappingSendIsRejectedAndFailedDraftSurvives() passed after 0.004 seconds.
+✔ Test successfulSubmitClearsOnlyTheSubmittedDraft() passed after 0.005 seconds.
+✔ Test observationDeliversValuesThenFailureReleasesHandle() passed after 0.006 seconds.
+✔ Suite TransportTests passed after 0.006 seconds.
+✔ Test olderLoadCannotOverwriteNewerResult() passed after 0.006 seconds.
+✔ Test accountSwitchFencesOldMutationAndDoesNotClearNewDraft() passed after 0.006 seconds.
+✔ Test logoutInvalidationClearsDataAndRejectsLateAccountCompletion() passed after 0.006 seconds.
+✘ Suite MutationStateTests failed after 0.006 seconds with 1 issue.
+✔ Test observationPublishesEachSnapshotAndInvalidationErasesAccountData() passed after 0.008 seconds.
+✘ Suite RequestStateTests failed after 0.008 seconds with 1 issue.
+✘ Test run with 19 tests failed after 0.008 seconds with 2 issues.
+Note: Some test targets reported failures:
+  - NativeCorePackageTests (Swift Testing)
