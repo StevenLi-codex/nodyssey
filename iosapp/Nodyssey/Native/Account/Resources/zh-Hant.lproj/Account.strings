@@ -1,5 +1,9 @@
 "native.account.saved_refresh" = "已儲存，但重新讀取失敗。請重新整理，不要重複提交。";
-"native.account.uncertain" = "本次修改結果尚不確定。請先重新整理再決定是否再次修改。";
+"native.account.uncertain" = "本次修改結果未知。請僅重新讀取狀態，不要重複提交。狀態讀取無法驗證密碼修改或驗證器綁定；再次嘗試前，請透過登入或網站流程確認。";
+"native.account.reconciled" = "已重新讀取狀態，但無法確認先前的修改結果。請檢查目前值後再決定是否修改。";
+"native.account.correct_input" = "尚未提交任何修改。請修正關鍵字或正規表示式後重試。";
+"native.account.reconcile" = "重新讀取狀態（唯讀）";
+"native.account.profile_unavailable" = "個人資料暫不可用，請重新載入。";
 "native.account.one_tap" = "一鍵登入";
 "native.account.totp_boundary" = "綁定需要在驗證器及網站流程中完成。返回後重新整理狀態；開啟驗證器不代表已啟用雙重驗證。";
 "native.account.note" = "使用者私人備註";

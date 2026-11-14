@@ -1,5 +1,9 @@
 # Native navigation acceptance (XCUITest)
 
+## Latest interrupted rerun
+
+Run `43575181746` at `cc2f4ddc83fe2926b7c093ca9b5d159c92e649c8` ended **cancelled**, not passed. Downloaded job metadata confirms Swift domain tests, Kotlin compilation and simulator app build succeeded. The Kotlin execution log reports **54 tests completed, 1 failed**, identifying `WebKitSvgRasterizerTest`; this is a log-level count, not a newly parsed XML acceptance result. App-hosted comparison was cancelled; launch and navigation steps were skipped. Therefore this run provides **no execution verdict for the corrected Profile navigation assertions**. Evidence: `/home/hermes/.hermes/cache/scratch/nodyssey-ci-43575181746/`. The newer image-host checkpoint is covered by separate run `43577393525`; do not transfer this cancelled run's results to that SHA.
+
 ## Integration requirements
 
 `NativeNavigationUITests` launches the real `Nodyssey` application and existing Kotlin-backed graph. No mocks, direct route arguments, test-only root, onboarding preference injection, credential entry or server mutations. Failed guest feed/notification requests are allowed; navigation must remain interactive.

@@ -37,6 +37,29 @@ class NativePlatformTest {
     }
 
     @Test
+    fun `interrupted final drain cannot publish or mark cleanup complete`() = runBlocking {
+        var attempts = 0
+        val events = mutableListOf<String>()
+        val lifecycle = NativeCookieLifecycle(
+            seed = {},
+            start = {},
+            stop = { events += "stop" },
+            drain = {
+                attempts++
+                if (attempts == 1) throw kotlinx.coroutines.CancellationException("fixture interrupted drain")
+                events += "drained"
+            },
+            publish = { events += "publish" },
+        )
+        kotlin.test.assertFailsWith<kotlinx.coroutines.CancellationException> { lifecycle.close() }
+        assertEquals(listOf("stop"), events)
+        lifecycle.close()
+        assertEquals(listOf("stop", "stop", "drained", "publish"), events)
+        lifecycle.close()
+        assertEquals(2, attempts)
+    }
+
+    @Test
     fun `old clearance never completes a new challenge`() {
         val baseline = SessionState(hasClearance = true, fingerprint = 7)
         assertFalse(nativeBrowserGoalReached("challenge", baseline, baseline))

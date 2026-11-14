@@ -146,7 +146,7 @@ internal class WebKitSvgRasterizer {
         // embedded image decoding, SVG filters, PDF data or encoder scratch allocations.
         val frame = CGRectMake(0.0, 0.0, intrinsic.width.toDouble(), intrinsic.height.toDouble())
         trace.event("webview.create")
-        val webView = offscreenWebView(frame)
+        val webView = offscreenWebView(frame, trace)
         // Held for the length of the render: `navigationDelegate` is a weak reference, and a delegate
         // that only the web view knows about is deallocated before it is ever called back.
         val delegate = LoadDelegate(trace)
@@ -154,25 +154,41 @@ internal class WebKitSvgRasterizer {
         try {
             val page = wrapperPage(markup, intrinsic)
             trace.event("navigation.request")
-            if (!delegate.awaitLoad { webView.loadHTMLString(page, baseURL = null) }) return null
+            if (!delegate.awaitLoad {
+                    val navigation = webView.loadHTMLString(page, baseURL = null)
+                    trace.event(if (navigation == null) "navigation.rejected" else "navigation.submitted")
+                }
+            ) {
+                return null
+            }
             return printToPdf(webView, frame, trace)
         } finally {
+            // Read only at unwind: WKWebView's delegate is weak. Distinguish a lost delegate from
+            // a serviced run loop whose WebContent process never called back; do not retain it via
+            // a new strong reference across the suspension merely to make this probe pass.
+            trace.event(if (webView.navigationDelegate == null) "navigation.delegate_missing" else "navigation.delegate_present")
             webView.stopLoading()
             webView.navigationDelegate = null
             trace.event("webview.cleaned")
         }
     }
 
-    private fun offscreenWebView(frame: CValue<CGRect>): WKWebView {
+    private fun offscreenWebView(frame: CValue<CGRect>, trace: RenderTrace): WKWebView {
+        trace.event("configuration.create")
         val configuration =
             WKWebViewConfiguration().apply {
+                trace.event("configuration.created")
                 // Nothing about this render should outlive it, and nothing about the reader's session
                 // belongs in it: a document in secure static mode can reach neither, and a data store
                 // of its own makes that true of the web view as well.
+                trace.event("datastore.create")
                 websiteDataStore = WKWebsiteDataStore.nonPersistentDataStore()
+                trace.event("datastore.assigned")
                 defaultWebpagePreferences.allowsContentJavaScript = false
             }
+        trace.event("webview.initialize")
         return WKWebView(frame = frame, configuration = configuration).apply {
+            trace.event("webview.initialized")
             // An SVG is drawn over whatever is behind it — a card on a dark theme included — so the
             // page, the view and its scroll view all have to stop painting white.
             setOpaque(false)
@@ -182,6 +198,7 @@ internal class WebKitSvgRasterizer {
             scrollView.contentInsetAdjustmentBehavior =
                 UIScrollViewContentInsetAdjustmentBehavior.UIScrollViewContentInsetAdjustmentNever
             setUserInteractionEnabled(false)
+            trace.event("webview.configured")
         }
     }
 
@@ -337,6 +354,17 @@ internal class WebKitSvgRasterizer {
                 start()
             }
 
+        @ObjCSignatureOverride
+        override fun webView(webView: WKWebView, didStartProvisionalNavigation: WKNavigation?) {
+            trace.event("navigation.provisional")
+        }
+
+        @ObjCSignatureOverride
+        override fun webView(webView: WKWebView, didCommitNavigation: WKNavigation?) {
+            trace.event("navigation.committed")
+        }
+
+        @ObjCSignatureOverride
         override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
             trace.event("navigation.finished")
             pending?.invoke(true)

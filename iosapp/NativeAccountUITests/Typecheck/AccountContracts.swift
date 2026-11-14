@@ -6,6 +6,7 @@ import UIKit
 struct NativeDestination { var route: String; var arguments: [String: JSONValue] }
 @MainActor final class NativeAppModel: ObservableObject {
     @Published var generation = 0
+    var transport: any NativeTransport { fatalError() }
     var siteOrigin: String? { fatalError() }
     var isSignedIn: Bool { fatalError() }
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue { fatalError() }

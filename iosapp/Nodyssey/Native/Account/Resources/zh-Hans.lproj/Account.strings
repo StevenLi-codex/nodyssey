@@ -1,5 +1,9 @@
 "native.account.saved_refresh" = "已保存，但回读失败。请刷新，不要重复提交。";
-"native.account.uncertain" = "本次修改结果尚不确定。请先刷新再决定是否再次修改。";
+"native.account.uncertain" = "本次修改结果未知。请仅重新读取状态，不要重复提交。状态读取无法验证密码修改或验证器绑定；再次尝试前，请通过登录或站点流程确认。";
+"native.account.reconciled" = "已重新读取状态，但无法确认之前的修改结果。请检查当前值后再决定是否修改。";
+"native.account.correct_input" = "尚未提交任何修改。请修正关键词或正则表达式后重试。";
+"native.account.reconcile" = "重新读取状态（只读）";
+"native.account.profile_unavailable" = "个人资料暂不可用，请重新加载。";
 "native.account.one_tap" = "一键登录";
 "native.account.totp_boundary" = "绑定需要在验证器及站点流程中完成。返回后刷新状态；打开验证器不代表已启用双重验证。";
 "native.account.note" = "用户私密备注";

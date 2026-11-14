@@ -129,6 +129,8 @@ private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): Jso
             posts.thread(id).first()?.let(::nativeContentJson) ?: JsonNull
         }
 
+        "thread.reconcileReactions" -> nativeContentJson(posts.reconcileThreadReactions(a.nativeId("postId"), a.nativePage()))
+
         "thread.status" -> {
             val id = a.nativeId("postId")
             val pages = posts.cachedPages(id)

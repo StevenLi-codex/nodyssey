@@ -4,6 +4,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import io.github.nodyssey.data.session.withPrivateAccess
+import io.github.nodyssey.data.session.privateFlow
 import io.github.nodyssey.core.NodeSeekSite
 import io.github.nodyssey.core.html.PostListParser
 import io.github.nodyssey.core.net.throwIfChallenge
@@ -150,22 +153,23 @@ class DefaultPostComposerRepository(
     private val transport: HttpTransport,
     private val dispatchers: AppDispatchers,
     private val clock: AppClock,
+    private val privateBoundary: PrivateSessionBoundary? = null,
 ) : PostComposerRepository {
     private val json = Json { ignoreUnknownKeys = true }
 
-    override val draft: Flow<PostDraft?> = dataStore.data.map { preferences ->
+    override val draft: Flow<PostDraft?> = privateBoundary.privateFlow(dataStore.data.map { preferences ->
         preferences[DRAFT_KEY]?.let { encoded ->
             runCatching { json.decodeFromString<PostDraft>(encoded) }.getOrNull()
         }
-    }
+    })
 
-    override suspend fun saveDraft(draft: PostDraft) {
+    override suspend fun saveDraft(draft: PostDraft) = privateBoundary.withPrivateAccess<Unit> {
         dataStore.edit { preferences ->
             preferences[DRAFT_KEY] = json.encodeToString(draft.copy(savedAtMillis = clock.nowMillis()))
         }
     }
 
-    override suspend fun deleteDraft() {
+    override suspend fun deleteDraft() = privateBoundary.withPrivateAccess<Unit> {
         dataStore.edit { preferences -> preferences.remove(DRAFT_KEY) }
     }
 

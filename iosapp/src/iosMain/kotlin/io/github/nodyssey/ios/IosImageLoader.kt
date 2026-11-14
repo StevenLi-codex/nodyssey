@@ -1,5 +1,12 @@
 package io.github.nodyssey.ios
 
+import coil3.intercept.Interceptor
+import coil3.request.ImageResult
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.disk.DiskCache
@@ -34,11 +41,15 @@ import platform.Foundation.NSURLSession
 @OptIn(coil3.annotation.ExperimentalCoilApi::class)
 internal fun nodysseyImageLoader(
     context: PlatformContext,
+    boundary: PrivateSessionBoundary,
     session: () -> NSURLSession,
 ): ImageLoader =
     ImageLoader
         .Builder(context)
         .components {
+            add(object : Interceptor {
+                override suspend fun intercept(chain: Interceptor.Chain): ImageResult = boundary.protect { chain.proceed() }
+            })
             add(
                 NetworkFetcher.Factory(
                     networkClient = { UrlSessionNetworkClient(session) },
@@ -101,7 +112,8 @@ private class UrlSessionNetworkClient(
         request: NetworkRequest,
         block: suspend (response: NetworkResponse) -> T,
     ): T {
-        val fetched = session().getBytes(request.url)
+        val fetched = withContext(NonCancellable) { session().getBytes(request.url) }
+        currentCoroutineContext().ensureActive()
         val response =
             if (fetched == null) {
                 NetworkResponse(code = UNREACHABLE, headers = NetworkHeaders.EMPTY, body = null)

@@ -10,13 +10,14 @@ reflection repository graph, test-owned mutex, or rewritten production source.
 from pathlib import Path
 import os
 import shutil
-import subprocess
 import sys
+from settings_compile_fixture import (
+    output_directory, repository_jars, boundary_sources, compiler_options, run,
+)
 
 root = Path(__file__).resolve().parents[2]
 cache = Path.home() / '.gradle/caches/modules-2/files-2.1'
-out = Path(os.environ.get('TMPDIR', str(Path.home() / '.hermes/cache/scratch'))) / 'native-image-host-selection-jvm'
-out.mkdir(parents=True, exist_ok=True)
+out = output_directory('native-image-host-selection-jvm')
 jars = []
 for group, artifact, version in [
     ('org.jetbrains.kotlin', 'kotlin-compiler-embeddable', '2.4.20'),
@@ -37,11 +38,7 @@ for group, artifact, version in [
 for group in ['androidx.datastore', 'com.squareup.okio', 'androidx.collection',
               'androidx.compose.runtime', 'org.jetbrains.compose.runtime']:
     jars += list((cache / group).rglob('*.jar'))
-for module in ['shared', 'richtext', 'ui', 'designsys']:
-    jar = root / f'{module}/build/libs/{module}-jvm.jar'
-    if not jar.exists():
-        raise SystemExit(f'Missing real repository jar: {jar}')
-    jars.append(jar)
+jars += repository_jars(root, out)
 cp = ':'.join(map(str, jars))
 java = os.environ.get('JAVA', str(Path.home() / '.cache/nodyssey-build/jdk21/bin/java'))
 main = root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/native'
@@ -50,7 +47,11 @@ adapter = out / 'CompileContext.kt'
 adapter.write_text('''package io.github.nodyssey.ios.native
 import io.github.nodyssey.di.AppContainer
 import io.github.nodyssey.data.dns.DohSupport
-interface SettingsCompileGraph : AppContainer { override val doh: DohSupport }
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+interface SettingsCompileGraph : AppContainer {
+    override val doh: DohSupport
+    val privateBoundary: PrivateSessionBoundary
+}
 internal class NativeContext(val graph: SettingsCompileGraph)
 internal class NativeFailure(val code: String) : Exception()
 ''')
@@ -86,12 +87,14 @@ fun main() {
 }
 ''')
 sources = [adapter, platform, runner, tests / 'NativeImageHostSelectionTest.kt']
+sources += boundary_sources(root, out)
 sources += [main / name for name in ['NativeSettings.kt', 'NativeSettingsMapping.kt', 'NativeReleaseNotes.kt']]
 classes = out / 'classes'
 shutil.rmtree(classes, ignore_errors=True)
-result = subprocess.run([java, '-cp', cp, 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
-                         '-no-stdlib', '-no-reflect', '-classpath', cp, '-d', str(classes)] + list(map(str, sources)))
+result = run([java, '-cp', cp, 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
+              '-no-stdlib', '-no-reflect', '-classpath', cp, '-d', str(classes)]
+             + compiler_options(cache) + list(map(str, sources)), out, 'compile', 120)
 if result.returncode:
     sys.exit(result.returncode)
-sys.exit(subprocess.run([java, f'-Djava.io.tmpdir={out}', '-cp', str(classes) + ':' + cp,
-                        'io.github.nodyssey.ios.native.ImageHostSelectionRunnerKt']).returncode)
+sys.exit(run([java, f'-Djava.io.tmpdir={out}', '-cp', str(classes) + ':' + cp,
+              'io.github.nodyssey.ios.native.ImageHostSelectionRunnerKt'], out, 'tests', 60).returncode)

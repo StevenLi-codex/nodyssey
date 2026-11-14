@@ -3,3 +3,15 @@
 "native_foundation_welcome" = "社区的原生阅读客户端。登录、已保存数据及网络访问继续使用现有共享服务。";
 "native_foundation_help" = "使用帮助";
 "native_foundation_privacy" = "隐私政策";
+
+"native_foundation_boundary_title" = "私人数据已锁定";
+"native_foundation_boundary_detail" = "无法验证本地私人数据的归属，因此暂时不可访问。设置和登录仍可使用；登录不会自动接管旧数据。";
+"native_foundation_boundary_transition" = "正在检查私人存储，不会自动重置。";
+"native_foundation_boundary_failed" = "恢复未能完成，数据可能仍被锁定。请先检查当前状态再重试。";
+"native_foundation_boundary_refresh" = "检查状态";
+"native_foundation_boundary_settings" = "打开设置";
+"native_foundation_boundary_review_reset" = "查看本地数据重置…";
+"native_foundation_boundary_confirm_title" = "删除本地私人数据？";
+"native_foundation_boundary_delete" = "删除本地数据";
+"native_foundation_boundary_cancel" = "取消";
+"native_foundation_boundary_impact" = "这将永久删除当前站点的本地草稿、离线下载和私人缓存，且无法撤销；不会删除服务器上的内容。取消会保留锁定的数据。只有接受丢失这些本地副本时才继续。";

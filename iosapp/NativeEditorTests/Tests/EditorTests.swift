@@ -211,6 +211,7 @@ actor SuspendedTransport: NativeTransport {
     nonisolated func observe(_ operation: String, _ arguments: [String: JSONValue]) -> AsyncThrowingStream<JSONValue, Error> { AsyncThrowingStream { $0.finish() } }
     func waitForCall(_ count: Int = 1) async { while calls.count < count || continuation == nil { await Task.yield() } }
     func finish(_ value: JSONValue) { let c = continuation; continuation = nil; c?.resume(returning: value) }
+    func fail() { let c = continuation; continuation = nil; c?.resume(throwing: NativeFailure(code: "NETWORK", message: "Controlled failure")) }
 }
 
 @Test func utf16SelectionInsertionPreservesChineseAndEmoji() {

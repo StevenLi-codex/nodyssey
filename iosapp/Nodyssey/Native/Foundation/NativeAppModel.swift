@@ -2,13 +2,25 @@ import Foundation
 import Combine
 import NodysseyNativeCore
 
+struct NativePrivateResetConfirmation: Identifiable, Equatable {
+    let id = UUID()
+    let identityEpoch: String
+    let generation: Int
+}
+
 @MainActor final class NativeAppModel: ObservableObject {
     let transport: any NativeTransport
     @Published var session: JSONValue = .null {
         didSet {
-            guard oldValue.nativeInt("generation") != session.nativeInt("generation") ||
-                  oldValue.nativeBool("isSignedIn") != session.nativeBool("isSignedIn") else { return }
-            invalidateSession()
+            // Epoch is opaque and process-local. Reload/clearance revisions do not
+            // own navigation or editor lifetime; equal signed-in flags aren't identity.
+            guard let oldEpoch = oldValue.nativeString("identityEpoch"), !oldEpoch.isEmpty,
+                  let epoch = session.nativeString("identityEpoch"), !epoch.isEmpty,
+                  oldEpoch == epoch,
+                  oldValue.nativeBool("isSignedIn") == session.nativeBool("isSignedIn") else {
+                invalidateSession()
+                return
+            }
         }
     }
     private final class WeakNativeStore {
@@ -18,15 +30,41 @@ import NodysseyNativeCore
     @Published var settings: JSONValue = .null
     @Published var generation: Int = 0
     @Published var selectedTab: NativeTab = .home
-    @Published var homePath: [NativeDestination] = []
-    @Published var notificationsPath: [NativeDestination] = []
-    @Published var profilePath: [NativeDestination] = []
-    @Published var sheet: NativeDestination?
-    @Published var sheetPath: [NativeDestination] = []
+    @Published private(set) var homePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
+    @Published private(set) var notificationsPath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
+    @Published private(set) var profilePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
+    @Published private(set) var sheet: NativeDestination? { didSet { navigationRevision += 1 } }
+    @Published private(set) var sheetPath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
+    private var navigationRevision = 0
+    private struct Departure {
+        let token: UUID
+        let prepare: @MainActor () async -> Bool
+        let validate: @MainActor () -> Bool
+        let terminate: @MainActor () -> Void
+        let revoke: @MainActor () -> Void
+    }
+    private var departures: [UUID: Departure] = [:]
+    @Published private(set) var departureRunning = false
     @Published private(set) var site: JSONValue = .null
     @Published private(set) var isReady = false
     @Published var lifecycleFailure: NativeFailure?
     @Published var linkFailure: NativeFailure?
+    @Published private(set) var privateBoundary: JSONValue = .null {
+        didSet {
+            // Eligibility can be revoked without changing the displayed epoch.
+            // Never resurrect a dialog after an active transition drains.
+            if !canConfirmPrivateReset { privateResetConfirmation = nil }
+            if oldValue != .null,
+               oldValue.nativeString("identityEpoch") != privateBoundary.nativeString("identityEpoch") ||
+               (oldValue.nativeString("phase") == "READY" && privateBoundary.nativeString("phase") != "READY") {
+                invalidateSession()
+            }
+        }
+    }
+    @Published private(set) var privateBoundaryFailure: NativeFailure?
+    @Published private(set) var privateResetConfirmation: NativePrivateResetConfirmation?
+    @Published private(set) var privateResetRunning = false
+    private var boundaryRevision = 0
     private var activeStart: Task<Void, Never>?
     private var sessionReady = false
     private var settingsReady = false
@@ -79,6 +117,7 @@ import NodysseyNativeCore
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask { try await self.watchSession() }
                 group.addTask { try await self.watchSettings() }
+                group.addTask { await self.watchPrivateBoundary() }
                 do {
                     while let _ = try await group.next() {}
                 } catch {
@@ -100,12 +139,17 @@ import NodysseyNativeCore
             try Task.checkCancellation()
             if snapshot == .null {
                 session = .null
-                sessionReady = false
-                isReady = false
+                sessionReady = true
+                becameReady()
                 continue
             }
-            guard snapshot.nativeInt("generation") != nil, snapshot.nativeBool("isSignedIn") != nil else {
-                throw NativeFailure(code: "INVALID_DATA", message: "Invalid session response")
+            guard snapshot.nativeInt("generation") != nil, snapshot.nativeBool("isSignedIn") != nil,
+                  validEpoch(snapshot) != nil else {
+                session = .null
+                sessionReady = true
+                privateBoundaryFailure = NativeFailure(code: "INVALID_DATA", message: "Invalid session response")
+                becameReady()
+                continue
             }
             session = snapshot
             sessionReady = true
@@ -127,7 +171,102 @@ import NodysseyNativeCore
         throw NativeFailure(code: "OBSERVATION_ENDED", message: "Settings observation ended")
     }
 
+    private func watchPrivateBoundary() async {
+        do {
+            for try await snapshot in transport.observe("session.privateBoundary", [:]) {
+                try Task.checkCancellation()
+                applyPrivateBoundary(snapshot)
+            }
+            try Task.checkCancellation()
+            throw NativeFailure(code: "OBSERVATION_ENDED", message: "Boundary observation ended")
+        } catch {
+            privateBoundary = .null
+            if !Task.isCancelled { privateBoundaryFailure = nativeSafeFailure(error) }
+        }
+    }
+
+    private func validEpoch(_ snapshot: JSONValue) -> String? {
+        guard let epoch = snapshot.nativeString("identityEpoch"), !epoch.isEmpty else { return nil }
+        return epoch // No parsing, ordering, hashing, persistence or secret-derived fallback.
+    }
+
+    var isPrivateReady: Bool {
+        validEpoch(session) != nil && validEpoch(session) == validEpoch(privateBoundary) &&
+        session.nativeInt("generation") != nil && session.nativeBool("isSignedIn") != nil &&
+        privateBoundary.nativeString("phase") == "READY" && privateBoundary.nativeBool("requiresConfirmation") == false
+    }
+
+    var canConfirmPrivateReset: Bool {
+        !privateResetRunning && validEpoch(privateBoundary) != nil &&
+        ["UNKNOWN", "TRANSITIONING"].contains(privateBoundary.nativeString("phase") ?? "") &&
+        privateBoundary.nativeBool("requiresConfirmation") == true && privateBoundary.nativeBool("recoveryEligible") == true
+    }
+
+    func canDisplay(_ destination: NativeDestination) -> Bool {
+        if isPrivateReady { return true }
+        // Deny unknown/private factories, including caches and editors. Public
+        // preferences and authentication must remain reachable during bootstrap.
+        if ["Settings", "ThemeSettings", "DynamicColor", "NotificationSettings", "ProxySettings",
+            "DohSettings", "NetworkCheck", "AboutApp", "Privacy", "Changelog", "Help",
+            "OpenSourceLicenses", "TitleKeywords", "SignIn"].contains(destination.route) { return true }
+        return destination.route == "Web" && ["EXTERNAL", "SIGN_IN", "ONE_TAP_SIGN_IN", "CHALLENGE"]
+            .contains(destination.arguments["goal"]?.string ?? "")
+    }
+
+    private func applyPrivateBoundary(_ snapshot: JSONValue) {
+        boundaryRevision += 1
+        guard validEpoch(snapshot) != nil,
+              let phase = snapshot.nativeString("phase"), ["UNKNOWN", "TRANSITIONING", "READY"].contains(phase),
+              let confirmation = snapshot.nativeBool("requiresConfirmation"),
+              let recoveryEligible = snapshot.nativeBool("recoveryEligible"),
+              phase != "READY" || (!confirmation && !recoveryEligible),
+              !recoveryEligible || confirmation else {
+            privateBoundary = .null
+            privateBoundaryFailure = NativeFailure(code: "INVALID_DATA", message: "Invalid boundary response")
+            return
+        }
+        privateBoundary = snapshot
+        privateBoundaryFailure = nil
+    }
+
+    func refreshPrivateBoundary() async {
+        let revision = boundaryRevision
+        do {
+            let value = try await request("session.privateBoundary")
+            guard revision == boundaryRevision else { return } // Observation wins over an older readback.
+            applyPrivateBoundary(value)
+        } catch {
+            guard revision == boundaryRevision else { return }
+            privateBoundary = .null
+            if !Task.isCancelled { privateBoundaryFailure = nativeSafeFailure(error) }
+        }
+    }
+
+    func beginPrivateResetConfirmation() {
+        guard canConfirmPrivateReset, let epoch = validEpoch(privateBoundary) else { return }
+        privateResetConfirmation = NativePrivateResetConfirmation(identityEpoch: epoch, generation: generation)
+    }
+
+    func cancelPrivateResetConfirmation() { privateResetConfirmation = nil }
+
+    /// Only the destructive dialog action calls this; opening/retrying recovery never confirms.
+    func confirmPrivateReset(_ confirmation: NativePrivateResetConfirmation) async {
+        guard !Task.isCancelled, privateResetConfirmation == confirmation, canConfirmPrivateReset,
+              confirmation.identityEpoch == validEpoch(privateBoundary), confirmation.generation == generation else { return }
+        privateResetConfirmation = nil // Single-use even when the backend refuses or transport fails.
+        privateResetRunning = true
+        privateBoundaryFailure = nil
+        defer { privateResetRunning = false }
+        do {
+            _ = try await performRequest("session.resetPrivateStores", ["confirmed": .bool(true), "identityEpoch": .string(confirmation.identityEpoch)])
+            await refreshPrivateBoundary() // Never adopt a session or infer READY from reset success.
+        } catch {
+            if !Task.isCancelled { privateBoundaryFailure = nativeSafeFailure(error) }
+        }
+    }
+
     private func becameReady() {
+        // Public preferences/auth must not wait for private-store provenance.
         guard sessionReady, settingsReady, activeSite != nil else { return }
         guard !isReady else { return }
         isReady = true
@@ -154,11 +293,21 @@ import NodysseyNativeCore
         guard let raw = snapshot.nativeString("current"), NativeSite(rawValue: raw) != nil else {
             throw NativeFailure(code: "INVALID_DATA", message: "Invalid active site")
         }
-        if let previous = site.nativeString("current"), previous != raw { invalidateSession() }
+        if let previous = site.nativeString("current"), previous != raw {
+            privateBoundary = .null
+            session = .null
+        }
         site = snapshot // selected is NEXT launch, never the active namespace.
     }
 
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard operation != "session.resetPrivateStores" else {
+            throw NativeFailure(code: "CONFIRMATION_REQUIRED", message: "Explicit confirmation required")
+        }
+        return try await performRequest(operation, arguments)
+    }
+
+    private func performRequest(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         try Task.checkCancellation()
         let capturedGeneration = generation
         let id = UUID()
@@ -179,7 +328,17 @@ import NodysseyNativeCore
                 if let current = session.nativeInt("generation"), incoming < current {
                     throw NativeFailure(code: "SIGN_IN_SUPERSEDED", message: "Authentication was superseded")
                 }
+                guard validEpoch(candidate) != nil else {
+                    session = .null
+                    throw NativeFailure(code: "INVALID_DATA", message: "Invalid session response")
+                }
+                if capturedGeneration != generation, validEpoch(candidate) != validEpoch(session) {
+                    throw NativeFailure(code: "SIGN_IN_SUPERSEDED", message: "Authentication was superseded")
+                }
                 session = candidate
+            } else if !["TWO_FACTOR_REQUIRED", "REFUSED"].contains(value.nativeString("status") ?? "") {
+                session = .null
+                throw NativeFailure(code: "INVALID_DATA", message: "Invalid session response")
             }
         }
         if operation == "site.get" || operation == "site.select" { try applySite(value) }
@@ -222,7 +381,10 @@ import NodysseyNativeCore
     func open(_ route: String, _ arguments: [String: JSONValue] = [:]) {
         let destination = NativeDestination(route, arguments)
         if route == "SignIn" || (route == "Web" && arguments["goal"]?.string == "CHALLENGE") {
-            sheetPath = []; sheet = destination; return
+            if !sheetDestinations.isEmpty {
+                Task { await replaceSheet(destination) }
+            } else { sheet = destination }
+            return
         }
         if sheet != nil { sheetPath.append(destination); return }
         switch selectedTab {
@@ -233,7 +395,122 @@ import NodysseyNativeCore
     }
     func showSignIn() { open("SignIn") }
     func resetNavigation() {
+        if allDestinations.contains(where: { requiresDeparture($0) }) {
+            Task { await resetNavigationAwaitingDeparture() }
+        } else { clearNavigation() }
+    }
+    private func clearNavigation() {
         homePath = []; notificationsPath = []; profilePath = []; sheetPath = []; sheet = nil
+    }
+
+    private var sheetDestinations: [NativeDestination] { (sheet.map { [$0] } ?? []) + sheetPath }
+    var sheetRequiresDeparture: Bool { sheetDestinations.contains(where: { requiresDeparture($0) }) }
+    private var allDestinations: [NativeDestination] { homePath + notificationsPath + profilePath + sheetDestinations }
+    private func requiresDeparture(_ destination: NativeDestination) -> Bool {
+        departures[destination.id] != nil || ["PostComposer", "MessageThread"].contains(destination.route)
+    }
+
+    /// Keep ownership across temporary pushes/tab changes. Unregister only the
+    /// matching terminal owner; a late old view must not remove its replacement.
+    @discardableResult
+    func registerDismissal(destinationID: UUID, close: @escaping @MainActor () async -> Bool,
+                           revoke: @escaping @MainActor () -> Void,
+                           terminate: @escaping @MainActor () -> Void = {},
+                           validate: @escaping @MainActor () -> Bool = { true }) -> UUID {
+        let token = UUID()
+        departures.removeValue(forKey: destinationID)?.revoke()
+        guard allDestinations.contains(where: { $0.id == destinationID }) else { revoke(); return token }
+        departures[destinationID] = Departure(token: token, prepare: close, validate: validate, terminate: terminate, revoke: revoke)
+        return token
+    }
+
+    func unregisterDismissal(destinationID: UUID, token: UUID) {
+        if departures[destinationID]?.token == token { departures[destinationID] = nil }
+    }
+
+    private func depart(_ removed: [NativeDestination], apply: () -> Void) async {
+        guard !departureRunning else { return }
+        departureRunning = true
+        defer { departureRunning = false }
+        let revision = navigationRevision
+        let identity = generation
+        var prepared: [(NativeDestination, Departure)] = []
+        for destination in removed.reversed() where requiresDeparture(destination) {
+            // Fail closed before the editor registers, rather than dropping an
+            // unloaded draft during the first SwiftUI task scheduling window.
+            guard let owner = departures[destination.id], await owner.prepare(),
+                  !Task.isCancelled, generation == identity, navigationRevision == revision,
+                  departures[destination.id]?.token == owner.token else { return }
+            prepared.append((destination, owner))
+        }
+        guard !Task.isCancelled, generation == identity, navigationRevision == revision else { return }
+        // Preparation may flush drafts, but must not destroy a model until every
+        // owner has consented and the captured navigation transaction can commit.
+        for (destination, owner) in prepared {
+            guard departures[destination.id]?.token == owner.token, owner.validate() else { return }
+        }
+        for (destination, owner) in prepared {
+            owner.terminate()
+            departures[destination.id] = nil
+        }
+        apply()
+    }
+
+    func dismissSheet() async {
+        await depart(sheetDestinations) { sheetPath = []; sheet = nil }
+    }
+
+    private func replaceSheet(_ destination: NativeDestination) async {
+        await depart(sheetDestinations) { sheetPath = []; sheet = destination }
+    }
+
+    func resetNavigationAwaitingDeparture() async {
+        await depart(allDestinations) { clearNavigation() }
+    }
+
+    enum Stack { case home, notifications, profile, sheet }
+    func path(for stack: Stack) -> [NativeDestination] {
+        switch stack {
+        case .home: return homePath
+        case .notifications: return notificationsPath
+        case .profile: return profilePath
+        case .sheet: return sheetPath
+        }
+    }
+    struct PathUpdateOwner: Equatable {
+        fileprivate let identityEpoch: String?
+        fileprivate let generation: Int
+        fileprivate let revision: Int
+    }
+    func capturePathUpdateOwner() -> PathUpdateOwner {
+        PathUpdateOwner(identityEpoch: validEpoch(session), generation: generation, revision: navigationRevision)
+    }
+    func updatePath(_ value: [NativeDestination], for stack: Stack, owner: PathUpdateOwner? = nil) async {
+        if let owner, owner != capturePathUpdateOwner() { return }
+        let current = path(for: stack)
+        // NavigationStack writes are pops only. Route creation belongs to open(),
+        // never to a delayed setter replaying destinations from an old stack.
+        guard value.count <= current.count, Array(current.prefix(value.count)) == value else { return }
+        let removed = Array(current.dropFirst(value.count))
+        await depart(removed) {
+            switch stack {
+            case .home: homePath = value
+            case .notifications: notificationsPath = value
+            case .profile: profilePath = value
+            case .sheet: sheetPath = value
+            }
+        }
+    }
+
+    func dismissDestination(_ id: UUID) async {
+        if sheet?.id == id { await dismissSheet(); return }
+        for stack in [Stack.home, .notifications, .profile, .sheet] {
+            let current = path(for: stack)
+            if let index = current.firstIndex(where: { $0.id == id }) {
+                await updatePath(Array(current.prefix(index)), for: stack)
+                return
+            }
+        }
     }
     private var stores: [WeakNativeStore] = []
     func register(_ store: NativeStore) {
@@ -241,9 +518,13 @@ import NodysseyNativeCore
         if !stores.contains(where: { $0.value === store }) { stores.append(WeakNativeStore(store)) }
     }
     private func invalidateSession() {
+        privateResetConfirmation = nil
+        let owners = Array(departures.values)
+        departures = [:]
+        for owner in owners { owner.revoke() } // Never flush under the new identity.
         for request in requests.values where !request.changesSession { request.task.cancel() }
         for store in stores { store.value?.invalidate() }
         generation += 1
-        resetNavigation()
+        clearNavigation()
     }
 }

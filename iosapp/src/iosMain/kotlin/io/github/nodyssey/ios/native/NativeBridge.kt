@@ -11,14 +11,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -35,6 +38,15 @@ class NativeRequest internal constructor(private val job: Job) {
     fun cancel() {
         job.cancel()
     }
+
+    /** File leases release on actual Job termination, never on cancellation/result delivery. */
+    fun invokeOnCompletion(completion: () -> Unit) {
+        job.invokeOnCompletion { drainCallbacks.launch { completion() } }
+    }
+
+    private companion object {
+        val drainCallbacks = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    }
 }
 
 internal class NativeContext(val graph: IosAppContainer, val scope: CoroutineScope)
@@ -42,65 +54,105 @@ internal class NativeContext(val graph: IosAppContainer, val scope: CoroutineSco
 /** The only exported application-data ABI; all repository access starts on Main. */
 object NativeBridge {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val reconciliation = Mutex()
-    private var reconciled: SessionState? = null
+    private val sessionControls = setOf("session.signIn", "session.verifyTwoFactor", "session.signOut")
 
-    fun request(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest =
-        start(completion) {
-            val args = nativeArguments(argumentsJson)
-            val graph = NodysseyApp.ensureContainer()
-            val session = reconcile(graph)
-            coroutineScope {
-                val context = NativeContext(graph, this)
-                // Cancel an in-flight repository reader/writer on a published session change,
-                // rather than merely hiding a stale result after it has repopulated Room.
-                val changesSession = operation in setOf("session.sync", "session.signIn", "session.verifyTwoFactor", "session.signOut")
-                val watcher = if (changesSession) {
-                    null
-                } else {
-                    launch {
-                        graph.sessionRepository.state.collect { nativeCheckSession(session, graph.sessionRepository.peek()) }
-                    }
-                }
-                try {
-                    val data = context.contentRequest(operation, args)
-                        ?: context.accountRequest(operation, args)
-                        ?: context.settingsRequest(operation, args)
-                        ?: context.supplementRequest(operation, args)
-                        ?: throw NativeFailure("UNKNOWN_OPERATION")
-                    if (!changesSession) nativeCheckSession(session, graph.sessionRepository.peek())
-                    nativeDeliver(coroutineContext[Job]!!, data, completion)
-                } finally {
-                    watcher?.cancel()
-                }
+    private fun publicOperation(operation: String): Boolean = operation.startsWith("session.") ||
+        operation in setOf("settings.get", "settings.set", "settings.observe", "settings.theme.save", "settings.theme.delete",
+            "settings.homeBoards", "settings.toolbar", "settings.capabilities", "settings.metadata", "platform.context", "app.foreground")
+
+    fun request(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest {
+        // Main-confined one-shot: reentrant revocation may fail lease exit after success.
+        var published = false
+        val publish: (String) -> Unit = { result ->
+            if (!published) {
+                published = true
+                completion(result)
             }
         }
+        return start(publish) {
+            val args = nativeArguments(argumentsJson)
+            if (operation == "site.get") {
+                // Bootstrap only the public catalogue/selection. Constructing the graph or
+                // reconciling provenance here can strand recovery before its observers start.
+                nativeDeliver(coroutineContext[Job]!!, NodysseyApp.nativeSiteMetadata(), publish)
+                return@start
+            }
+            val graph = NodysseyApp.ensureContainer()
+            if (operation == "session.sync") {
+                nativeSupersedeAuthentication()
+                graph.sessionRepository.sync()
+                graph.privateBoundary.reconcileIfIdle()
+            } else if (operation == "session.cancelSignIn") {
+                // Do not queue cancellation behind the operation it must supersede.
+            } else {
+                graph.privateBoundary.reconcileIfIdle()
+            }
+            coroutineScope {
+                val context = NativeContext(graph, this)
+                suspend fun dispatch(): JsonElement = context.contentRequest(operation, args)
+                    ?: context.accountRequest(operation, args)
+                    ?: context.settingsRequest(operation, args)
+                    ?: context.supplementRequest(operation, args)
+                    ?: throw NativeFailure("UNKNOWN_OPERATION")
+                if (!publicOperation(operation)) {
+                    graph.privateBoundary.protect {
+                        val data = dispatch()
+                        // Keep publication in the admitted lease, and recheck identity after dispatch.
+                        // Use the lease Job, not the enclosing request scope's still-active Job.
+                        graph.privateBoundary.protect {
+                            nativeDeliver(currentCoroutineContext()[Job]!!, data, publish)
+                        }
+                    }
+                    return@coroutineScope
+                }
+                val data = when (operation) {
+                    "session.sync" -> context.nativeSessionDto()
+                    "session.privateBoundary" -> graph.privateBoundary.state.value.nativeBoundaryDto()
+                    "session.resetPrivateStores" -> {
+                        graph.privateBoundary.reset(args.nativeBoolean("confirmed"), args.nativeText("identityEpoch"))
+                        graph.privateBoundary.state.value.nativeBoundaryDto()
+                    }
+                    in sessionControls -> graph.privateBoundary.sessionMutation { dispatch() }.let { result ->
+                        // Auth DTOs were assembled before finally reconciled the jar. Never export an old epoch.
+                        val session = context.nativeSessionDto()
+                        if (operation in setOf("session.sync", "session.signOut")) session
+                        else if (result is JsonObject && result.containsKey("session")) JsonObject(result + ("session" to session)) else result
+                    }
+                    else -> dispatch()
+                }
+                nativeDeliver(coroutineContext[Job]!!, data, publish)
+            }
+        }
+    }
 
     fun observe(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest =
         start(completion) {
             val args = nativeArguments(argumentsJson)
             val graph = NodysseyApp.ensureContainer()
-            // collectLatest cancels old readers before reconciling or exposing the next account.
-            var previous: SessionState? = null
-            graph.sessionRepository.state.collectLatest {
-                val current = graph.sessionRepository.peek()
-                if (previous?.let { it.isSignedIn != current.isSignedIn || it.fingerprint != current.fingerprint } == true) {
-                    // Clear Swift's last rendered value immediately, before a new network read.
-                    // Null is a session-boundary invalidation on every observation, not a row.
-                    nativeDeliver(coroutineContext[Job]!!, JsonNull, completion)
-                }
-                val session = reconcile(graph)
-                previous = session
+            graph.privateBoundary.reconcile()
+            if (operation == "session.privateBoundary") {
+                graph.privateBoundary.state.collect { nativeDeliver(coroutineContext[Job]!!, it.nativeBoundaryDto(), completion) }
+                return@start
+            }
+            if (publicOperation(operation)) {
                 coroutineScope {
                     val context = NativeContext(graph, this)
-                    val flow = context.contentObserve(operation, args)
-                        ?: context.accountObserve(operation, args)
-                        ?: context.settingsObserve(operation, args)
-                        ?: context.supplementObserve(operation)
+                    val flow = context.accountObserve(operation, args) ?: context.settingsObserve(operation, args)
+                        ?: context.supplementObserve(operation) ?: throw NativeFailure("UNKNOWN_OPERATION")
+                    flow.collect { nativeDeliver(coroutineContext[Job]!!, it, completion) }
+                }
+                return@start
+            }
+            graph.privateBoundary.state.collectLatest { boundary ->
+                nativeDeliver(coroutineContext[Job]!!, JsonNull, completion)
+                if (boundary.phase != io.github.nodyssey.data.session.PrivateStorePhase.READY) return@collectLatest
+                coroutineScope {
+                    val context = NativeContext(graph, this)
+                    val flow = context.contentObserve(operation, args) ?: context.accountObserve(operation, args)
+                        ?: context.settingsObserve(operation, args) ?: context.supplementObserve(operation)
                         ?: throw NativeFailure("UNKNOWN_OPERATION")
-                    flow.collect { data ->
-                        nativeCheckSession(session, graph.sessionRepository.peek())
-                        nativeDeliver(coroutineContext[Job]!!, data, completion)
+                    graph.privateBoundary.protect {
+                        flow.collect { data -> graph.privateBoundary.protect { nativeDeliver(coroutineContext[Job]!!, data, completion) } }
                     }
                 }
             }
@@ -111,7 +163,9 @@ object NativeBridge {
             try {
                 coroutineScope(block)
             } catch (cancelled: CancellationException) {
-                throw cancelled
+                coroutineContext.ensureActive()
+                if (cancelled is io.github.nodyssey.data.session.PrivateWorkRevoked) completion(nativeFailure(NativeFailure("SESSION_CHANGED")))
+                else throw cancelled
             } catch (failure: Exception) {
                 coroutineContext.ensureActive()
                 completion(nativeFailure(failure))
@@ -120,18 +174,18 @@ object NativeBridge {
         return NativeRequest(job)
     }
 
-    private suspend fun reconcile(graph: IosAppContainer): SessionState = reconciliation.withLock {
-        val session = graph.sessionRepository.peek()
-        val old = reconciled
-        val cleared = graph.postRepository.reconcileSession(session.isSignedIn, session.fingerprint)
-        if (old != null && old != session && session.isSignedIn && !cleared) {
-            graph.postRepository.invalidateCaches()
-        }
-        if (cleared) graph.notificationRepository.clearCounts()
-        reconciled = session
-        session
-    }
+
 }
+
+internal fun io.github.nodyssey.data.session.PrivateBoundaryState.nativeBoundaryDto(): JsonObject = buildJsonObject {
+    put("phase", phase.name)
+    put("identityEpoch", identityEpoch)
+    put("requiresConfirmation", requiresConfirmation)
+    put("recoveryEligible", recoveryEligible)
+}
+
+internal fun NativeContext.nativeSessionDto(): JsonObject = JsonObject(graph.sessionRepository.state.value.accountDto() +
+    ("identityEpoch" to JsonPrimitive(graph.privateBoundary.state.value.identityEpoch)))
 
 internal fun nativeCheckSession(before: SessionState, after: SessionState) {
     if (before.isSignedIn != after.isSignedIn || before.fingerprint != after.fingerprint) {
@@ -155,6 +209,7 @@ internal fun nativeFailure(failure: Throwable): String {
     if (failure is CancellationException) throw failure
     val code = when (failure) {
         is NativeFailure -> failure.code
+        is io.github.nodyssey.data.session.PrivateStoreAccessDenied -> "PRIVATE_STORE_RECOVERY_REQUIRED"
 
         is SiteException -> when (failure.error) {
             is SiteError.Cloudflare -> "CHALLENGE"

@@ -11,4 +11,8 @@ Independent read-only review of committed bridge/core/platform changes from `ca9
 
 ## Status
 
-A separate fix agent owns the native account/bridge/platform boundary and regression tests. No finding is closed by this document or by assigning a task. Fix evidence belongs in `swiftui-session-isolation.md`, followed by independent re-review and actual Apple compilation/runtime verification. No live account mutations were performed by the review.
+The native account/bridge/platform fix agent delivered a **partial**, uncommitted patch. Findings 1/3/4 have candidate changes; finding 2 remains an explicit release blocker requiring persisted private-store provenance and joinable writer barriers. See `swiftui-session-isolation.md` for the claimed behavioral checkpoints and limitations.
+
+Parent rerun of `python3 iosapp/tests/native_session_security_test.py` timed out after 180 seconds with only `JUnit version 4.13.2` and `..` printed. The subsequently chained `--open-isolation` command was not proven to execute. Therefore the reported 10-test success has **not** been independently reproduced; timeout investigation and independent review are active. Do not close any security gate from the subagent's report alone.
+
+No finding is closed without independent re-review and actual Apple compilation/runtime verification. No live account mutations were performed. Shared/Android architecture changes have not been made as a workaround; their minimum additive scope is being assessed separately.

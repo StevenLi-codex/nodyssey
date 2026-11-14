@@ -8,7 +8,7 @@ struct ContentPostList: View {
     @StateObject private var command = ContentCommand()
     @State private var manageBoards = false
     @State private var category = ""
-    @State private var sort = "LAST_REPLY"
+    private var sort: String { ContentPreferences(settings: app.settings).feedSort }
     @State private var page: Int64 = 1
     @State private var pageText = ""
     @State private var retry = 0
@@ -17,7 +17,8 @@ struct ContentPostList: View {
         VStack(spacing: 0) {
             HStack {
                 ContentCategoryPicker(categories: homeCategories, selection: $category)
-                ContentSortPicker(selection: $sort)
+                ContentSortPicker(selection: Binding(get: { sort }, set: { command.setFeedSort($0, app: app) }))
+                    .disabled(command.busy || app.settings == .null)
                 Menu {
                     ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
                         Button(slug) { category = slug }
@@ -25,13 +26,18 @@ struct ContentPostList: View {
                     Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
                 } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
             }.padding(.horizontal)
-            ContentPageEntry(text: $pageText) { page = $0 }.padding(.horizontal)
+            if ContentPreferences(settings: app.settings).homePageBar {
+                ContentPageEntry(text: $pageText) { page = $0 }.padding(.horizontal)
+            }
             ContentStoreStatus(store: categories) { retry += 1 }
             ContentCommandStatus(command: command)
             ContentPagedList(operation: "feed", arguments: arguments, restoreID: positions.position(board: category, sort: sort)?.postID, visible: { id, page in positions.record(board: category, sort: sort, postID: id, page: page) })
                 .id("\(category)|\(sort)|\(page)")
         }
         .navigationTitle(Text(String(localized: "content.posts", table: "Content")))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { app.open("Search") } label: { Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass") }
@@ -43,7 +49,7 @@ struct ContentPostList: View {
         }
         .onChange(of: category) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
         .onChange(of: sort) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
-        .onChange(of: app.generation) { _ in positions = ContentFeedMemory() }
+        .onChange(of: app.generation) { _ in command.cancel(); positions = ContentFeedMemory(); page = 1 }
         .task(id: "\(app.generation)|\(retry)") { await categories.observe(app, "categories") }
         .task(id: "\(app.generation)|\(retry)") { await recent.observe(app, "boards.recent") }
         .task(id: category) {

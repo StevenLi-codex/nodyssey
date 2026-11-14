@@ -2,12 +2,17 @@ import Foundation
 import NodysseyNativeCore
 import NodysseyShell
 
-/// Selectors checked against the generated NodysseyShell.h, not a parallel repository.
+/// Kotlin callback adapter. The new termination selector still requires the
+/// generated-header / full-Xcode integration gate documented in swiftui-request-drain.md.
 struct NativeClient: NativeTransport {
     private let adapter: CallbackNativeTransport
     init() {
-        adapter = CallbackNativeTransport(request: { operation, arguments, completion in
-            let handle = NativeBridgeHandle(NativeBridge.shared.request(operation: operation, argumentsJson: arguments, completion: completion))
+        adapter = CallbackNativeTransport(drainingRequest: { operation, arguments, completion, terminated in
+            let request = NativeBridge.shared.request(operation: operation, argumentsJson: arguments, completion: completion)
+            // Job completion, not JSON delivery or cancel(), owns the file lease.
+            // Register before handle installation; registration after completion is supported.
+            request.invokeOnCompletion(completion: terminated)
+            let handle = NativeBridgeHandle(request)
             return NativeCancellation { Task { @MainActor in handle.cancel() } }
         }, observe: { operation, arguments, completion in
             let handle = NativeBridgeHandle(NativeBridge.shared.observe(operation: operation, argumentsJson: arguments, completion: completion))
@@ -16,6 +21,9 @@ struct NativeClient: NativeTransport {
     }
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
         try await adapter.request(operation, arguments)
+    }
+    func request(_ operation: String, _ arguments: [String: JSONValue], onTermination: @escaping @Sendable () -> Void) async throws -> JSONValue {
+        try await adapter.request(operation, arguments, onTermination: onTermination)
     }
     func observe(_ operation: String, _ arguments: [String: JSONValue] = [:]) -> AsyncThrowingStream<JSONValue, Error> {
         adapter.observe(operation, arguments)

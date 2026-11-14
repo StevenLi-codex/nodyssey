@@ -28,6 +28,8 @@ class IosOfflineFileStore(
 ) : OfflineFileStore {
     private val images = root / "images"
 
+    internal fun isEmpty(): Boolean = !fileSystem.exists(images) || fileSystem.list(images).isEmpty()
+
     override fun nameOf(url: String): String = url.encodeUtf8().sha256().hex()
 
     override fun hasStored(url: String): Boolean = pathOf(url) != null

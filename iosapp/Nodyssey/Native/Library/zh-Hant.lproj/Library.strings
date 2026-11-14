@@ -183,3 +183,8 @@
 "library.tone.Good" = "良好";
 "library.tone.Warn" = "警告";
 "library.tone.Bad" = "不佳";
+"library.receiveTally" = "收款碼統計";
+"library.payerCount" = "付款紀錄數";
+"library.receivedTotal" = "累計收到";
+"library.paidByMe" = "我已付款";
+"library.shortfall" = "餘額不足，還差";

@@ -1,14 +1,25 @@
 import SwiftUI
 import NodysseyNativeCore
 
+private struct NativeDestinationIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
+extension EnvironmentValues {
+    var nativeDestinationID: UUID? {
+        get { self[NativeDestinationIDKey.self] }
+        set { self[NativeDestinationIDKey.self] = newValue }
+    }
+}
+
 struct NativeScreen: View {
+    @EnvironmentObject private var app: NativeAppModel
     let destination: NativeDestination
     var body: some View {
         screen
+            .environment(\.nativeDestinationID, destination.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("native.screen.\(destination.route)")
     }
     private var screen: AnyView {
+        guard app.canDisplay(destination) else { return AnyView(NativePrivateBoundaryRecoveryView()) }
         // Explicit external URLs only: never a fallback for an unimplemented native route.
         if destination.route == "Web", destination.arguments["goal"]?.string == "EXTERNAL" {
             if let value = destination.arguments["url"]?.string,

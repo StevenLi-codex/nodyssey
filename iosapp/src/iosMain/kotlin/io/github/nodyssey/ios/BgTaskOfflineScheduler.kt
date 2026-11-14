@@ -11,6 +11,12 @@ import io.github.nodyssey.di.AppContainer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import io.github.nodyssey.data.session.PrivateStorePhase
+import io.github.nodyssey.data.session.PrivateStoreAccessDenied
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -66,6 +72,22 @@ class BgTaskOfflineScheduler(
 ) : OfflineWorkScheduler {
     private var registered = false
     private var foregroundDrain: Job? = null
+    private var boundary: PrivateSessionBoundary? = null
+    private val restartGate = Mutex()
+
+    internal fun attach(boundary: PrivateSessionBoundary) { this.boundary = boundary }
+
+    private fun launchPrivate(work: suspend () -> Unit): Job {
+        val epoch = boundary?.state?.value?.identityEpoch
+        return scope.launch {
+            val graph = container() as? IosAppContainer ?: return@launch
+            val gate = graph.privateBoundary
+            gate.reconcile()
+            if (epoch != null && epoch != gate.state.value.identityEpoch) return@launch
+            if (gate.state.value.phase != PrivateStorePhase.READY) return@launch
+            try { gate.protect { work() } } catch (_: PrivateStoreAccessDenied) { /* Closed; explicit foreground retry only. */ }
+        }
+    }
 
     /**
      * Installs the two launch handlers. **Must run before the app finishes launching** — iOS traps
@@ -90,10 +112,10 @@ class BgTaskOfflineScheduler(
      */
     fun onLaunch() {
         ensureMaintenance()
-        scope.launch {
-            val library = container()?.offlineLibrary ?: return@launch
-            val downloads = library as? OfflineDownloads ?: return@launch
-            if (downloads.hasQueuedWork()) startDrain(library.settings.first().wifiOnly)
+        launchPrivate {
+            val library = container()?.offlineLibrary
+            val downloads = library as? OfflineDownloads
+            if (downloads != null && downloads.hasQueuedWork()) startDrain(library.settings.first().wifiOnly)
         }
     }
 
@@ -101,18 +123,17 @@ class BgTaskOfflineScheduler(
         wifiOnly: Boolean,
         restart: Boolean,
     ) {
-        scope.launch {
-            if (restart) {
-                foregroundDrain?.cancel()
-                foregroundDrain = null
-            }
-            if (foregroundDrain?.isActive != true) {
-                foregroundDrain =
-                    scope.launch {
-                        if (networkAllows(wifiOnly)) {
-                            (container()?.offlineLibrary as? OfflineDownloads)?.drainQueue()
-                        }
+        launchPrivate {
+            restartGate.withLock {
+                if (restart) {
+                    foregroundDrain?.cancelAndJoin()
+                    foregroundDrain = null
+                }
+                if (foregroundDrain?.isActive != true) {
+                    foregroundDrain = launchPrivate {
+                        if (networkAllows(wifiOnly)) (container()?.offlineLibrary as? OfflineDownloads)?.drainQueue()
                     }
+                }
             }
         }
         // A background continuation in case the foreground run is cut off by the app leaving the
@@ -180,12 +201,13 @@ class BgTaskOfflineScheduler(
         work: suspend () -> Boolean,
     ) {
         var success = false
-        val job = scope.launch { success = work() }
+        val job = launchPrivate { success = work() }
         job.invokeOnCompletion { cause -> task.setTaskCompletedWithSuccess(cause == null && success) }
         task.expirationHandler = { job.cancel() }
     }
 
     private fun submit(request: BGProcessingTaskRequest) {
+        if (boundary?.state?.value?.phase != PrivateStorePhase.READY) return
         request.requiresExternalPower = false
         // `error = null` drops the reason: submit fails on the Simulator (BGTaskScheduler is
         // unavailable there) and when the system declines to queue more, and neither is worth

@@ -5,8 +5,7 @@ import NodysseyNativeCore
 
 /// File representations are copied while the provider URL is valid. Never loads UIImage/Data.
 struct EditorPhotoPicker: UIViewControllerRepresentable {
-    let onFile: (URL) -> Void
-    let onFailure: (NativeFailure) -> Void
+    let model: EditorViewModel
     @Environment(\.dismiss) private var dismiss
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
@@ -24,17 +23,12 @@ struct EditorPhotoPicker: UIViewControllerRepresentable {
         init(_ parent: EditorPhotoPicker) { self.parent = parent }
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             parent.dismiss()
-            Task {
-                // Sequential copies cap the number of simultaneous provider decodes/copies at one.
-                for result in results.prefix(8) {
-                    do {
-                        let url = try await copy(result.itemProvider)
-                        parent.onFile(url)
-                    } catch { parent.onFailure(NativeFailure(code: "IMAGE_UNAVAILABLE", message: "Image could not be imported")) }
-                }
-            }
+            parent.model.importFiles(results.prefix(8).map { result in
+                let provider = result.itemProvider
+                return { try await Self.copy(provider) }
+            })
         }
-        private func copy(_ provider: NSItemProvider) async throws -> URL {
+        private static func copy(_ provider: NSItemProvider) async throws -> URL {
             try await withCheckedThrowingContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
                     do {

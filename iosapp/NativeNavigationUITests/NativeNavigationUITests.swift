@@ -64,13 +64,15 @@ final class NativeNavigationUITests: XCTestCase {
         tap("native.profile.settings")
         assertScreen("Settings")
 
+        exerciseSettingsChildAndBack()
         selectTab("home", route: "PostList")
-        assertNotHittable("native.screen.Settings")
+        assertSettingsInactive()
         selectTab("notifications", route: "Notifications")
-        assertNotHittable("native.screen.Settings")
+        assertSettingsInactive()
         selectTab("profile", route: "Settings")
         selectTab("home", route: "PostList")
         selectTab("profile", route: "Settings")
+        exerciseSettingsChildAndBack()
     }
 
     // Catches a sign-in presentation which cannot cancel, loses its origin,
@@ -138,9 +140,61 @@ final class NativeNavigationUITests: XCTestCase {
                           "Profile route is missing", file: file, line: line)
             assertHittable("native.profile.signin", file: file, line: line)
             assertHittable("native.profile.settings", file: file, line: line)
+        } else if route == "Settings" {
+            // CI 43577393525: both failures resolved this to a full-screen
+            // CollectionView; exact failure hierarchies and screenshots show
+            // Settings, Theme/Language rows, Profile selected, no modal. Require
+            // real child hit points, plus exerciseSettingsChildAndBack below.
+            XCTAssertTrue(element("native.screen.Settings").waitForExistence(timeout: 15),
+                          "Settings route is missing", file: file, line: line)
+            assertElementHittable(settingsThemeButton, file: file, line: line)
+            assertElementHittable(settingsLanguageButton, file: file, line: line)
         } else {
             assertHittable("native.screen.\(route)", file: file, line: line)
         }
+    }
+
+    // Settings currently has no action identifiers. Scope to its exact route and
+    // the three shipped localized labels, not arbitrary app-wide text matches.
+    private var settingsThemeButton: XCUIElement {
+        element("native.screen.Settings").buttons.matching(
+            NSPredicate(format: "label IN %@", ["Theme", "主题", "主題"])
+        ).firstMatch
+    }
+    private var settingsLanguageButton: XCUIElement {
+        element("native.screen.Settings").buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+                        "Language,", "语言", "語言")
+        ).firstMatch
+    }
+    private func assertSettingsInactive(file: StaticString = #filePath, line: UInt = #line) {
+        for control in [settingsThemeButton, settingsLanguageButton] {
+            let expectation = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false OR hittable == false"), object: control)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 10), .completed,
+                           "Inactive Settings action remains reachable", file: file, line: line)
+        }
+    }
+    private func exerciseSettingsChildAndBack(file: StaticString = #filePath, line: UInt = #line) {
+        assertElementHittable(settingsThemeButton, file: file, line: line)
+        settingsThemeButton.tap()
+        let theme = element("native.screen.ThemeSettings")
+        XCTAssertTrue(theme.waitForExistence(timeout: 15), "Theme navigation did not push", file: file, line: line)
+        let mode = theme.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "Light or dark", "明暗")).firstMatch
+        assertElementHittable(mode, file: file, line: line)
+        let back = app.navigationBars.buttons.matching(identifier: "BackButton").firstMatch
+        assertElementHittable(back, file: file, line: line)
+        back.tap()
+        assertScreen("Settings", file: file, line: line)
+        assertNotHittable("native.screen.ThemeSettings", file: file, line: line)
+    }
+    private func assertElementHittable(_ control: XCUIElement,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: control)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 15), .completed,
+                       "Expected reachable route-owned action: \(control)", file: file, line: line)
     }
 
     private func assertHittable(_ identifier: String,

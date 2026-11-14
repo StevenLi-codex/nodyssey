@@ -5,8 +5,11 @@ import pathlib
 import shlex
 import subprocess
 import tarfile
+import uuid
 repo = pathlib.Path(__file__).resolve().parents[2]
-stage = '/Users/steven/.cache/hermes-build/nodyssey-editor'
+# Concurrent gates must not replace one another's sources or module caches.
+stage = f'/Users/steven/.cache/hermes-build/nodyssey-editor-{uuid.uuid4().hex}'
+print(f'Mac stage: {stage}', flush=True)
 outer = ['ssh', '-p', '18323', '-i', '/home/hermes/.ssh/n100_london_ed25519', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=/home/hermes/.ssh/known_hosts_n100_service', 'steven@127.0.0.1']
 inner = ['ssh', '-o', 'Hostname=StevendeMacBook-Pro.local', '-o', 'HostKeyAlias=192.168.31.128', '-o', 'StrictHostKeyChecking=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'macbook']
 archive = io.BytesIO()
@@ -18,7 +21,7 @@ with tarfile.open(fileobj=archive, mode='w') as tar:
 command = f'mkdir -p {stage}/scratch && tar xf - -C {stage} && cd {stage} && swift --version && TMPDIR={stage}/scratch sh iosapp/NativeEditorTests/run-tests.sh'
 import sys
 if '--typecheck-ui' in sys.argv:
-    command = f'mkdir -p {stage}/scratch && tar xf - -C {stage} && cd {stage} && sh iosapp/NativeEditorTests/typecheck-ui.sh'
+    command = f'mkdir -p {stage}/scratch && tar xf - -C {stage} && cd {stage} && swift --version && TMPDIR={stage}/scratch sh iosapp/NativeEditorTests/typecheck-ui.sh'
 import time
 result = None
 for attempt in range(3):

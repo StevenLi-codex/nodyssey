@@ -60,6 +60,20 @@ struct SettingsRequestGate {
     mutating func invalidate() { current = nil }
 }
 
+/// Transient keyword input; repository normalization remains in Kotlin.
+struct SettingsKeywordDraft {
+    var text = "" {
+        didSet { revision = UUID() }
+    }
+    private(set) var revision = UUID()
+
+    mutating func clearAfterSuccess(submittedRevision: UUID) {
+        // Value equality is insufficient when editing goes A → B → A.
+        guard revision == submittedRevision else { return }
+        text = ""
+    }
+}
+
 enum SettingsDohSelection {
     static func select(_ id: String, servers: [JSONValue]) throws -> [JSONValue] {
         guard servers.contains(where: { $0["id"]?.string == id }) else {

@@ -16,7 +16,7 @@ let testSite: JSONValue = .object([
         try await eventually { transport.hasRequest("site.get") }
         transport.resolve("site.get", .success(testSite))
         try await eventually { transport.hasStream("session.state") && transport.hasStream("settings.observe") }
-        transport.emit("session.state", .object(["isSignedIn": .bool(true), "generation": .integer(1)]))
+        transport.emit("session.state", .object(["identityEpoch": .string("process-A"), "isSignedIn": .bool(true), "generation": .integer(1)]))
         transport.emit("settings.observe", .object([:]))
         try await eventually { app.isReady && transport.hasRequest("app.foreground") }
         transport.resolve("app.foreground", .success(.null))
@@ -47,7 +47,7 @@ let testSite: JSONValue = .object([
         try await eventually { transport.hasRequest("site.get") }
         transport.resolve("site.get", .success(testSite))
         try await eventually { transport.hasStream("session.state") && transport.hasStream("settings.observe") }
-        transport.emit("session.state", .object(["isSignedIn": .bool(true), "generation": .integer(1)]))
+        transport.emit("session.state", .object(["identityEpoch": .string("process-A"), "isSignedIn": .bool(true), "generation": .integer(1)]))
         transport.emit("settings.observe", .object([:]))
         try await eventually { app.isReady && transport.hasRequest("app.foreground") }
         transport.resolve("app.foreground", .success(.null))
@@ -91,7 +91,7 @@ let testSite: JSONValue = .object([
         try await eventually { transport.hasRequest("site.get") }
         transport.resolve("site.get", .success(testSite))
         try await eventually { transport.hasStream("session.state") && transport.hasStream("settings.observe") }
-        transport.emit("session.state", .object(["isSignedIn": .bool(false), "generation": .integer(1)]))
+        transport.emit("session.state", .object(["identityEpoch": .string("process-A"), "isSignedIn": .bool(false), "generation": .integer(1)]))
         transport.emit("settings.observe", .object(["appLanguage": .string("ENGLISH")]))
         try await eventually { app.isReady }
         #expect(app.homePath.last?.route == "PostDetail")

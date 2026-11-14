@@ -61,6 +61,129 @@ func releaseNotesTests() throws {
     check(parsed[0].text == "Real published notes", "display actual release text, not a synthesized summary")
     check(parsed[0].url == nil, "reject release links outside original project")
 }
+func keywordEditedDraftTest() {
+    var draft = SettingsKeywordDraft()
+    draft.text = "A"
+    let submittedRevision = draft.revision
+    // The saved success callback runs only after the user has edited again.
+    let succeed = { draft.clearAfterSuccess(submittedRevision: submittedRevision) }
+    draft.text = "B"
+    succeed()
+    check(draft.text == "B", "delayed keyword A success must preserve newer draft B")
+}
+func keywordUnchangedDraftTest() {
+    var draft = SettingsKeywordDraft()
+    draft.text = "A"
+    let submittedRevision = draft.revision
+    draft.clearAfterSuccess(submittedRevision: submittedRevision)
+    check(draft.text.isEmpty, "successful unchanged keyword A must clear")
+}
+func keywordReenteredDraftTest() {
+    var draft = SettingsKeywordDraft()
+    draft.text = "A"
+    let submittedRevision = draft.revision
+    draft.text = "B"
+    draft.text = "A"
+    draft.clearAfterSuccess(submittedRevision: submittedRevision)
+    check(draft.text == "A", "A to B to A edits must not be mistaken for the submitted revision")
+}
+
+#if SETTINGS_ACTION_TESTS
+import SwiftUI
+
+// Synthetic delayed app boundary. Compile the actual SettingsComponents.swift:
+// neither SettingsAction nor its request/session gate is duplicated here.
+@MainActor final class NativeAppModel: ObservableObject {
+    @Published var settings: JSONValue = .null
+    @Published var generation = 0
+    var arguments: [String: JSONValue] = [:]
+    var requestCount = 0
+    var pending: CheckedContinuation<JSONValue, Error>?
+    var returned = false
+    func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
+        precondition(operation == "keywords.add")
+        self.arguments = arguments
+        requestCount += 1
+        defer { returned = true }
+        return try await withCheckedThrowingContinuation { pending = $0 }
+    }
+    func open(_ route: String, _ arguments: [String: JSONValue] = [:]) { fatalError("Not exercised") }
+}
+@MainActor final class NativeStore: ObservableObject {
+    @Published var isLoading = false
+    @Published var failure: NativeFailure?
+}
+struct NativeFailureView: View {
+    let failure: NativeFailure
+    var retry: (() -> Void)? = nil
+    var body: some View { EmptyView() }
+}
+@MainActor func waitForKeywordAction(_ condition: () -> Bool) async -> Bool {
+    let deadline = Date().addingTimeInterval(5)
+    while !condition(), Date() < deadline { await Task.yield() }
+    return condition()
+}
+@MainActor func keywordActionTests() async {
+    let cases: [(name: String, edits: [String], fail: Bool, changeGeneration: Bool, cancel: Bool, expected: String)] = [
+        ("edited success", ["B"], false, false, false, "B"),
+        ("unchanged success", [], false, false, false, ""),
+        ("reentered success", ["B", "A"], false, false, false, "A"),
+        ("unchanged failure", [], true, false, false, "A"),
+        ("edited failure", ["B"], true, false, false, "B"),
+        ("generation changed before lifecycle cancellation", [], false, true, false, "A"),
+        ("generation cancellation", [], false, true, true, "A")
+    ]
+    for scenario in cases {
+        let app = NativeAppModel()
+        let action = SettingsAction()
+        var draft = SettingsKeywordDraft()
+        draft.text = "A"
+        let submittedRevision = draft.revision
+        var readback: JSONValue = .null
+        action.run(app, "keywords.add", ["kind": .string("BLOCK"), "text": .string(draft.text)]) {
+            readback = $0
+            draft.clearAfterSuccess(submittedRevision: submittedRevision)
+        }
+        action.run(app, "keywords.add", ["text": .string("duplicate")]) { _ in
+            check(false, "\(scenario.name): duplicate must not publish")
+        }
+        guard await waitForKeywordAction({ app.pending != nil }) else {
+            check(false, "\(scenario.name): request did not start")
+            action.cancel()
+            continue
+        }
+        for edit in scenario.edits { draft.text = edit }
+        check(app.arguments["text"] == .string("A") && app.requestCount == 1,
+              "\(scenario.name): captures A and rejects duplicate submission")
+        if scenario.changeGeneration { app.generation += 1 }
+        if scenario.cancel { action.cancel() } // Same call made by SettingsLifecycle.
+        let response: JSONValue = .array([.string("A")])
+        let pending = app.pending!
+        app.pending = nil
+        if scenario.fail {
+            pending.resume(throwing: NativeFailure(code: "INVALID_ARGUMENT", message: "Synthetic invalid keyword"))
+        } else {
+            // Deliberately deliver even after cancellation to exercise the late-reply guard.
+            pending.resume(returning: response)
+        }
+        guard await waitForKeywordAction({ app.returned }) else {
+            check(false, "\(scenario.name): completion did not return")
+            continue
+        }
+        check(draft.text == scenario.expected, "\(scenario.name): preserves or clears the correct draft")
+        let publishes = !scenario.fail && !scenario.changeGeneration
+        check(readback == (publishes ? response : .null), "\(scenario.name): only current success publishes readback")
+        check(!action.busy, "\(scenario.name): releases the request gate")
+        check((action.failure?.code == "INVALID_ARGUMENT") == scenario.fail,
+              "\(scenario.name): failure is not converted to success")
+    }
+}
+await keywordActionTests()
+#endif
+
+keywordEditedDraftTest()
+keywordUnchangedDraftTest()
+keywordReenteredDraftTest()
 try secretPatchTests()
 try dohSelectionTests()
 staleCompletionTests()

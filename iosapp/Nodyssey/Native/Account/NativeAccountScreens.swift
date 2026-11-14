@@ -28,62 +28,30 @@ struct AccountInvalidRoute: View {
     var body: some View { NativeFailureView(failure: NativeFailure(code: "INVALID_ARGUMENT", message: "")) }
 }
 
-/// No persistent Swift mirror; every mutation refreshes the repository it actually changed.
 @MainActor
-final class AccountAction: ObservableObject {
-    @Published var state = AccountMutationState()
-    @Published var failure: NativeFailure?
-    private var task: Task<Void, Never>?
-    private var readBack: (() async throws -> Void)?
-    var blocked: Bool { state.blocksWrite }
-
+extension AccountAction {
     func perform(_ app: NativeAppModel, operation: String, arguments: [String: JSONValue],
                  read: @escaping () async throws -> Void, received: @escaping (JSONValue) -> Void = { _ in }) {
-        guard let ticket = state.begin(confirmed: true) else { return }
-        let generation = app.generation
-        failure = nil; readBack = read
-        task = Task {
-            do {
-                let result = try await app.request(operation, arguments)
-                guard !Task.isCancelled, app.generation == generation, state.ticket == ticket else { return }
-                state.acknowledge(ticket)
-                received(result)
-                do {
-                    try await read()
-                    guard !Task.isCancelled, app.generation == generation else { return }
-                    state.refreshed(ticket)
-                } catch {
-                    guard !Task.isCancelled, app.generation == generation else { return }
-                    state.readFailed(ticket); failure = accountFailure(error)
-                }
-            } catch {
-                guard !Task.isCancelled, app.generation == generation else { return }
-                state.writeFailed(ticket); failure = accountFailure(error)
-            }
-        }
+        perform(operation: operation, arguments: arguments, request: { try await app.request($0, $1) },
+                currentGeneration: { app.generation }, read: read, received: received)
     }
-    func refreshOnly() {
-        guard let ticket = state.ticket, let readBack else { return }
-        task = Task {
-            do { try await readBack(); try Task.checkCancellation(); state.refreshed(ticket); failure = nil }
-            catch { if !Task.isCancelled { failure = accountFailure(error) } }
-        }
-    }
-    func cancel() { task?.cancel(); task = nil; readBack = nil; state.invalidate(); failure = nil }
-}
-
-func accountFailure(_ error: Error) -> NativeFailure {
-    NativeFailure(code: (error as? NativeFailure)?.code ?? "INTERNAL", message: "")
 }
 
 struct AccountActionStatus: View {
     @ObservedObject var action: AccountAction
     var body: some View {
-        if action.state.phase == .writing || action.state.phase == .reading { ProgressView() }
+        if action.state.phase == .writing || action.state.phase == .reading || action.isRefreshing { ProgressView() }
         if action.state.phase == .verified { Text("account_action_saved").foregroundStyle(.secondary) }
         if action.state.phase == .savedNeedsRefresh { Text("native.account.saved_refresh", tableName: "Account") }
         if action.state.phase == .uncertain { Text("native.account.uncertain", tableName: "Account") }
-        if let failure = action.failure { NativeFailureView(failure: failure, retry: action.refreshOnly) }
+        if action.state.phase == .reconciled { Text("native.account.reconciled", tableName: "Account") }
+        if action.state.phase == .rejected { Text("native.account.correct_input", tableName: "Account") }
+        if let failure = action.failure { NativeFailureView(failure: failure) }
+        // Recovery is read-only and must not depend on generic error retry policy.
+        if action.canRefresh {
+            Button { action.refreshOnly() } label: { Text("native.account.reconcile", tableName: "Account") }
+                .accessibilityIdentifier("native.account.reconcile")
+        }
     }
 }
 
@@ -108,9 +76,9 @@ struct AccountProfileHeader: View {
     let profile: JSONValue
     var body: some View {
         HStack {
-            if let url = profile.nativeString("avatarUrl") { NativeRemoteImage(url: url).frame(width: 64, height: 64).clipShape(Circle()) }
-            VStack(alignment: .leading) {
-                Text(profile.nativeString("name") ?? "").font(.title2)
+            if let url = profile.nativeString("avatarUrl") { NativeRemoteImage(url: url).frame(width: 52, height: 52).clipShape(Circle()) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(profile.nativeString("name") ?? "").font(.title3.weight(.semibold))
                 if let uid = profile.nativeInt("uid") { Text("UID \(String(uid))").font(.caption).textSelection(.enabled) }
                 if let rank = profile.nativeInt("rank") { LabeledContent("profile_level", value: String(rank)) }
                 if let chicken = profile.nativeInt("chickenCount") { LabeledContent("profile_chicken", value: String(chicken)) }
@@ -122,14 +90,26 @@ struct AccountProfileHeader: View {
     }
 }
 
+struct AccountProfileStatus: View {
+    @ObservedObject var profile: AccountSelfProfileState
+    var body: some View {
+        if profile.isLoading { ProgressView() }
+        if let failure = profile.failure { NativeFailureView(failure: failure) }
+        if profile.failure != nil || (profile.value == .null && !profile.isLoading) {
+            Text("native.account.profile_unavailable", tableName: "Account")
+            Button { Task { await profile.refresh() } } label: { Text("native.account.reconcile", tableName: "Account") }
+        }
+    }
+}
+
 struct AccountProfileScreen: View {
     @EnvironmentObject private var app: NativeAppModel
-    @StateObject private var profile = NativeStore()
+    @StateObject private var profile = AccountSelfProfileState()
     var body: some View {
         List {
             if app.isSignedIn {
                 AccountProfileHeader(profile: profile.value)
-                AccountStoreStatus(store: profile) { Task { await profile.load(app, "profile.self", ["refresh": .bool(true)]) } }
+                AccountProfileStatus(profile: profile)
                 if let uid = profile.value.nativeInt("uid") {
                     Button("profile_space") { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) }
                 }
@@ -156,8 +136,14 @@ struct AccountProfileScreen: View {
             }
         }
         .navigationTitle("profile_space")
-        .task(id: app.generation) { await profile.observe(app, "profile.self") }
-        .refreshable { await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task(id: app.generation) {
+            if app.isSignedIn { await profile.run(using: app.transport, currentGeneration: { app.generation }) }
+            else { profile.invalidate() }
+        }
+        .refreshable { await profile.refresh() }
     }
     private func route(_ title: String, _ destination: String) -> some View {
         Button(LocalizedStringKey(title)) { app.open(destination) }
@@ -185,6 +171,9 @@ struct AccountSettingsScreen: View {
         }
         .disabled(action.state.phase == .writing || action.state.phase == .reading)
         .navigationTitle("account_title")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task(id: app.generation) { action.cancel(); await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
         .refreshable { await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
         .confirmationDialog("action_sign_out", isPresented: $signOut, titleVisibility: .visible) {

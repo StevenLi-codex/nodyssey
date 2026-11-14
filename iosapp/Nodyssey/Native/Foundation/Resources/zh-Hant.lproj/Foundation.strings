@@ -3,3 +3,15 @@
 "native_foundation_welcome" = "社群的原生閱讀用戶端。登入、已儲存資料及網路存取繼續使用現有共用服務。";
 "native_foundation_help" = "使用說明";
 "native_foundation_privacy" = "隱私權政策";
+
+"native_foundation_boundary_title" = "私人資料已鎖定";
+"native_foundation_boundary_detail" = "無法驗證本機私人資料的歸屬，因此暫時無法存取。設定和登入仍可使用；登入不會自動接管舊資料。";
+"native_foundation_boundary_transition" = "正在檢查私人儲存空間，不會自動重設。";
+"native_foundation_boundary_failed" = "復原未能完成，資料可能仍被鎖定。請先檢查目前狀態再重試。";
+"native_foundation_boundary_refresh" = "檢查狀態";
+"native_foundation_boundary_settings" = "開啟設定";
+"native_foundation_boundary_review_reset" = "檢視本機資料重設…";
+"native_foundation_boundary_confirm_title" = "刪除本機私人資料？";
+"native_foundation_boundary_delete" = "刪除本機資料";
+"native_foundation_boundary_cancel" = "取消";
+"native_foundation_boundary_impact" = "這將永久刪除目前站點的本機草稿、離線下載和私人快取，且無法復原；不會刪除伺服器上的內容。取消會保留鎖定的資料。只有接受失去這些本機副本時才繼續。";

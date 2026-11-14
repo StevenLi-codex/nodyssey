@@ -21,7 +21,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
@@ -34,6 +36,7 @@ import okio.FileSystem
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import platform.Foundation.NSData
+import platform.Foundation.NSHTTPCookie
 import platform.Network.nw_interface_type_wifi
 import platform.Network.nw_path_monitor_cancel
 import platform.Network.nw_path_monitor_create
@@ -42,6 +45,7 @@ import platform.Network.nw_path_monitor_set_update_handler
 import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_uses_interface_type
 import platform.WebKit.WKHTTPCookieStore
+import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.dispatch_get_main_queue
 import kotlin.coroutines.resume
 
@@ -57,6 +61,7 @@ class NativePlatformContext internal constructor(
 object NativePlatform {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var browserOwner: NativeBrowserSession? = null
+    private val cookieMutation = Mutex()
 
     fun ready(completion: (NativePlatformContext?, String?) -> Unit): NativeRequest = NativeRequest(
         scope.launch {
@@ -125,18 +130,15 @@ object NativePlatform {
             try {
                 require(nativeImageUrlAllowed(url))
                 val graph = NodysseyApp.ensureContainer()
+                graph.privateBoundary.reconcile()
+                graph.privateBoundary.protect {
                 val baseline = graph.sessionRepository.peek()
-                // Same persisted session provenance gate as NativeBridge, before a cached byte is exposed.
-                if (graph.postRepository.reconcileSession(baseline.isSignedIn, baseline.fingerprint)) {
-                    graph.notificationRepository.clearCounts()
-                }
-                nativeCheckSession(baseline, graph.sessionRepository.peek())
                 val loader = SingletonImageLoader.get(PlatformContext.INSTANCE)
                 val wifiOnly = graph.settingsRepository.settings.first().imagesOnWifiOnly
                 val deferred = nativeDeferImage(wifiOnly, !wifiOnly || allowMetered || nativeOnWifi(), allowMetered)
                 val bytes = withContext(Dispatchers.Default) {
                     // Use the SAME download directory; no duplicate persistent store or guessed file path.
-                    val offline = IosOfflineFileStore.of(applicationSupportDirectory()).pathOf(url)
+                    val offline = graph.offlineFiles.pathOf(url)
                         ?.let { FileSystem.SYSTEM.read(it) { readByteArray() } }
                     fun cachedBytes(): ByteArray? = loader.diskCache?.let { cache ->
                         cache.openSnapshot(url)?.use { cache.fileSystem.read(it.data) { readByteArray() } }
@@ -184,6 +186,7 @@ object NativePlatform {
                 coroutineContext.ensureActive()
                 nativeCheckSession(baseline, graph.sessionRepository.peek())
                 completion(bytes, null)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -194,13 +197,41 @@ object NativePlatform {
     )
 
     internal fun claim(session: NativeBrowserSession): Boolean {
-        if (browserOwner != null) return false
+        if (browserOwner != null || cookieMutation.isLocked) return false
         browserOwner = session
         return true
     }
 
     internal fun release(session: NativeBrowserSession) {
         if (browserOwner === session) browserOwner = null
+    }
+
+    /** The browser lease also excludes sign-out: no seed/drain can restore deleted cookies. */
+    internal suspend fun signOut(graph: IosAppContainer) = withContext(NonCancellable + Dispatchers.Main) {
+        cookieMutation.withLock {
+            // A live WKWebView can still write cookies after observer.stop(). Only Swift owns
+            // stopLoading; refuse until it has begun close, then await that bridge's final drain.
+            browserOwner?.awaitClosedForSignOut()
+            val store = WKWebsiteDataStore.defaultDataStore().httpCookieStore
+            val hosts = NodeSeekSite.CONFIG.sessionUrls.mapNotNull { WebUrl.parse(it)?.host }
+            fun isSiteAuth(cookie: NSHTTPCookie): Boolean {
+                val domain = cookie.domain.trimStart('.').lowercase()
+                return cookie.name in NodeSeekSite.CONFIG.sessionCookieNames &&
+                    hosts.any { it == domain || it.endsWith(".$domain") }
+            }
+            suspend fun cookies(): List<NSHTTPCookie> = suspendCancellableCoroutine { continuation ->
+                store.getAllCookies { continuation.resume(it.orEmpty().filterIsInstance<NSHTTPCookie>()) }
+            }
+            for (cookie in cookies().filter(::isSiteAuth)) {
+                suspendCancellableCoroutine { continuation ->
+                    store.deleteCookie(cookie) { continuation.resume(Unit) }
+                }
+            }
+            if (cookies().any(::isSiteAuth)) throw NativeFailure("COOKIE_SYNC_FAILED")
+            // Existing repository remains the sole Foundation/session authority. Its last action
+            // clears Foundation and publishes signed-out, after WebKit removal has completed.
+            graph.accountSignOut.signOut()
+        }
     }
 }
 
@@ -231,7 +262,7 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
         start = { bridge.start() },
         stop = { bridge.stop() },
         drain = { bridge.drain() },
-        publish = { graph?.sessionRepository?.sync() },
+        publish = { graph?.privateBoundary?.finishExternalMutation() },
     )
 
     fun start(completion: (NativePlatformContext?, String?) -> Unit) {
@@ -252,6 +283,7 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
                     completion(null, "BROWSER_BUSY")
                     return@launch
                 }
+                ready.privateBoundary.beginExternalMutation()
                 if (lifecycle.open() && !closing) {
                     if (goal == "telegramBind") {
                         bindingPoll = scope.launch {
@@ -289,6 +321,13 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
         return nativeBrowserGoalReached(goal, before, now)
     }
 
+    internal suspend fun awaitClosedForSignOut() {
+        if (!closing) throw NativeFailure("BROWSER_BUSY")
+        bindingPoll?.cancelAndJoin()
+        lifecycle.close()
+        NativePlatform.release(this)
+    }
+
     /** Idempotent. Completion is after stop -> drain -> session.sync, never before cookie arrival. */
     fun close(completion: (String?) -> Unit) {
         closing = true
@@ -296,11 +335,13 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
         scope.launch {
             var error: String? = null
             try {
+                bindingPoll?.cancelAndJoin()
                 if (claimed) lifecycle.close()
             } catch (_: Exception) {
                 error = "COOKIE_SYNC_FAILED"
             } finally {
-                NativePlatform.release(this@NativeBrowserSession)
+                // A failed drain is not a released cookie lease: sign-out must retry/await it.
+                if (error == null) NativePlatform.release(this@NativeBrowserSession)
                 completion(error)
             }
         }
@@ -342,7 +383,7 @@ internal class NativeCookieLifecycle(
     private val start: () -> Unit,
     private val stop: () -> Unit,
     private val drain: suspend () -> Unit,
-    private val publish: () -> Unit,
+    private val publish: suspend () -> Unit,
 ) {
     private val gate = Mutex()
     private var closing = false
@@ -360,13 +401,10 @@ internal class NativeCookieLifecycle(
         closing = true
         gate.withLock {
             if (finished) return@withLock
-            finished = true
             stop()
-            try {
-                drain()
-            } finally {
-                publish()
-            }
+            drain()
+            publish()
+            finished = true
         }
     }
 }

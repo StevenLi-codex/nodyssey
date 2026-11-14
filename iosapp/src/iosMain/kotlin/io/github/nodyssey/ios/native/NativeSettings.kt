@@ -30,12 +30,14 @@ import io.github.nodyssey.model.FeedSort
 import io.github.nodyssey.model.TitleKeywordKind
 import io.github.nodyssey.ui.composer.NodeSeekEmojiGroups
 import io.github.plaza.designsys.editor.EmojiEntry
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -136,8 +138,25 @@ private suspend fun NativeContext.settingsDispatch(operation: String, args: Json
         "settings.get" -> return settingsSnapshot()
 
         "settings.set" -> {
-            settingsApply(settings, args)
-            if (args.settingsString("key") == "readHistoryLimit") graph.postRepository.trimReadHistory()
+            if (args.settingsString("key") == "readHistoryLimit") {
+                // This public operation also mutates protected history. Admit before either write,
+                // and keep both steps in the same joined lease (not a check-then-write preflight).
+                graph.privateBoundary.protect {
+                    val previous = settings.settings.first().readHistoryLimit
+                    try {
+                        settingsApply(settings, args)
+                        graph.postRepository.trimReadHistory()
+                    } catch (failure: Throwable) {
+                        // A transition may revoke the nested trim after DataStore committed.
+                        // Restore only this preference before releasing the lock/lease, even on
+                        // cancellation. This is compensation, not a Room/DataStore transaction.
+                        withContext(NonCancellable) { settings.setReadHistoryLimit(previous) }
+                        throw failure
+                    }
+                }
+            } else {
+                settingsApply(settings, args)
+            }
             return settingsSnapshot()
         }
 

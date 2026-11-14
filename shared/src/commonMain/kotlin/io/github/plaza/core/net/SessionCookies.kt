@@ -1,5 +1,8 @@
 package io.github.plaza.core.net
 
+import io.github.nodyssey.data.session.PrivateOwnerProof
+import okio.ByteString.Companion.encodeUtf8
+
 /**
  * Reads a session out of the one cookie store the HTTP client and the sign-in browser share.
  *
@@ -48,6 +51,26 @@ class SessionCookies(
                 .joinToString(";") { (name, value) -> "$name=$value" }
                 .hashCode(),
         )
+    }
+
+    /** Auth-only collision-resistant proof; clearance/theme cookies cannot change the owner.
+     * Length-prefix every component: delimiter-containing cookie values cannot alias another set.
+     * Configured session URLs are sorted and normalized for origin spelling, not path case.
+     * Rotated authentication cookies intentionally require recovery unless a verified rebind exists.
+     */
+    fun privateOwnerProof(): PrivateOwnerProof {
+        fun frame(value: String): String = "${value.length}:$value"
+        val material = config.sessionUrls.map { address ->
+            val url = requireNotNull(WebUrl.parse(address))
+            require(url.userInfo == null && url.host != null && url.scheme in setOf("https", "http"))
+            val port = url.port.takeUnless { it == -1 || it == 443 && url.scheme == "https" || it == 80 && url.scheme == "http" }
+            val canonical = "${url.scheme}://${requireNotNull(url.host).lowercase()}${port?.let { ":$it" }.orEmpty()}${url.path.orEmpty().ifEmpty { "/" }}"
+            frame(canonical) + cookiePairs(address)
+                .filter { (name, value) -> name in config.sessionCookieNames && value.isNotBlank() }
+                .sortedWith(compareBy({ it.first }, { it.second }))
+                .joinToString("") { (name, value) -> frame(name) + frame(value) }
+        }.distinct().sorted().joinToString("") { frame(it) }
+        return PrivateOwnerProof("sha256-auth-v1:" + material.encodeUtf8().sha256().hex())
     }
 
     /** Cookie *names* only — used for diagnostics; values are never logged. */

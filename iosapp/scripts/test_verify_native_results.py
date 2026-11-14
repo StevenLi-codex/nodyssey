@@ -25,6 +25,16 @@ IMAGE_HOST_CASES = (
     'switchAfterLastFrontendCheckCannotDeleteCollidingIdOnAnotherProvider',
 )
 
+REQUEST_COMPLETION_CASES = (
+    'normalCompletionWaitsForSuspendingFinally',
+    'cancellationWaitsForFinallyAndStructuredChildCleanup',
+    'cancellationWaitsForStructuredChildAndFinallyCleanup',
+    'eachRegistrationRunsExactlyOnce',
+    'registrationAfterCompletionRunsExactlyOnce',
+    'registrationAfterCancelledCompletionRunsExactlyOnce',
+    'mainCallbacksSurviveRequestAndOwnerCancellation',
+)
+
 PREEXISTING_SUITES = (
     'NativeAccountTest', 'NativeBridgeTest', 'NativeContentMappingTest',
     'NativeContentTest', 'NativePlatformTest', 'NativeSettingsMappingTest',
@@ -49,15 +59,82 @@ def image_host_xml(cases=IMAGE_HOST_CASES, skipped=(), suffix='[iosSimulatorArm6
     return f'<testsuite name="{suite}" tests="{len(cases)}">{rows}</testsuite>'
 
 
+def request_completion_xml(cases=REQUEST_COMPLETION_CASES, skipped=(), suffix='[iosSimulatorArm64]'):
+    # Synthetic verifier input, never evidence of executing the Apple suite.
+    suite = 'iosSimulatorArm64Test.io.github.nodyssey.ios.native.NativeRequestCompletionTest'
+    rows = ''.join(
+        f'<testcase classname="{suite}" name="{name}{suffix}">'
+        + ('<skipped/>' if name in skipped else '') + '</testcase>'
+        for name in cases
+    )
+    return f'<testsuite name="{suite}" tests="{len(cases)}">{rows}</testsuite>'
+
+
 class NativeResultsTest(unittest.TestCase):
+    def test_default_gate_requires_request_completion_suite(self):
+        with self.assertRaisesRegex(ValueError, 'NativeRequestCompletionTest'):
+            self.check_xml('<testsuites>' + preexisting_suites_xml() + image_host_xml() + '</testsuites>', None)
+
+    def test_request_completion_missing_each_exact_case_fails_default_gate(self):
+        for missing in REQUEST_COMPLETION_CASES:
+            cases = tuple(name for name in REQUEST_COMPLETION_CASES if name != missing)
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, missing):
+                self.check_xml('<testsuites>' + preexisting_suites_xml() + image_host_xml()
+                               + request_completion_xml(cases) + '</testsuites>', None)
+
+    def test_request_completion_each_skipped_case_fails(self):
+        for skipped in REQUEST_COMPLETION_CASES:
+            with self.subTest(skipped=skipped), self.assertRaisesRegex(ValueError, skipped):
+                self.check_xml(request_completion_xml(skipped=(skipped,)), ('NativeRequestCompletionTest',))
+
+    def test_request_completion_duplicate_cannot_replace_missing_case(self):
+        cases = REQUEST_COMPLETION_CASES[:-1] + REQUEST_COMPLETION_CASES[:1]
+        with self.assertRaisesRegex(ValueError, REQUEST_COMPLETION_CASES[-1]):
+            self.check_xml(request_completion_xml(cases), ('NativeRequestCompletionTest',))
+
+    def test_request_completion_duplicates_across_files_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'TEST-native.xml').write_text(request_completion_xml())
+            Path(directory, 'TEST-duplicate.xml').write_text(request_completion_xml(REQUEST_COMPLETION_CASES[:1], suffix=''))
+            with self.assertRaisesRegex(ValueError, 'Duplicate.*' + REQUEST_COMPLETION_CASES[0]):
+                module.verify_results(Path(directory), ('NativeRequestCompletionTest',))
+
+    def test_request_completion_declared_skip_fails(self):
+        xml = request_completion_xml().replace('tests="7"', 'tests="7" skipped="1"')
+        with self.assertRaisesRegex(ValueError, 'Skipped.*NativeRequestCompletionTest'):
+            self.check_xml(xml, ('NativeRequestCompletionTest',))
+
+    def test_request_completion_extra_skipped_case_fails(self):
+        xml = request_completion_xml(REQUEST_COMPLETION_CASES + ('extraCase',), skipped=('extraCase',))
+        with self.assertRaisesRegex(ValueError, 'Skipped.*extraCase'):
+            self.check_xml(xml, ('NativeRequestCompletionTest',))
+
+    def test_request_completion_unknown_suffix_fails(self):
+        with self.assertRaisesRegex(ValueError, REQUEST_COMPLETION_CASES[0]):
+            self.check_xml(request_completion_xml(suffix='[not-an-apple-target]'), ('NativeRequestCompletionTest',))
+
+    def test_request_completion_plain_or_apple_methods_pass(self):
+        for suffix in ('', '[iosSimulatorArm64]'):
+            with self.subTest(suffix=suffix):
+                result = self.check_xml(request_completion_xml(suffix=suffix), ('NativeRequestCompletionTest',))
+                self.assertEqual((result['passed'], result['skipped']), (7, 0))
+
+    def test_request_completion_failure_or_error_fails(self):
+        for tag in ('failure', 'error'):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, 'failed'):
+                xml = request_completion_xml().replace('</testcase>', f'<{tag}/></testcase>', 1)
+                self.check_xml(xml, ('NativeRequestCompletionTest',))
+
     def test_default_gate_rejects_old_suites_without_image_host_suite(self):
         with self.assertRaisesRegex(ValueError, 'NativeImageHostSelectionTest'):
-            self.check_xml('<testsuites>' + preexisting_suites_xml() + '</testsuites>', None)
+            self.check_xml('<testsuites>' + preexisting_suites_xml() + request_completion_xml() + '</testsuites>', None)
 
-    def test_default_gate_accepts_old_suites_plus_all_eight_image_host_cases(self):
-        result = self.check_xml('<testsuites>' + preexisting_suites_xml() + image_host_xml() + '</testsuites>', None)
-        self.assertEqual(result['passed'], 18)
-        self.assertEqual(result['required_suites'], sorted(PREEXISTING_SUITES + ('NativeImageHostSelectionTest',)))
+    def test_default_gate_accepts_old_suites_plus_image_host_and_completion_cases(self):
+        result = self.check_xml('<testsuites>' + preexisting_suites_xml() + image_host_xml()
+                                + request_completion_xml() + '</testsuites>', None)
+        self.assertEqual(result['passed'], 25)
+        self.assertEqual(result['required_suites'], sorted(PREEXISTING_SUITES + (
+            'NativeImageHostSelectionTest', 'NativeRequestCompletionTest')))
 
     def test_image_host_declared_skip_without_child_is_not_ignored(self):
         xml = image_host_xml().replace('tests="8"', 'tests="8" skipped="1"')

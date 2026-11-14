@@ -9,6 +9,9 @@ struct NativeRichTextActions {
     var onLink: ((String) -> Void)?
     var onQuoteReference: ((_ name: String, _ floor: String, _ url: String) -> Void)?
     var onCode: ((NativeCode, NativeCodeAction) -> Void)?
+    /// Optional owner-rendered code/report slot, inherited by every recursive container.
+    /// The owner retains parsing, settings and per-report override policy. Nil preserves source.
+    var codeContent: ((NativeCode, NativeRichTextActions) -> AnyView)?
 
     init(
         onImage: ((String, String?) -> Void)? = nil,
@@ -16,7 +19,8 @@ struct NativeRichTextActions {
         onStardust: ((NativeStardustReceive) -> Void)? = nil,
         onLink: ((String) -> Void)? = nil,
         onQuoteReference: ((_ name: String, _ floor: String, _ url: String) -> Void)? = nil,
-        onCode: ((NativeCode, NativeCodeAction) -> Void)? = nil
+        onCode: ((NativeCode, NativeCodeAction) -> Void)? = nil,
+        codeContent: ((NativeCode, NativeRichTextActions) -> AnyView)? = nil
     ) {
         self.onImage = onImage
         self.onVote = onVote
@@ -24,6 +28,7 @@ struct NativeRichTextActions {
         self.onLink = onLink
         self.onQuoteReference = onQuoteReference
         self.onCode = onCode
+        self.codeContent = codeContent
     }
 }
 
@@ -85,7 +90,11 @@ private struct NativeRichBlock: View {
             }
             .padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         case .code(let code):
-            NativeCodeBlock(code: code, actions: actions)
+            if let codeContent = actions.codeContent {
+                codeContent(code, actions)
+            } else {
+                NativeCodeBlock(code: code, actions: actions)
+            }
         case .quote(let children):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle().fill(.secondary.opacity(0.4)).frame(width: 3)

@@ -14,6 +14,15 @@ import Testing
     #expect(state.phase == .verified)
     #expect(state.begin(confirmed: true) != nil)
 }
+@Test func unknownPasswordOutcomeCannotBeProvedBySuccessfulStatusRead() {
+    var state = AccountMutationState()
+    let ticket = state.begin(confirmed: true, readbackCanResolveUncertainty: false)!
+    state.writeFailed(ticket)
+    state.refreshed(ticket)
+    #expect(state.phase == .uncertain)
+    #expect(state.blocksWrite)
+}
+
 @Test func sessionReplacementRejectsOldMutationCompletion() {
     var state = AccountMutationState()
     let ticket = state.begin(confirmed: true)!

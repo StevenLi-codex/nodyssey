@@ -11,10 +11,19 @@ REQUIRED_SUITES = (
     'NativeContentTest', 'NativePlatformTest', 'NativeSettingsMappingTest',
     'NativeSettingsPersistenceTest', 'NativeSupplementTest',
     'NativeReleaseNotesTest', 'NativeReleaseNotesAppleTest',
-    'NativeImageHostSelectionTest',
+    'NativeImageHostSelectionTest', 'NativeRequestCompletionTest',
 )
 
 REQUIRED_CASES = {
+    'NativeRequestCompletionTest': (
+        'normalCompletionWaitsForSuspendingFinally',
+        'cancellationWaitsForFinallyAndStructuredChildCleanup',
+        'cancellationWaitsForStructuredChildAndFinallyCleanup',
+        'eachRegistrationRunsExactlyOnce',
+        'registrationAfterCompletionRunsExactlyOnce',
+        'registrationAfterCancelledCompletionRunsExactlyOnce',
+        'mainCallbacksSurviveRequestAndOwnerCancellation',
+    ),
     'NativeImageHostSelectionTest': (
         'missingOrMalformedExpectedProviderNeverListsOrDeletes',
         'sameProviderDeletesExactImageWithBackendOnlyToken',

@@ -4,6 +4,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import io.github.nodyssey.data.session.withPrivateAccess
+import io.github.nodyssey.data.session.privateFlow
 import io.github.nodyssey.core.NodeSeekSite
 import io.github.nodyssey.core.net.throwIfChallenge
 import io.github.nodyssey.core.net.throwIfNotJson
@@ -98,28 +101,29 @@ class DefaultCommentComposerRepository(
     private val clock: AppClock,
     /** Keeps the feed from announcing this account's own accepted reply as new. */
     private val onReplyPublished: suspend (Long) -> Unit = {},
+    private val privateBoundary: PrivateSessionBoundary? = null,
 ) : CommentComposerRepository {
     private val json = Json { ignoreUnknownKeys = true }
 
-    override fun draft(postId: Long): Flow<CommentDraft?> = dataStore.data.map { preferences ->
+    override fun draft(postId: Long): Flow<CommentDraft?> = privateBoundary.privateFlow(dataStore.data.map { preferences ->
         preferences[key(postId)]?.let { encoded ->
             runCatching { json.decodeFromString<CommentDraft>(encoded) }.getOrNull()
         }
-    }
+    })
 
-    override suspend fun saveDraft(postId: Long, draft: CommentDraft) {
+    override suspend fun saveDraft(postId: Long, draft: CommentDraft) = privateBoundary.withPrivateAccess<Unit> {
         dataStore.edit { preferences ->
             preferences[key(postId)] = json.encodeToString(draft.copy(savedAtMillis = clock.nowMillis()))
         }
     }
 
-    override suspend fun deleteDraft(postId: Long) {
+    override suspend fun deleteDraft(postId: Long) = privateBoundary.withPrivateAccess<Unit> {
         dataStore.edit { preferences -> preferences.remove(key(postId)) }
     }
 
     // `clear()` and not a walk over `draft-` keys: drafts are the only thing this store holds, and a
     // filter would silently start keeping whatever key somebody adds to it next.
-    override suspend fun deleteAllDrafts() {
+    override suspend fun deleteAllDrafts() = privateBoundary.withPrivateAccess<Unit> {
         dataStore.edit { preferences -> preferences.clear() }
     }
 

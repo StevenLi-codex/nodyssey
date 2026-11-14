@@ -1,6 +1,59 @@
 import SwiftUI
 import NodysseyNativeCore
 
+/// Same production registration is exercised by Foundation's route tests.
+/// No normal-save path is used by identity revocation.
+@MainActor final class NativeEditorRouteLifetime: ObservableObject {
+    let model: EditorViewModel
+    @Published var needsDraftDecision = false
+    @Published var needsDiscardDecision = false
+    @Published private(set) var closing = false
+    private weak var app: NativeAppModel?
+    private var destinationID: UUID?
+    private var token: UUID?
+    private var decision: EditorViewModel.CloseDecision?
+
+    init(model: EditorViewModel) { self.model = model }
+    func register(app: NativeAppModel, destinationID: UUID) {
+        guard token == nil, !model.isClosed else { return }
+        self.app = app
+        self.destinationID = destinationID
+        token = app.registerDismissal(destinationID: destinationID, close: { [self] in
+            await closeForNavigation()
+        }, revoke: { [self] in model.invalidate() }, terminate: { [self] in
+            model.terminateAfterPrepared()
+        }, validate: { [self] in
+            model.isDeparturePreparationValid
+        })
+    }
+
+    func dismiss(decision: EditorViewModel.CloseDecision? = nil) async {
+        self.decision = decision
+        defer { self.decision = nil }
+        guard let app, let destinationID else { return }
+        await app.dismissDestination(destinationID)
+    }
+
+    private func closeForNavigation() async -> Bool {
+        guard !closing else { return false }
+        if model.isClosed { return true }
+        model.focus.handoff {}
+        if decision == nil, case .edit = model.session.mode, !model.session.accepted {
+            needsDiscardDecision = true
+            return false
+        }
+        if decision == nil, model.session.pendingRestore != nil {
+            needsDraftDecision = true
+            return false
+        }
+        closing = true
+        defer { closing = false }
+        do { try await model.prepareForDeparture(decision: decision); return true }
+        catch { model.report(error); return false }
+    }
+}
+
+#if !FOUNDATION_EDITOR_TESTS
 func EL(_ key: String) -> String { NSLocalizedString(key, tableName: "Editor", bundle: .main, comment: "") }
 
 @MainActor enum NativeEditorScreens {
@@ -22,19 +75,12 @@ private struct EditorEntry: View {
     var body: some View { EditorHost(mode: mode, arguments: arguments, transport: app.transport).id(app.generation) }
 }
 
-/// In-memory only: the shared repository exposes no message/edit draft persistence API.
-@MainActor private enum MessageDraftMemory {
-    static var generation: Int?
-    struct Draft { let buffer: EditorBuffer; let quote: String? }
-    static var values: [Int64: Draft] = [:]
-    static func align(_ value: Int) { if generation != value { values = [:]; generation = value } }
-}
-
 private struct EditorHost: View {
     @EnvironmentObject private var app: NativeAppModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.nativeDestinationID) private var destinationID
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model: EditorViewModel
+    @StateObject private var routeLifetime: NativeEditorRouteLifetime
     @StateObject private var boards = NativeStore()
     @StateObject private var permissions = NativeStore()
     @StateObject private var profile = NativeStore()
@@ -45,12 +91,13 @@ private struct EditorHost: View {
     @State private var confirmPublish = false
     @State private var confirmDelete = false
     @State private var confirmRestore = false
-    @State private var confirmClose = false
-    @State private var closing = false
+
     let arguments: [String: JSONValue]
 
     init(mode: EditorMode, arguments: [String: JSONValue], transport: any NativeTransport) {
-        _model = StateObject(wrappedValue: EditorViewModel(mode: mode, transport: transport, arguments: arguments))
+        let model = EditorViewModel(mode: mode, transport: transport, arguments: arguments)
+        _model = StateObject(wrappedValue: model)
+        _routeLifetime = StateObject(wrappedValue: NativeEditorRouteLifetime(model: model))
         self.arguments = arguments
     }
     private var session: EditorSession { model.session }
@@ -78,7 +125,7 @@ private struct EditorHost: View {
                 HStack {
                     Text(EL("draftFound"))
                     Button(EL("restore")) { model.focus.handoff { confirmRestore = true } }
-                    Button(EL("keepCurrent")) { session.keepCurrent() }
+                    Button(EL("keepCurrent")) { model.focus.handoff { session.keepCurrent() } }
                     Button(EL("discard"), role: .destructive) { confirmDelete = true }
                 }.padding()
             }
@@ -112,12 +159,15 @@ private struct EditorHost: View {
                 model.focus.handoff { showPhotos = true }
             })
         }
+        .disabled(routeLifetime.closing || app.departureRunning)
         .navigationTitle(EL(isMessage ? "messages" : (session.mode == .post ? "newPost" : "compose")))
         .navigationBarBackButtonHidden(true)
-        .interactiveDismissDisabled(!session.body.text.isEmpty || session.busy)
+        // All permanent exits must run the awaited close/teardown path, even
+        // for title-only drafts or attachments with an empty body.
+        .interactiveDismissDisabled(true)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button(EL("close")) { close() }.disabled(closing || session.busy)
+                Button(EL("close")) { close() }.disabled(routeLifetime.closing || session.busy)
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(EL(model.previewing ? "edit" : "preview")) {
@@ -135,20 +185,21 @@ private struct EditorHost: View {
             NavigationStack { EditorPanelView(panel: panel, model: model).environmentObject(app) }
         }
         .sheet(isPresented: $showPhotos) {
-            let pickerGeneration = app.generation
-            EditorPhotoPicker(onFile: { url in
-                guard pickerGeneration == app.generation else { try? FileManager.default.removeItem(at: url); return }
-                model.addFile(url)
-            }, onFailure: { if pickerGeneration == app.generation { model.failure = $0 } })
+            EditorPhotoPicker(model: model)
         }
         .confirmationDialog(EL("confirmPublish"), isPresented: $confirmPublish, titleVisibility: .visible) {
             Button(EL(isMessage ? "send" : "publish")) {
                 model.focus.handoff { Task { await model.submit() } }
             }
         } message: { Text(EL("noAutoRetry")) }
-        .confirmationDialog(EL("closeUnsaved"), isPresented: $confirmClose, titleVisibility: .visible) {
-            Button(EL("close"), role: .destructive) { close(discardEdit: true) }
+        .confirmationDialog(EL("closeUnsaved"), isPresented: $routeLifetime.needsDiscardDecision, titleVisibility: .visible) {
+            Button(EL("close"), role: .destructive) { close(decision: .discardCurrent) }
         }
+        .confirmationDialog(EL("closeDraftDecision"), isPresented: $routeLifetime.needsDraftDecision, titleVisibility: .visible) {
+            Button(EL("restoreAndClose")) { close(decision: .restore) }
+            Button(EL("keepCurrentAndClose")) { close(decision: .keepCurrent) }
+            Button(EL("discardCurrentAndClose"), role: .destructive) { close(decision: .discardCurrent) }
+        } message: { Text(EL("closeDraftDecisionDetail")) }
         .confirmationDialog(EL("restoreConfirm"), isPresented: $confirmRestore, titleVisibility: .visible) {
             Button(EL("restore")) { if let value = session.pendingRestore { model.focus.handoff { session.restore(value) } } }
         }
@@ -160,11 +211,10 @@ private struct EditorHost: View {
             Button(EL("keepDraft"), role: .cancel) { model.acceptedResult = nil }
         } message: { Text(EL("acceptedDetail")) }
         .task(id: app.generation) {
+            if let destinationID { routeLifetime.register(app: app, destinationID: destinationID) }
             if let generation, generation != app.generation { model.invalidate() }
             generation = app.generation
-            MessageDraftMemory.align(app.generation)
-            await model.load()
-            if case .message(let uid) = session.mode, let draft = MessageDraftMemory.values[uid] { session.changeBody(draft.buffer); model.quotePrefix = draft.quote }
+            await model.appear(generation: app.generation)
         }
         .task(id: app.generation) {
             if session.mode.showsTitle {
@@ -179,8 +229,9 @@ private struct EditorHost: View {
         }
         .onDisappear {
             model.focus.handoff {
+                guard !model.isClosed else { return }
                 guard generation == app.generation else { model.invalidate(); return }
-                if case .message(let uid) = session.mode { MessageDraftMemory.values[uid] = .init(buffer: session.body, quote: model.quotePrefix) }
+                model.cacheMessage()
                 Task { do { try await model.flush() } catch { model.report(error) } }
             }
         }
@@ -241,29 +292,26 @@ private struct EditorHost: View {
         }.fixedSize(horizontal: false, vertical: true)
     }
     private func openPanel(_ panel: EditorPanel) { model.focus.handoff { sheet = panel } }
-    private func close(discardEdit: Bool = false) {
-        model.focus.handoff {
-            if case .edit = session.mode, !session.accepted, !discardEdit { confirmClose = true; return }
-            closing = true
-            Task {
-                defer { closing = false }
-                do { try await model.flush(); dismiss() } catch { model.report(error) }
-            }
-        }
+    private func close(decision: EditorViewModel.CloseDecision? = nil) {
+        Task { await routeLifetime.dismiss(decision: decision) }
     }
     private func openAccepted() {
-        let result = model.acceptedResult
-        model.acceptedResult = nil
-        switch session.mode {
-        case .post:
-            if let id = result?["postId"]?.int { app.open("PostDetail", ["postId": .integer(id)]) }
-            else { dismiss() }
-        case .reply(let id):
-            var args: [String: JSONValue] = ["postId": .integer(id)]
-            if let floor = result?["floor"]?.int { args["floor"] = .string(String(floor)) }
-            app.open("PostDetail", args)
-        case .edit(let id, _, let page, _): app.open("PostDetail", ["postId": .integer(id), "page": .integer(page)])
-        case .message: break
+        model.focus.handoff {
+            let result = model.acceptedResult
+            model.acceptedResult = nil
+            // app.open pushes a destination; that disappearance is temporary.
+            // Only the no-identity dismissal below permanently closes this editor.
+            switch session.mode {
+            case .post:
+                if let id = result?["postId"]?.int { app.open("PostDetail", ["postId": .integer(id)]) }
+                else { close() }
+            case .reply(let id):
+                var args: [String: JSONValue] = ["postId": .integer(id)]
+                if let floor = result?["floor"]?.int { args["floor"] = .string(String(floor)) }
+                app.open("PostDetail", args)
+            case .edit(let id, _, let page, _): app.open("PostDetail", ["postId": .integer(id), "page": .integer(page)])
+            case .message: break
+            }
         }
     }
 }
@@ -275,3 +323,4 @@ private struct EditorHost: View {
         onLink: { app.openLink($0) },
         onQuoteReference: { _, floor, url in app.openLink(url + (url.contains("#") ? "" : "#" + floor.trimmingCharacters(in: CharacterSet(charactersIn: "#")))) })
 }
+#endif

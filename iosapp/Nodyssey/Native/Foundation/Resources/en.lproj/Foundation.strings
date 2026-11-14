@@ -3,3 +3,15 @@
 "native_foundation_welcome" = "A native reader for your community. Sign-in, saved data and network access use the existing shared services.";
 "native_foundation_help" = "How to use this app";
 "native_foundation_privacy" = "Privacy policy";
+
+"native_foundation_boundary_title" = "Private data is locked";
+"native_foundation_boundary_detail" = "We cannot verify who owns the local private data. It remains inaccessible. Settings and sign-in are still available; signing in does not adopt old data.";
+"native_foundation_boundary_transition" = "Private storage is being checked. No reset is performed automatically.";
+"native_foundation_boundary_failed" = "Recovery could not be completed. Data may remain locked. Check the current state before trying again.";
+"native_foundation_boundary_refresh" = "Check status";
+"native_foundation_boundary_settings" = "Open settings";
+"native_foundation_boundary_review_reset" = "Review local data reset…";
+"native_foundation_boundary_confirm_title" = "Delete local private data?";
+"native_foundation_boundary_delete" = "Delete local data";
+"native_foundation_boundary_cancel" = "Cancel";
+"native_foundation_boundary_impact" = "This permanently deletes local drafts, offline downloads and private caches for the active site. This cannot be undone and does not delete server content. Cancel to keep the data locked. Continue only if you accept losing these local copies.";

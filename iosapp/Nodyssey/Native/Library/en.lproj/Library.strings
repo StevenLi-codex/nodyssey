@@ -183,3 +183,8 @@
 "library.tone.Good" = "Good";
 "library.tone.Warn" = "Warning";
 "library.tone.Bad" = "Bad";
+"library.receiveTally" = "Receive-code tally";
+"library.payerCount" = "Payment receipts";
+"library.receivedTotal" = "Total received";
+"library.paidByMe" = "Paid by me";
+"library.shortfall" = "Insufficient balance — shortfall";

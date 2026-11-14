@@ -17,28 +17,7 @@ import NodysseyNativeCore
     }
 }
 
-/// Owns user-triggered work only. Observation lifetime belongs to SwiftUI .task.
-@MainActor final class ContentCommand: ObservableObject {
-    @Published var failure: NativeFailure?
-    @Published private(set) var busy = false
-    private var task: Task<Void, Never>?
-    func run(_ app: NativeAppModel, work: @escaping @MainActor () async throws -> Void) {
-        guard !busy else { return }
-        busy = true
-        failure = nil
-        let generation = app.generation
-        task = Task { @MainActor in
-            defer { busy = false; task = nil }
-            do { try await work() }
-            catch is CancellationError { }
-            catch {
-                guard !Task.isCancelled, generation == app.generation else { return }
-                failure = error as? NativeFailure ?? NativeFailure(code: "INTERNAL", message: "Operation could not be completed.")
-            }
-        }
-    }
-    func cancel() { task?.cancel() }
-}
+extension NativeAppModel: ContentCommandContext {}
 
 struct ContentCommandStatus: View {
     @ObservedObject var command: ContentCommand
@@ -71,10 +50,10 @@ struct ContentPostRow: View {
     let value: JSONValue
     var body: some View {
         let summary = value["summary"] ?? value
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top) {
                 ContentAvatar(value: summary)
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(summary.nativeString("title") ?? "").font(.headline)
                         .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
                     Text(summary.nativeString("authorName") ?? "").font(.subheadline)

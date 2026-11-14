@@ -7,9 +7,10 @@ final class ControlledTransport: NativeTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var streams: [String: AsyncThrowingStream<JSONValue, Error>.Continuation] = [:]
+    private var calls: [(String, [String: JSONValue])] = []
     func request(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         try await withCheckedThrowingContinuation { continuation in
-            lock.lock(); pending[operation] = continuation; lock.unlock()
+            lock.lock(); calls.append((operation, arguments)); pending[operation] = continuation; lock.unlock()
         }
     }
     func observe(_ operation: String, _ arguments: [String: JSONValue]) -> AsyncThrowingStream<JSONValue, Error> {
@@ -18,6 +19,10 @@ final class ControlledTransport: NativeTransport, @unchecked Sendable {
         }
     }
     func hasRequest(_ operation: String) -> Bool { lock.lock(); defer { lock.unlock() }; return pending[operation] != nil }
+    func arguments(for operation: String) -> [[String: JSONValue]] {
+        lock.lock(); defer { lock.unlock() }
+        return calls.filter { $0.0 == operation }.map { $0.1 }
+    }
     func hasStream(_ operation: String) -> Bool { lock.lock(); defer { lock.unlock() }; return streams[operation] != nil }
     func resolve(_ operation: String, _ result: Result<JSONValue, Error>) {
         lock.lock(); let continuation = pending.removeValue(forKey: operation); lock.unlock()

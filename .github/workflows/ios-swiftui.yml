@@ -41,6 +41,8 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun simctl list devices available
           swift --version
+          python3 iosapp/NativeNavigationUITests/validate-project.py
+          python3 -m unittest discover -s iosapp/scripts -p 'test_verify_native_results.py' -v
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -67,7 +69,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           failed=0
-          for suite in NativeFoundationTests NativeContentUITests NativeEditorTests NativeAccountUITests NativeLibraryTests NativeMediaTests NativeSettingsUITests; do
+          for suite in NativeFoundationTests NativeContentUITests NativeEditorTests NativeAccountUITests NativeLibraryTests NativeMediaTests NativeSettingsUITests NativeSharingTests; do
             sh "iosapp/$suite/run-tests.sh" || failed=1
           done
           exit "$failed"
@@ -99,9 +101,10 @@ jobs:
           PY
       - name: Execute Kotlin simulator behavior tests
         if: ${{ !cancelled() && steps.native_compile.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
-        run: |
-          ./gradlew :iosapp:iosSimulatorArm64Test -PiosTestDevice="$SIMULATOR_UDID"
-          python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
+        run: ./gradlew :iosapp:iosSimulatorArm64Test -PiosTestDevice="$SIMULATOR_UDID"
+      - name: Verify complete native XML even after a failing test
+        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
+        run: python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
       - name: Build simulator app
         id: simulator_build
         if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}

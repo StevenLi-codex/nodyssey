@@ -10,7 +10,7 @@ struct ContentPostDetail: View {
     @State private var showPreview = true
     @StateObject private var thread = NativeStore()
     @StateObject private var tracked = NativeStore()
-    @StateObject private var command = ContentCommand()
+    @StateObject private var command = ContentThreadCommand()
     @State private var retry = 0
     @State private var loadRetry = 0
     @State private var target: ContentReadingTarget?
@@ -32,6 +32,12 @@ struct ContentPostDetail: View {
             List {
                 ContentStoreStatus(store: thread) { retry += 1 }
                 ContentCommandStatus(command: command)
+                if command.reactionsBlocked {
+                    Button(String(localized: "content.reload", table: "Content")) {
+                        command.run(app) { await command.reconcileReactions(app, postID: postID) }
+                    }
+                        .disabled(loadingPage || command.busy)
+                }
                 if loadingPage { ProgressView() }
                 if thread.value == .null, showPreview, let preview { ContentPostRow(value: preview) }
                 if thread.value != .null {
@@ -39,7 +45,7 @@ struct ContentPostDetail: View {
                         Button(String(localized: "content.resume", table: "Content")) { jump(resume.clamped(to: totalPages)) }
                     }
                     Section {
-                        Text(thread.value.nativeString("title") ?? "").font(.title2).textSelection(.enabled)
+                        Text(thread.value.nativeString("title") ?? "").font(.title3.weight(.semibold)).textSelection(.enabled)
                         if let body = thread.value["body"], body != .null { floor(body, page: 1, opening: true).id("#0") }
                     }
                     if firstPage > 1 {
@@ -81,6 +87,9 @@ struct ContentPostDetail: View {
             .onChange(of: target) { _ in restoreScroll(proxy) }
         }
         .navigationTitle(Text(String(localized: "content.thread", table: "Content")))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { reply(nil) } label: { Label(String(localized: "content.reply", table: "Content"), systemImage: "arrowshape.turn.up.left") }
@@ -153,7 +162,7 @@ struct ContentPostDetail: View {
     }
     @ViewBuilder private func floor(_ value: JSONValue, page: Int64, opening: Bool) -> some View {
         let identity = value.nativeString("floor") ?? (opening ? "#0" : value.nativeInt("commentId").map(String.init) ?? "unknown")
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 ContentAvatar(value: value)
                 Button(value.nativeString("authorName") ?? "") {
@@ -182,6 +191,17 @@ struct ContentPostDetail: View {
                 }
             }
             HStack {
+                ContentShareLink(
+                    postID: postID,
+                    page: page,
+                    floor: value.nativeString("floor") ?? (opening ? "#0" : nil),
+                    shareContext: FloorShareContext(
+                        content: value,
+                        threadTitle: thread.value.nativeString("title") ?? "",
+                        openingPost: opening,
+                        revealedBlocked: expanded.contains(identity)
+                    )
+                )
                 Button(String(localized: "content.reply", table: "Content")) { reply(value) }
                 if value.nativeBool("isMine") == true, let id = value.nativeInt("commentId") {
                     Button(String(localized: "content.edit", table: "Content")) {
@@ -189,18 +209,18 @@ struct ContentPostDetail: View {
                     }
                 }
                 if let id = value.nativeInt("commentId") {
-                    reactionButton("Upvote", field: "upvoted", count: "upvoteCount", symbol: "hand.thumbsup", value: value, commentID: id)
-                    reactionButton("ChickenLeg", field: "liked", count: "likeCount", symbol: "gift", value: value, commentID: id)
-                    reactionButton("Dislike", field: "disliked", count: "dislikeCount", symbol: "hand.thumbsdown", value: value, commentID: id)
+                    reactionButton("Upvote", field: "upvoted", count: "upvoteCount", symbol: "hand.thumbsup", value: value, commentID: id, page: page, opening: opening)
+                    reactionButton("ChickenLeg", field: "liked", count: "likeCount", symbol: "gift", value: value, commentID: id, page: page, opening: opening)
+                    reactionButton("Dislike", field: "disliked", count: "dislikeCount", symbol: "hand.thumbsdown", value: value, commentID: id, page: page, opening: opening)
                 }
-            }.buttonStyle(.borderless).disabled(command.busy || command.failure != nil || loadingPage)
+            }.buttonStyle(.borderless).disabled(command.busy || loadingPage)
         }
         .onAppear { visibleTarget = ContentReadingTarget(floor: value.nativeString("floor"), page: page) }
     }
-    private func reactionButton(_ action: String, field: String, count: String, symbol: String, value: JSONValue, commentID: Int64) -> some View {
+    private func reactionButton(_ action: String, field: String, count: String, symbol: String, value: JSONValue, commentID: Int64, page: Int64, opening: Bool) -> some View {
         let spent = value["reactions"]?.nativeBool(field) == true
         return Button {
-            let pending = PendingReaction(commentID: commentID, action: action)
+            let pending = PendingReaction(commentID: commentID, action: action, page: page, opening: opening)
             switch ContentReactionPolicy.decision(action: action, signedIn: app.isSignedIn, spent: spent) {
             case .signIn: app.showSignIn()
             case .send: sendReaction(pending)
@@ -212,7 +232,7 @@ struct ContentPostDetail: View {
             }
         } label: {
             Label(value["reactions"]?.nativeInt(count).map(String.init) ?? "—", systemImage: spent ? symbol + ".fill" : symbol)
-        }.disabled(spent).accessibilityLabel(Text(action == "Upvote" ? String(localized: "content.Upvote", table: "Content") : action == "ChickenLeg" ? String(localized: "content.ChickenLeg", table: "Content") : String(localized: "content.Dislike", table: "Content")))
+        }.disabled(spent || command.reactionsBlocked).accessibilityLabel(Text(action == "Upvote" ? String(localized: "content.Upvote", table: "Content") : action == "ChickenLeg" ? String(localized: "content.ChickenLeg", table: "Content") : String(localized: "content.Dislike", table: "Content")))
     }
     private var isTracked: Bool { (tracked.value.array ?? []).contains { $0.nativeInt("postId") == postID } }
     private func toggleTracking() {
@@ -229,10 +249,7 @@ struct ContentPostDetail: View {
         }
     }
     private func sendReaction(_ pending: PendingReaction) {
-        command.run(app) {
-            _ = try await app.request("thread.react", ["postId": .integer(postID), "commentId": .integer(pending.commentID), "action": .string(pending.action)])
-            _ = try await app.request("thread.config", args)
-        }
+        command.react(app, postID: postID, commentID: pending.commentID, action: pending.action, page: pending.page, opening: pending.opening)
     }
     private func reply(_ value: JSONValue?) {
         guard app.isSignedIn else { app.showSignIn(); return }
@@ -252,9 +269,7 @@ struct ContentPostDetail: View {
     private func loadPage(_ page: Int64, extend: Bool) async {
         guard !loadingPage else { return }
         loadingPage = true; defer { loadingPage = false }
-        do { _ = try await app.request("thread.load", ["postId": .integer(postID), "page": .integer(page), "extend": .bool(extend)]); command.failure = nil }
-        catch is CancellationError { }
-        catch { command.failure = contentFailure(error) }
+        await command.loadThread(app, postID: postID, page: page, extend: extend)
     }
     private func openThread() async {
         do {
@@ -275,7 +290,7 @@ struct ContentPostDetail: View {
         } catch is CancellationError { }
         catch { command.failure = contentFailure(error) }
     }
-    private struct PendingReaction { let commentID: Int64; let action: String }
+    private struct PendingReaction { let commentID: Int64; let action: String; let page: Int64; let opening: Bool }
 }
 
 private func contentFailure(_ error: Error) -> NativeFailure {

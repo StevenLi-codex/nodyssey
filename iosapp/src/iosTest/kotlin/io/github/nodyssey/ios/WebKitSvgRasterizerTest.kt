@@ -12,6 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import platform.CoreFoundation.CFRunLoopGetMain
+import platform.CoreFoundation.CFRunLoopPerformBlock
+import platform.CoreFoundation.kCFRunLoopDefaultMode
 import platform.CoreGraphics.CGBitmapContextCreate
 import platform.CoreGraphics.CGColorSpaceCreateDeviceRGB
 import platform.CoreGraphics.CGColorSpaceRelease
@@ -29,6 +32,8 @@ import platform.Foundation.dateWithTimeIntervalSinceNow
 import platform.Foundation.runUntilDate
 import platform.Foundation.timeIntervalSinceNow
 import platform.UIKit.UIImage
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -54,7 +59,20 @@ class WebKitSvgRasterizerTest {
                     16,
                     16,
                     // Only fixed stage names, timing, thread and sanitized error codes; no SVG/URLs.
-                    diagnostic = { println("[svg-raster] $it") },
+                    diagnostic = {
+                        println("[svg-raster] $it")
+                        if (it.startsWith("stage=navigation.submitted ")) {
+                            // Independent witnesses after loadHTMLString returns. A timeout with
+                            // both witnesses means the pump services GCD and CF work, not that
+                            // WebKit's process started. Never extend the renderer's deadline.
+                            dispatch_async(dispatch_get_main_queue()) {
+                                println("[svg-harness] stage=mainqueue.after_load main=${NSThread.isMainThread}")
+                            }
+                            CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode) {
+                                println("[svg-harness] stage=runloop.after_load main=${NSThread.isMainThread}")
+                            }
+                        }
+                    },
                 )
             }
             val deadline = NSDate.dateWithTimeIntervalSinceNow(15.0)

@@ -8,7 +8,7 @@ struct NativeRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if app.isReady {
+            if app.isReady || app.activeSite != nil {
                 if let failure = app.lifecycleFailure {
                     NativeFailureView(failure: failure, retry: { restart += 1 })
                 }
@@ -17,7 +17,7 @@ struct NativeRootView: View {
                     Button("action_close") { app.linkFailure = nil }
                 }
                 if app.settings.nativeBool("onboardingSeen") == false {
-                    NavigationStack(path: $app.homePath) {
+                    NavigationStack(path: pathBinding(.home)) {
                         NativeWelcomeView()
                             .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
                     }
@@ -33,17 +33,35 @@ struct NativeRootView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("native.root")
         .modifier(NativeSettingsAppearance(settings: app.settings))
-        .sheet(item: $app.sheet, onDismiss: { app.sheetPath = [] }) { destination in
-            NavigationStack(path: $app.sheetPath) {
+        .alert(Text("native_foundation_boundary_confirm_title", tableName: "Foundation"),
+               isPresented: Binding(get: { app.privateResetConfirmation != nil }, set: { _ in }),
+               presenting: app.privateResetConfirmation) { confirmation in
+            // Explicit actions consume the token, not the presentation setter
+            // (which SwiftUI may call before the destructive action runs).
+            Button(role: .destructive) { Task { await app.confirmPrivateReset(confirmation) } } label: {
+                Text("native_foundation_boundary_delete", tableName: "Foundation")
+            }
+            Button(role: .cancel) { app.cancelPrivateResetConfirmation() } label: {
+                Text("native_foundation_boundary_cancel", tableName: "Foundation")
+            }
+        } message: { _ in
+            Text("native_foundation_boundary_impact", tableName: "Foundation")
+        }
+        .sheet(item: Binding(get: { app.sheet }, set: { value in
+            if value == nil { Task { await app.dismissSheet() } }
+        })) { destination in
+            NavigationStack(path: pathBinding(.sheet)) {
                 NativeScreen(destination: destination)
                     .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("action_close") { app.sheet = nil }
+                            Button("action_close") { Task { await app.dismissSheet() } }
+                                .disabled(app.departureRunning)
                         }
                     }
             }
             .environmentObject(app)
+            .interactiveDismissDisabled(app.sheetRequiresDeparture || app.departureRunning)
             .modifier(NativeSettingsAppearance(settings: app.settings))
         }
         .task(id: restart) { await app.start() }
@@ -53,21 +71,29 @@ struct NativeRootView: View {
         .onOpenURL { app.openLink($0.absoluteString) }
     }
 
+    private func pathBinding(_ stack: NativeAppModel.Stack) -> Binding<[NativeDestination]> {
+        // Bind this render owner before the setter's unstructured task can yield.
+        let owner = app.capturePathUpdateOwner()
+        return Binding(get: { app.path(for: stack) }, set: { value in
+            Task { await app.updatePath(value, for: stack, owner: owner) }
+        })
+    }
+
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
-            NavigationStack(path: $app.homePath) {
+            NavigationStack(path: pathBinding(.home)) {
                 NativeScreen(destination: NativeDestination("PostList"))
                     .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
             }
             .tabItem { Label("tab_home", systemImage: "house").accessibilityIdentifier("native.tab.home") }
             .tag(NativeTab.home)
-            NavigationStack(path: $app.notificationsPath) {
+            NavigationStack(path: pathBinding(.notifications)) {
                 NativeScreen(destination: NativeDestination("Notifications"))
                     .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
             }
             .tabItem { Label("tab_notifications", systemImage: "bell").accessibilityIdentifier("native.tab.notifications") }
             .tag(NativeTab.notifications)
-            NavigationStack(path: $app.profilePath) {
+            NavigationStack(path: pathBinding(.profile)) {
                 NativeScreen(destination: NativeDestination("Profile"))
                     .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
             }

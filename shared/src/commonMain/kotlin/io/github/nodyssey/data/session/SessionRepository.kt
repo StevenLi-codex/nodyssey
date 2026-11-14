@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class SessionRepository(
     private val cookies: SessionCookies,
+    private val deferPublication: Boolean = false,
 ) {
     private val _state = MutableStateFlow(read())
 
@@ -35,6 +36,8 @@ class SessionRepository(
      * non-browser traffic at a challenge in progress — which is one way to turn a challenge that would
      * have passed into one that never does.
      */
+    fun privateOwnerProof(): PrivateOwnerProof = cookies.privateOwnerProof()
+
     fun peek(): SessionState = read().copy(generation = _state.value.generation)
 
     /**
@@ -50,7 +53,12 @@ class SessionRepository(
     }
 
     /** Re-reads the cookie store, publishes what it says, and persists it. */
-    fun sync(): SessionState {
+    fun sync(): SessionState = synchronize(publish = !deferPublication)
+
+    /** Opt-in coordinator calls only after old work is joined and counts are reset. */
+    fun publishReconciled(): SessionState = synchronize(publish = true)
+
+    private fun synchronize(publish: Boolean): SessionState {
         // Before the read, because the in-app browser shares the store and deposits the site's
         // list-order cookie whenever it opens a list page — see [SiteConfig.unreplayableCookies].
         cookies.dropUnreplayable()
@@ -71,6 +79,7 @@ class SessionRepository(
         // Persist immediately: the cookie that just arrived is the entire point of the WebView,
         // and it usually came from an XHR, so no page load will flush it for us.
         cookies.flush()
+        if (!publish) return snapshot.copy(generation = current.generation + 1)
         _state.value = snapshot.copy(generation = current.generation + 1)
         return _state.value
     }

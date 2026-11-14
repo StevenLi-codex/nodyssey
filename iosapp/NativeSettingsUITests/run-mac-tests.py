@@ -17,11 +17,12 @@ with tarfile.open(fileobj=archive, mode="w") as tar:
         path = repo / relative
         if path.exists():
             tar.add(path, arcname=relative, filter=lambda item: None if any(s in item.name for s in ["/.build", "__pycache__", "/Evidence/"]) else item)
-base = f"mkdir -p {stage}/scratch && tar xf - -C {stage} && cd {stage} && export TMPDIR={stage}/scratch && swift --version && swiftc -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -emit-library -emit-module -module-name NodysseyNativeCore -o scratch/libNodysseyNativeCore.dylib -emit-module-path scratch/NodysseyNativeCore.swiftmodule iosapp/NativeCore/Sources/NodysseyNativeCore/*.swift && "
+base = f"mkdir -p {stage}/scratch && tar xf - -C {stage} && cd {stage} && export TMPDIR={stage}/scratch && swift --version && "
 if "--typecheck-ui" in sys.argv:
-    command = base + "swiftc -typecheck -swift-version 6 -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -I scratch -module-cache-path scratch/module-cache iosapp/Nodyssey/Native/Settings/*.swift iosapp/NativeSettingsUITests/Typecheck/*.swift"
+    command = base + "swiftc -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -emit-library -emit-module -module-name NodysseyNativeCore -o scratch/libNodysseyNativeCore.dylib -emit-module-path scratch/NodysseyNativeCore.swiftmodule iosapp/NativeCore/Sources/NodysseyNativeCore/*.swift && swiftc -typecheck -swift-version 6 -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -I scratch -module-cache-path scratch/module-cache iosapp/Nodyssey/Native/Settings/*.swift iosapp/NativeSettingsUITests/Typecheck/*.swift"
 else:
-    command = base + "swiftc -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -I scratch -L scratch -lNodysseyNativeCore -module-cache-path scratch/module-cache iosapp/Nodyssey/Native/Settings/SettingsBehavior.swift iosapp/NativeSettingsUITests/main.swift -o scratch/settings-tests && DYLD_LIBRARY_PATH=scratch scratch/settings-tests"
+    # Use the same base + production-action suites as CI, including SDK selection.
+    command = base + "sh iosapp/NativeSettingsUITests/run-tests.sh"
 result = subprocess.run(outer + [shlex.join(inner + [command])], input=archive.getvalue(), capture_output=True)
 output = result.stdout.decode() + result.stderr.decode()
 print(output)

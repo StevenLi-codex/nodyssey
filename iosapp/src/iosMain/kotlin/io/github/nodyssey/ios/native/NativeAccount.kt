@@ -46,9 +46,14 @@ private val accountMutationGate = AccountMutationGate()
 private val accountCollectionGate = AccountMutationGate()
 private var accountAuthRevision = 0L
 
+internal fun nativeSupersedeAuthentication() {
+    accountAuthRevision++
+    accountChallenges.clear()
+}
+
 /** No HTTP/parser/storage implementation here: every route delegates to the existing graph. */
 internal suspend fun NativeContext.accountRequest(operation: String, args: JsonObject): JsonElement? = when (operation) {
-    "session.snapshot" -> graph.sessionRepository.peek().accountDto()
+    "session.snapshot" -> nativeSessionDto()
 
     "session.sync" -> {
         accountChallenges.clear()
@@ -73,7 +78,7 @@ internal suspend fun NativeContext.accountRequest(operation: String, args: JsonO
             accountAuthRevision++
             accountChallenges.clear()
             accountHistoryUndo.clear()
-            accountCollectionGate.run { graph.accountSignOut.signOut() }
+            accountCollectionGate.run { NativePlatform.signOut(graph) }
             graph.sessionRepository.state.value.accountDto()
         } finally {
             accountAuthLock.unlock()
@@ -386,7 +391,7 @@ internal suspend fun NativeContext.accountRequest(operation: String, args: JsonO
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun NativeContext.accountObserve(operation: String, args: JsonObject): Flow<JsonElement>? = when (operation) {
-    "session.state" -> graph.sessionRepository.state.map { it.accountDto() }
+    "session.state" -> combine(graph.sessionRepository.state, graph.privateBoundary.state) { _, _ -> nativeSessionDto() }
 
     "profile.self" -> graph.sessionRepository.state.flatMapLatest { session ->
         if (!session.isSignedIn) {
@@ -456,11 +461,19 @@ private suspend fun NativeContext.accountAuthenticate(args: JsonObject, secondFa
             graph.signInRepository.signIn(SignInCredentials(args.accountText("account"), args.accountText("password"), args.accountText("verificationToken")))
         }
         currentCoroutineContext().ensureActive()
-        if (revision != accountAuthRevision) throw CancellationException("Sign-in superseded")
+        if (revision != accountAuthRevision) {
+            // Supersession is an operation result, not cancellation of the caller's Job.
+            // The HTTP response may already have installed cookies in the shared jar.
+            accountChallenges.clear()
+            graph.sessionRepository.sync()
+            throw NativeFailure("SIGN_IN_SUPERSEDED")
+        }
         return when (outcome) {
             SignInOutcome.Signed -> {
                 accountChallenges.clear()
                 val signed = graph.sessionRepository.syncAwaitingSession()
+                currentCoroutineContext().ensureActive()
+                if (revision != accountAuthRevision) throw NativeFailure("SIGN_IN_SUPERSEDED")
                 if (!signed.isSignedIn) throw SiteException(SiteError.SessionUnrecognised)
                 accountObject("status" to "SIGNED", "session" to signed.accountDto())
             }
@@ -477,7 +490,16 @@ private suspend fun NativeContext.accountAuthenticate(args: JsonObject, secondFa
         }
     } catch (cancelled: CancellationException) {
         accountChallenges.clear()
+        // NSURLSession may have installed a Set-Cookie before cancellation was observed.
+        // Synchronize the existing jar; never report a success to the cancelled caller.
+        graph.sessionRepository.sync()
         throw cancelled
+    } catch (failure: Exception) {
+        accountChallenges.clear()
+        // Parsing or transport can fail after Set-Cookie was accepted, too.
+        // Publish the jar without turning the failed operation into SIGNED.
+        graph.sessionRepository.sync()
+        throw failure
     } finally {
         accountAuthLock.unlock()
     }

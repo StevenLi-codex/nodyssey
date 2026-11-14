@@ -40,6 +40,14 @@ enum EditorMode: Equatable, Sendable {
     }
 }
 
+/// In-memory only: the shared repository exposes no message draft persistence API.
+@MainActor enum MessageDraftMemory {
+    static var generation: Int?
+    struct Draft { let buffer: EditorBuffer; let quote: String?; let revision: UUID }
+    static var values: [Int64: Draft] = [:]
+    static func align(_ value: Int) { if generation != value { values = [:]; generation = value } }
+}
+
 @MainActor final class EditorSession {
     let mode: EditorMode
     let transport: any NativeTransport

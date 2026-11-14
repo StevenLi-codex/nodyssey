@@ -5,6 +5,10 @@ package io.github.plaza.core.net
 import io.github.plaza.core.toNSData
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.Foundation.NSData
 import platform.Foundation.NSHTTPCookieStorage
@@ -51,10 +55,20 @@ import kotlin.coroutines.resumeWithException
  * function rather than a default argument so that a caller has to have looked at it.
  */
 class NSUrlSessionTransport(
+    private val joinOnCancellation: Boolean = false,
     private val session: () -> NSURLSession,
 ) : HttpTransport {
 
     override suspend fun execute(request: HttpRequest, onUploadProgress: UploadProgress?): HttpResponse {
+        if (!joinOnCancellation) return executeAwaitingCallback(request, onUploadProgress)
+        // iOS boundary opt-in: do not acknowledge coroutine termination while Foundation can
+        // still install cookies/read upload bytes. Wait for the task's terminal callback.
+        val response = withContext(NonCancellable) { executeAwaitingCallback(request, onUploadProgress) }
+        currentCoroutineContext().ensureActive()
+        return response
+    }
+
+    private suspend fun executeAwaitingCallback(request: HttpRequest, onUploadProgress: UploadProgress?): HttpResponse {
         val url = NSURL.URLWithString(request.url) ?: throw SiteException(SiteError.Network)
         val call = NSMutableURLRequest(uRL = url)
         call.setHTTPMethod(request.method)

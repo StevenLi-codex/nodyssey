@@ -32,6 +32,7 @@ The entire `NativeRichTextActions` initializer is optional/default-nil:
 | `onLink` | `(String) -> Void`: validated scheme, otherwise exact unnormalized canonical string. Resolve relative paths against the active site; do not discard thread hashes or blindly call a global URL opener. |
 | `onQuoteReference` | `(String, String, String) -> Void`: name, floor, URL. A `qref` URL may lack its separately supplied `#3` floor; route with **both** fields. Without a handler the reference remains text, not a misleading active link. |
 | `onCode` | `(NativeCode, NativeCodeAction) -> Void`: `.adaptedReport`, `.source`, `.compare`. Receives complete source, nullable language, spans and terminal columns. The owner calls shared NodeQuality/YABS parsers and persisted comparison basket APIs. With no handler, native source expansion and copy still work; no invented adapted report appears. |
+| `codeContent` | `(NativeCode, NativeRichTextActions) -> AnyView`: optional inline code/report slot. Inherited unchanged through quotes, folds, every tab (including inactive tabs) and list items. Receives original code plus inherited callbacks, so source controls retain gallery/link/report actions. Nil renders `NativeCodeBlock` exactly as before; editor previews need not opt in. |
 
 NodeQuality/YABS report parsing, adapted report cards, and comparison persistence are intentionally
 **outside this renderer's ownership**. The callback hook is implemented; that does not mean a
@@ -116,3 +117,45 @@ SwiftUI macro plugin, so it is not used for this check. The typecheck uses a cle
 integration. No Xcode iOS build, simulator/device run, screenshot, accessibility runtime or UIKit test is
 claimed. Parent integration must add target membership, wire callbacks on every consuming surface, and
 run those iOS gates. Tab/fold state and media-flow layout require that runtime verification.
+
+## Nested report slot (G-02)
+
+`NativeRichTextActions.codeContent` is a SwiftUI-only owner slot, not a report parser or a new
+settings model. Every recursive renderer already forwards the same actions value; the code
+branch now consumes this slot before falling back to native source. No IDs, container state,
+gallery or navigation behavior is changed, and no labels or localization keys are introduced.
+
+Content should install a slot returning its existing `ContentReportView(inline: true)` with
+inherited actions and encoded-code identity, and remove its top-level-only code special case.
+That existing owner calls Kotlin `reports.parse`, observes `app.settings.reportFormat`, keeps
+explicit Source/Adapted overrides local to the report, and preserves unrecognized raw source.
+**Renderer availability alone does not establish that Content has installed the slot.** The
+Content integration edit is separately reserved by the parent; this renderer change does not
+modify `ContentRichBody.swift` without that reservation.
+
+Reproduce the actual SwiftUI composition regression:
+
+```sh
+python3 iosapp/NativeRenderingTests/run-mac-tests.py --composition
+```
+
+The runner now stages beneath `/Users/steven/.cache/hermes-build/nodyssey-richtext/nested-reports`,
+not another domain's staging directory. The composition suite compiles all three actual renderer
+sources and mounts `NativeRichTextView` in an `NSHostingView`; no duplicate tree walker or
+source-string assertions are used. One fixture exercises root, quote, open fold, both tabs
+(including the inactive tab), and nested list code. It asserts exact original code metadata/ANSI
+spans and inherited gallery, link, quote-reference, exact Int64 poll and source-report callbacks.
+The platform image boundary fails if invoked; these code-only fixtures do not fake image loading.
+
+Executed with Apple Swift 6.4.2: **12 Foundation tests and 1 hosted composition test passed**;
+renderer SwiftUI signature typecheck against MacOSX26.5/macOS 13 also passed. The slot API first
+produced an API-absence compile failure; with only the optional API seam in place, the hosted
+regression then failed **11 executable assertions** because no code slot was consumed. Wiring
+the production code branch made the same test pass. Logs are `nested-report-behavior-red.log`
+and `nested-report-final-{foundation,composition,typecheck}.log` in the task scratch directory.
+CLT missing-framework-path warnings and the existing macOS 14 `onChange` deprecation remain;
+that API is retained for iOS 16 compatibility. Two SSH banner timeouts required retries.
+
+This is actual macOS renderer composition, not an iOS/Kotlin link, a parser/persistence replay,
+or simulator/device report-picker, tab/fold-state, Dynamic Type or accessibility acceptance.
+Those Apple integration gates and the consumer-slot wiring remain separately reportable.

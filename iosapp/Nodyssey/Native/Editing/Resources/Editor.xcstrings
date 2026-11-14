@@ -1,6 +1,11 @@
 {
   "sourceLanguage": "zh-Hans",
   "strings": {
+    "closeDraftDecision": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "选择关闭时保留的草稿"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "選擇關閉時保留的草稿"}}, "en": {"stringUnit": {"state": "translated", "value": "Choose which draft to keep"}}}},
+    "closeDraftDecisionDetail": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "恢复会舍弃当前输入；保留当前输入会替换已存草稿；丢弃当前输入不会更改已存草稿。保存成功后才会关闭。"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "還原會捨棄目前輸入；保留目前輸入會取代已存草稿；捨棄目前輸入不會更改已存草稿。儲存成功後才會關閉。"}}, "en": {"stringUnit": {"state": "translated", "value": "Restore replaces current input. Keep current replaces the stored draft. Discard current leaves the stored draft unchanged. Closing waits for saving to finish."}}}},
+    "restoreAndClose": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "恢复已存草稿并关闭"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "還原已存草稿並關閉"}}, "en": {"stringUnit": {"state": "translated", "value": "Restore stored draft and close"}}}},
+    "keepCurrentAndClose": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "保存当前输入并关闭"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "儲存目前輸入並關閉"}}, "en": {"stringUnit": {"state": "translated", "value": "Save current input and close"}}}},
+    "discardCurrentAndClose": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "丢弃当前输入并关闭"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "捨棄目前輸入並關閉"}}, "en": {"stringUnit": {"state": "translated", "value": "Discard current input and close"}}}},
     "closeUnsaved": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "关闭将丢弃尚未提交的编辑，确定继续？"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "關閉將捨棄尚未提交的編輯，確定繼續？"}}, "en": {"stringUnit": {"state": "translated", "value": "Closing discards unsaved edits. Continue?"}}}},
     "draftFound": {
       "localizations": {

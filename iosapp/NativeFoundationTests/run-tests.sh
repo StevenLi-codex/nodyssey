@@ -7,6 +7,11 @@ for file in NativeDestination NativeAppModel NativeStore NativePresentation; do
         cp "$HERE/../Nodyssey/Native/Foundation/$file.swift" "$HERE/Sources/"
     fi
 done
+for file in EditorState EditorViewModel NativeEditorScreens; do
+    cp "$HERE/../Nodyssey/Native/Editing/$file.swift" "$HERE/Sources/"
+done
+cp "$HERE/../Nodyssey/Native/Rendering/RichDocument.swift" "$HERE/Sources/"
+cp "$HERE/../NativeEditorTests/TestSupport/Focus.swift" "$HERE/Sources/"
 if [ "$(xcode-select -p)" != /Library/Developer/CommandLineTools ]; then
     swift test --disable-xctest --package-path "$HERE"
     exit 0

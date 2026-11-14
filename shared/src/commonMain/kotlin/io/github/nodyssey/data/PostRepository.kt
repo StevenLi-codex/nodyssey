@@ -29,6 +29,8 @@ import io.github.plaza.core.net.SiteError
 import io.github.plaza.core.net.SiteException
 import io.github.plaza.core.runCatchingExceptCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -224,6 +226,16 @@ interface PostRepository {
         page: Int,
     )
 
+    /**
+     * Performs a new network-only reaction read and awaits its cache write before returning coverage.
+     * Unsupported implementations fail closed; ordinary offline loads cannot supply this receipt.
+     * Session-bound wrappers must delegate under their existing session barrier.
+     */
+    suspend fun reconcileThreadReactions(
+        postId: Long,
+        page: Int,
+    ): ThreadReactionRead = throw UnsupportedOperationException("Network-only reaction reconciliation is not supported")
+
     /** True when the cached thread is recent enough that opening it need not hit the network. */
     suspend fun isThreadFresh(postId: Long): Boolean
 
@@ -328,6 +340,14 @@ interface PostRepository {
      */
     suspend fun clearReadHistory()
 }
+
+/** Coverage from one successful network response, never from the merged cached thread. */
+data class ThreadReactionRead(
+    val postId: Long,
+    val page: Int,
+    val commentIds: List<Long>,
+    val openingCommentId: Long?,
+)
 
 @OptIn(ExperimentalPagingApi::class, ExperimentalCoroutinesApi::class)
 class OfflineFirstPostRepository(
@@ -540,6 +560,25 @@ class OfflineFirstPostRepository(
         page: Int,
     ) = loadThreadPage(postId, page, replacesWindow = false)
 
+    override suspend fun reconcileThreadReactions(
+        postId: Long,
+        page: Int,
+    ): ThreadReactionRead {
+        require(postId > 0 && page > 0)
+        currentCoroutineContext().ensureActive()
+        val detail = remote.loadDetail(postId, page)
+        currentCoroutineContext().ensureActive()
+        require(detail.postId == postId && detail.page == page) { "Reaction response identity mismatch" }
+        saveThreadPage(postId, page, detail, clock.nowMillis(), replacesWindow = false)
+        currentCoroutineContext().ensureActive()
+        return ThreadReactionRead(
+            postId = postId,
+            page = page,
+            commentIds = detail.comments.mapNotNull { it.takeIf { content -> content.reactions != null }?.commentId },
+            openingCommentId = detail.body?.takeIf { it.reactions != null }?.commentId,
+        )
+    }
+
     private suspend fun loadThreadPage(
         postId: Long,
         page: Int,
@@ -552,6 +591,16 @@ class OfflineFirstPostRepository(
                     stored.detail to stored.downloadedAtMillis
                 }.getOrThrow()
         val (detail, cachedAtMillis) = fetched
+        saveThreadPage(postId, page, detail, cachedAtMillis, replacesWindow)
+    }
+
+    private suspend fun saveThreadPage(
+        postId: Long,
+        page: Int,
+        detail: PostDetail,
+        cachedAtMillis: Long,
+        replacesWindow: Boolean,
+    ) {
         database.postDetailDao().saveThreadPage(
             postId = postId,
             title = detail.title,

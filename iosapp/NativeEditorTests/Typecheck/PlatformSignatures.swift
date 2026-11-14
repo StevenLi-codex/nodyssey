@@ -11,6 +11,21 @@ import NodysseyNativeCore
     func openLink(_ url: String) {}
     func register(_ store: NativeStore) {}
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue { fatalError("Signature only") }
+    // Match NativeAppModel's route-departure API, never simulate navigation here.
+    var departureRunning: Bool { fatalError("Signature only") }
+    @discardableResult
+    func registerDismissal(destinationID: UUID, close: @escaping @MainActor () async -> Bool,
+                           revoke: @escaping @MainActor () -> Void,
+                           terminate: @escaping @MainActor () -> Void = {},
+                           validate: @escaping @MainActor () -> Bool = { true }) -> UUID { fatalError("Signature only") }
+    func dismissDestination(_ id: UUID) async { fatalError("Signature only") }
+}
+// NativeScreen owns this environment contract in the app. This gate only compiles it.
+extension EnvironmentValues {
+    var nativeDestinationID: UUID? {
+        get { fatalError("Signature only") }
+        set { fatalError("Signature only") }
+    }
 }
 struct NativeFailureView: View {
     let failure: NativeFailure
@@ -27,7 +42,6 @@ struct MarkedTextEditor: View {
     var body: some View { EmptyView() }
 }
 struct EditorPhotoPicker: View {
-    let onFile: (URL) -> Void
-    let onFailure: (NativeFailure) -> Void
+    let model: EditorViewModel
     var body: some View { EmptyView() }
 }

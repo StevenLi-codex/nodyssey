@@ -182,6 +182,9 @@ struct AccountSecurityScreen: View {
                 let kind = confirmation; confirmation = nil
                 if kind == "password" {
                     action.perform(app, operation: "account.changePassword", arguments: ["currentPassword": .string(current), "newPassword": .string(password), "confirmed": .bool(true)], read: {
+                        // These are status reads, NOT proof that a password changed.
+                        // AccountAction requires the write acknowledgement for success;
+                        // an unknown password outcome stays blocked after this read.
                         _ = try await app.request("session.snapshot")
                         store.value = try await app.request("account.twoFactor")
                     }, received: { _ in clear() })

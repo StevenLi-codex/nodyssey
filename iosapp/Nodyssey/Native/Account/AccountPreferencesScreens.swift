@@ -49,12 +49,6 @@ struct AccountPreferencesScreen: View {
     private func reload() { Task { await store.load(app, "account.preferences") } }
 }
 
-struct AccountPendingWrite {
-    let operation: String
-    let arguments: [String: JSONValue]
-    init(_ operation: String, _ arguments: [String: JSONValue]) { self.operation = operation; self.arguments = arguments }
-}
-
 struct AccountBlockScreen: View {
     @EnvironmentObject private var app: NativeAppModel
     @StateObject private var users = NativeStore()
@@ -62,13 +56,12 @@ struct AccountBlockScreen: View {
     @StateObject private var settings = NativeStore()
     @StateObject private var action = AccountAction()
     @State private var titles: Bool
-    @State private var regex = false
+    @StateObject private var draft = AccountKeywordDraft()
     @State private var name = ""
-    @State private var text = ""
     @State private var query = ""
     @State private var pending: AccountPendingWrite?
     init(titles: Bool) { _titles = State(initialValue: titles) }
-    private var kind: String { regex ? "BLOCK_REGEX" : "BLOCK" }
+    private var kind: String { draft.kind }
     var body: some View {
         Form {
             Picker("block_title", selection: $titles) {
@@ -80,11 +73,11 @@ struct AccountBlockScreen: View {
                 })).disabled(action.blocked)
             }
             if titles {
-                Toggle("keywords_regex_toggle", isOn: $regex)
-                TextField(LocalizedStringKey(regex ? "keywords_regex_placeholder" : "keywords_add_placeholder"), text: $text)
+                Toggle("keywords_regex_toggle", isOn: $draft.regex)
+                TextField(LocalizedStringKey(draft.regex ? "keywords_regex_placeholder" : "keywords_add_placeholder"), text: $draft.text)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("keywords_add_action") { pending = AccountPendingWrite("keywords.add", ["kind": .string(kind), "text": .string(text)]) }
-                    .disabled(action.blocked || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("keywords_add_action") { pending = draft.add() }
+                    .disabled(action.blocked || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 AccountStoreStatus(store: keywords) { reloadKeywords() }
                 ForEach((keywords.value.array ?? []).compactMap(\.string).filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }, id: \.self) { rule in
                     HStack {
@@ -118,7 +111,7 @@ struct AccountBlockScreen: View {
         .navigationTitle("block_title")
         .searchable(text: $query)
         .task(id: app.generation) {
-            action.cancel(); pending = nil; name = ""; text = ""
+            action.cancel(); pending = nil; name = ""; draft.text = ""
             await settings.load(app, "settings.get")
             if app.isSignedIn { await users.load(app, "account.blockedUsers") }
         }
@@ -126,12 +119,14 @@ struct AccountBlockScreen: View {
         .confirmationDialog("account_action_save", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             Button("action_done", role: .destructive) {
                 guard let write = pending else { return }; pending = nil
+                if write.operation.hasPrefix("keywords.") {
+                    draft.perform(write, action: action, request: { try await app.request($0, $1) },
+                                  currentGeneration: { app.generation }, publish: { keywords.value = $0 })
+                    return
+                }
                 action.perform(app, operation: write.operation, arguments: write.arguments, read: {
                     if write.operation.hasPrefix("social.") { users.value = try await app.request("account.blockedUsers"); name = "" }
-                    else if write.operation.hasPrefix("keywords.") {
-                        let value = try await app.request("keywords.get", ["kind": write.arguments["kind"]!])
-                        if write.arguments["kind"] == .string(kind) { keywords.value = value }; text = ""
-                    } else { settings.value = try await app.request("settings.get") }
+                    else { settings.value = try await app.request("settings.get") }
                 })
             }
         }

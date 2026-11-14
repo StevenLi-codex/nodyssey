@@ -38,7 +38,7 @@ struct AccountFollowScreen: View {
 
 struct AccountOwnPostsScreen: View {
     @EnvironmentObject private var app: NativeAppModel
-    @StateObject private var profile = NativeStore()
+    @StateObject private var profile = AccountSelfProfileState()
     let comments: Bool
     var body: some View {
         Group {
@@ -46,11 +46,14 @@ struct AccountOwnPostsScreen: View {
             else if let uid = profile.value.nativeInt("uid") {
                 AccountPostPage(uid: uid, mode: comments ? "comments" : "topics").id("\(uid):\(app.generation)")
             } else {
-                AccountStoreStatus(store: profile) { Task { await profile.load(app, "profile.self", ["refresh": .bool(true)]) } }
+                AccountProfileStatus(profile: profile)
             }
         }
         .navigationTitle(LocalizedStringKey(comments ? "profile_tile_comments" : "profile_tile_topics"))
-        .task(id: app.generation) { await profile.observe(app, "profile.self") }
+        .task(id: app.generation) {
+            if app.isSignedIn { await profile.run(using: app.transport, currentGeneration: { app.generation }) }
+            else { profile.invalidate() }
+        }
     }
 }
 
@@ -111,6 +114,9 @@ struct AccountSpaceScreen: View {
             }
         }
         .navigationTitle(profile.value.nativeString("name") ?? String(localized: "space_tab_general"))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task(id: app.generation) {
             action.cancel(); pending = nil; note = ""; noteLoaded = false; tab = "general"
             await own.load(app, "profile.self")

@@ -81,10 +81,20 @@ object NodysseyApp {
      */
     fun registerBackgroundTasks() = offlineScheduler.register()
 
+    /** Public bootstrap only. Object initialization installs the real active site before this read. */
+    internal fun nativeSiteMetadata(): kotlinx.serialization.json.JsonObject =
+        io.github.nodyssey.ios.native.supplementSiteRequest(
+            "site.get",
+            kotlinx.serialization.json.JsonObject(emptyMap()),
+            io.github.nodyssey.core.ActiveSite.current,
+            { platform.Foundation.NSUserDefaults.standardUserDefaults.stringForKey("active_site") },
+            { error("Site metadata is read-only") },
+        )!!
+
     /** Native scene activation: resume offline work without constructing any Compose controller. */
     internal suspend fun nativeForeground() = supplementForeground(
         ready = {
-            ensureContainer()
+            ensureContainer().privateBoundary.reconcile()
             Unit
         },
         onLaunch = { offlineScheduler.onLaunch() },
@@ -132,6 +142,8 @@ object NodysseyApp {
         // Set before the first composition asks for an image, and once: `setSafe` is a no-op if
         // something already installed a loader, which is what makes a second call harmless.
         SingletonImageLoader.setSafe { context -> imageLoader(context, graph) }
+        offlineScheduler.attach(graph.privateBoundary)
+        graph.privateBoundary.reconcile()
         container = graph
         containerBuild = null
         return graph
@@ -158,5 +170,5 @@ object NodysseyApp {
     }
 
     private fun imageLoader(context: PlatformContext, container: IosAppContainer): ImageLoader =
-        nodysseyImageLoader(context) { container.urlSession }
+        nodysseyImageLoader(context, container.privateBoundary) { container.urlSession }
 }

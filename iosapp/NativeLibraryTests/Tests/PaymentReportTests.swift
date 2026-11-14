@@ -19,13 +19,15 @@ import NodysseyNativeCore
     let outcome = try await LibraryOperations.pay(draft, confirmed: true, request: request)
     #expect(!outcome.acknowledged)
     #expect(outcome.writeFailure?.code == "NETWORK")
-    #expect(operations == ["assets.transfer", "assets.stardust", "assets.growth"])
+    #expect(operations == ["profile.self", "assets.transfer", "assets.stardust", "profile.self", "assets.growth"])
 }
 
 @MainActor @Test func acknowledgedPaymentIsNotRelabelledFailedWhenReadbackFails() async throws {
     let draft = try LibraryPayment(recipient: "4", amount: "8", refId: "5", onetime: false)
+    var written = false
     let outcome = try await LibraryOperations.pay(draft, confirmed: true) { op, _ in
-        if op != "assets.transfer" { throw NativeFailure(code: "NETWORK", message: "") }
+        if written { throw NativeFailure(code: "NETWORK", message: "") }
+        if op == "assets.transfer" { written = true }
         return .null
     }
     #expect(outcome.acknowledged)

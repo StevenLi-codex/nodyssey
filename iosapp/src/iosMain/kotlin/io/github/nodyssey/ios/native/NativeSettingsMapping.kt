@@ -196,6 +196,7 @@ internal fun DohConfig.settingsJson(capabilities: DohCapabilities): JsonObject =
     "capabilities" to settingsObject("canChooseRecordTypes" to capabilities.canChooseRecordTypes, "canFallBackToSystem" to capabilities.canFallBackToSystem, "triesServersInOrder" to capabilities.triesServersInOrder),
 )
 
+/** Public device preferences only, including while READY: history uses protected supplement operations. */
 internal fun UserSettings.settingsJson(showBlockedContent: Boolean): JsonObject = settingsObject(
     "themeMode" to themeMode,
     "appLanguage" to appLanguage,
@@ -218,8 +219,8 @@ internal fun UserSettings.settingsJson(showBlockedContent: Boolean): JsonObject 
     "homePageBar" to homePageBar,
     "clipboardPostPrompt" to clipboardPostPrompt,
     "holidayTheme" to holidayTheme,
-    "searchHistory" to searchHistory.map { settingsObject("query" to it.query, "target" to it.target, "categorySlug" to it.categorySlug, "sort" to it.sort) },
-    "recentBoards" to recentBoards,
+    // Never put account activity on a public, identity-unfenced snapshot/observer.
+    // Keep the stored keys intact; search.history / boards.recent own protected reads.
     "hiddenHomeBoards" to hiddenHomeBoards,
     "homeBoardOrder" to homeBoardOrder,
     "disabledHomeBoards" to disabledHomeBoards,

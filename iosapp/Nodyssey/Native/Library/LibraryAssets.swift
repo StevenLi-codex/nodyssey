@@ -57,16 +57,11 @@ struct LibraryAssetsScreen: View {
             Button(libraryL("sign")) {
                 let selectedMode = mode
                 action.run {
-                    do {
-                        let result = try await app.request("attendance.sign", ["mode": .string(selectedMode), "confirmed": .bool(true)])
-                        action.notice = result["message"]?.string ?? libraryL("acknowledged")
-                    } catch {
-                        await libraryRead(attendance, app, "attendance.status")
-                        await growth.load(app, "assets.growth")
-                        throw error
-                    }
-                    await libraryRead(attendance, app, "attendance.status")
-                    await growth.load(app, "assets.growth")
+                    let result = try await LibraryOperations.signAttendance(mode: selectedMode, request: app.request)
+                    if result.acknowledged { action.notice = result.result["message"]?.string ?? libraryL("acknowledged") }
+                    action.failure = result.writeFailure ?? result.refreshFailure
+                    if result.status != .null { attendance.value = result.status }
+                    if result.growth != .null { growth.value = result.growth }
                     await loadBoard()
                 }
             }
@@ -175,7 +170,9 @@ struct LibraryStardustScreen: View {
     @State private var reviewed: LibraryPayment?
     @State private var receiverName: String?
     @State private var ownUID: Int64?
-    @State private var receipts: [JSONValue] = []
+    @State private var balance: Int64?
+    @State private var receiptSummary: LibraryReceiptSummary?
+    private var receipts: [JSONValue] { receiptSummary?.mine ?? [] }
     @State private var confirm = false
     @State private var needsReadback = false
     @State private var marker: String?
@@ -202,14 +199,28 @@ struct LibraryStardustScreen: View {
                     Text("#\(review.recipient) · \(review.amount) \(libraryL("stardust"))")
                     if ownUID == review.recipient { Text(libraryL("selfPayment")) }
                     if review.onetime && !receipts.isEmpty { Text(libraryL("alreadyPaid")) }
-                    Button(libraryL("pay")) { confirm = true }
-                        .disabled(action.busy || ownUID == nil || ownUID == review.recipient || (review.onetime && !receipts.isEmpty) || needsReadback)
+                    LibraryField(label: "starCount", value: balance.map(JSONValue.integer))
+                    if let shortfall = review.shortfall(balance: balance) {
+                        LibraryField(label: "shortfall", value: .integer(shortfall))
+                    }
+                    Button(libraryL("pay")) {
+                        guard review.shortfall(balance: balance) == nil else { return }
+                        confirm = true
+                    }
+                        .disabled(action.busy || ownUID == nil || ownUID == review.recipient || (review.onetime && !receipts.isEmpty) || needsReadback || review.shortfall(balance: balance) != nil)
                 }
                 if needsReadback { Text(libraryL("readbackRequired")).font(.footnote) }
             }
-            if !receipts.isEmpty {
+            if let summary = receiptSummary {
+                Section(libraryL("receiveTally")) {
+                    LibraryField(label: "payerCount", value: .integer(Int64(summary.payerCount)))
+                    LibraryField(label: "receivedTotal", value: .integer(summary.received))
+                    LibraryField(label: "paidByMe", value: .bool(summary.paidByMe))
+                }
+            }
+            if let rows = receiptSummary?.all, !rows.isEmpty {
                 Section(libraryL("receipts")) {
-                    ForEach(Array(receipts.enumerated()), id: \.offset) { _, row in LibraryLedgerRow(row: row, stardust: true) }
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in LibraryLedgerRow(row: row, stardust: true) }
                 }
             }
             if let rows = ledger["items"]?.array {
@@ -234,7 +245,7 @@ struct LibraryStardustScreen: View {
         }
         .navigationTitle(libraryL("stardust"))
         .task(id: app.generation) {
-            reviewed = nil; receipts = []; ledger = .null; marker = nil; ownUID = nil; needsReadback = false
+            reviewed = nil; receiptSummary = nil; ledger = .null; marker = nil; ownUID = nil; balance = nil; needsReadback = false; confirm = false
             recipient = (arguments["memberId"]?.int ?? arguments["recipientUid"]?.int).map(String.init) ?? ""
             amount = arguments["amount"]?.int.map(String.init) ?? ""
             refId = arguments["refId"]?.int.map(String.init) ?? "0"
@@ -249,18 +260,19 @@ struct LibraryStardustScreen: View {
         .confirmationDialog(libraryL("payConfirm"), isPresented: $confirm, titleVisibility: .visible) {
             if let payment = reviewed {
                 Button("\(libraryL("pay")) \(payment.amount) → \(receiverName ?? String(payment.recipient))") {
+                    guard payment.shortfall(balance: balance) == nil, !needsReadback else { return }
                     action.run {
                         needsReadback = true
                         let result = try await LibraryOperations.pay(payment, confirmed: true, request: app.request)
                         reviewed = nil
                         ledger = result.ledger
-                        if result.growth != .null { growth.value = result.growth }
+                        if result.growth != .null { growth.value = result.growth; balance = result.growth["starCount"]?.int }
                         needsReadback = result.refreshFailure != nil
                         action.notice = libraryL(result.acknowledged ? "acknowledged" : "uncertainPayment")
                         action.failure = result.writeFailure ?? result.refreshFailure
                         if let ownUID {
-                            let value = try await app.request("assets.receipts", ["memberId": .integer(payment.recipient), "refId": .integer(payment.refId), "peerId": .integer(ownUID)])
-                            receipts = value.array ?? []
+                            receiptSummary = nil
+                            receiptSummary = try await LibraryOperations.receipts(for: payment, ownUID: ownUID, request: app.request)
                         }
                     }
                 }
@@ -272,20 +284,21 @@ struct LibraryStardustScreen: View {
         if arguments["memberId"] != nil { return try LibraryPayment(route: arguments) }
         return try LibraryPayment(recipient: recipient, amount: amount, refId: refId, onetime: onetime)
     }
-    private func invalidateReview() { reviewed = nil; receipts = []; receiverName = nil }
+    private func invalidateReview() { reviewed = nil; receiptSummary = nil; receiverName = nil; balance = nil; confirm = false }
     private func review() {
         guard app.isSignedIn else { app.showSignIn(); return }
         action.run {
             let payment = try draftPayment()
-            let selfProfile = try await app.request("profile.self", ["refresh": .bool(false)])
+            invalidateReview()
+            let selfProfile = try await app.request("profile.self", ["refresh": .bool(true)])
             guard let uid = selfProfile["uid"]?.int else { throw NativeFailure(code: "INVALID_DATA", message: "") }
             let receiver = try await app.request("assets.recipient", ["recipientUid": .integer(payment.recipient)])
-            var receiptArguments: [String: JSONValue] = ["memberId": .integer(payment.recipient), "refId": .integer(payment.refId)]
-            if uid != payment.recipient { receiptArguments["peerId"] = .integer(uid) }
-            let received = try await app.request("assets.receipts", receiptArguments)
+            let received = try await LibraryOperations.receipts(for: payment, ownUID: uid, request: app.request)
+            var refreshedBalance = selfProfile["starCount"]?.int
             if needsReadback {
                 ledger = try await app.request("assets.stardust")
-                growth.value = try await app.request("assets.growth")
+                growth.value = try await LibraryOperations.refreshedGrowth(request: app.request)
+                refreshedBalance = growth.value["starCount"]?.int
                 needsReadback = false
             }
             // Do not confirm an old draft if the user edits while lookups are in flight.
@@ -293,7 +306,8 @@ struct LibraryStardustScreen: View {
             guard current == payment else { return }
             ownUID = uid; receiverName = receiver["name"]?.string
             guard receiverName != nil else { throw NativeFailure(code: "INVALID_DATA", message: "") }
-            receipts = received.array ?? []; reviewed = payment
+            balance = refreshedBalance
+            receiptSummary = received; reviewed = payment
         }
     }
 }

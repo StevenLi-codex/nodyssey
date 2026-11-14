@@ -1,5 +1,9 @@
 "native.account.saved_refresh" = "Saved. Reload failed; refresh without submitting again.";
-"native.account.uncertain" = "The write outcome is unknown. Refresh before considering another change.";
+"native.account.uncertain" = "The write outcome is unknown. Reload status without resubmitting. Status reads cannot verify a password change or enrolment; check the sign-in/site flow before trying again.";
+"native.account.reconciled" = "Status reloaded. The earlier write was not confirmed; review the current values before making another change.";
+"native.account.correct_input" = "Nothing was submitted. Correct the keyword or regular expression and try again.";
+"native.account.reconcile" = "Reload status (read only)";
+"native.account.profile_unavailable" = "Your profile is not available yet. Reload to try again.";
 "native.account.one_tap" = "One-tap sign-in";
 "native.account.totp_boundary" = "Enrolment is completed in the authenticator/site flow. Refresh the status after returning; opening the app does not enable two-factor verification.";
 "native.account.note" = "Private user note";

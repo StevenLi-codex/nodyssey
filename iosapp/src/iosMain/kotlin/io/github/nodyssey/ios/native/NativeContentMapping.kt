@@ -11,6 +11,7 @@ import io.github.nodyssey.data.NotificationCounts
 import io.github.nodyssey.data.NotificationSource
 import io.github.nodyssey.data.PreviewPart
 import io.github.nodyssey.data.ReadingPosition
+import io.github.nodyssey.data.ThreadReactionRead
 import io.github.nodyssey.data.UserSearchResult
 import io.github.nodyssey.data.composer.CommentDraft
 import io.github.nodyssey.data.composer.PostDraft
@@ -86,6 +87,10 @@ internal fun nativeContentJson(v: PostContent): JsonObject = nativeContentObject
     "nodes" to nativeRichNodes(v.nodes), "isEdited" to v.isEdited, "editedAtText" to v.editedAtText,
     "editedAtTitle" to v.editedAtTitle, "signatureNodes" to nativeRichNodes(v.signatureNodes),
     "reactions" to v.reactions?.let(::nativeContentJson), "isBlocked" to v.isBlocked, "isMine" to v.isMine,
+)
+internal fun nativeContentJson(v: ThreadReactionRead): JsonObject = nativeContentObject(
+    "postId" to v.postId, "page" to v.page,
+    "commentIds" to nativeContentLongs(v.commentIds), "openingCommentId" to v.openingCommentId,
 )
 internal fun nativeContentJson(v: ThreadSnapshot): JsonObject = nativeContentObject(
     "postId" to v.postId, "title" to v.title, "body" to v.body?.let(::nativeContentJson),

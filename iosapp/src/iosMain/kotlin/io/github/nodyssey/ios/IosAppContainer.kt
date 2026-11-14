@@ -1,5 +1,8 @@
 package io.github.nodyssey.ios
 
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.room.useReaderConnection
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import io.github.nodyssey.core.NodeSeekSite
@@ -28,6 +31,7 @@ import io.github.nodyssey.data.NetworkStardustRepository
 import io.github.nodyssey.data.NetworkTermsRepository
 import io.github.nodyssey.data.NetworkUserSpaceRepository
 import io.github.nodyssey.data.NetworkVoteRepository
+import io.github.nodyssey.data.NotificationCounts
 import io.github.nodyssey.data.NotificationRepository
 import io.github.nodyssey.data.OfflineFirstPostRepository
 import io.github.nodyssey.data.OfflineLibrary
@@ -83,8 +87,11 @@ import io.github.nodyssey.data.proxy.routes
 import io.github.nodyssey.data.security.LegacySecretMigration
 import io.github.nodyssey.data.security.PlaintextSecretCipher
 import io.github.nodyssey.data.session.AccountSignOut
-import io.github.nodyssey.data.session.DefaultAccountSignOut
 import io.github.nodyssey.data.session.NodeSeekSignInRepository
+import io.github.nodyssey.data.session.PrivateOfflineLibrary
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import io.github.nodyssey.data.session.PrivateStoreParticipant
+import io.github.nodyssey.data.session.PrivateStoreProvenance
 import io.github.nodyssey.data.session.SessionRepository
 import io.github.nodyssey.data.session.SignInRepository
 import io.github.nodyssey.data.settings.ReportCompareStore
@@ -119,8 +126,10 @@ import io.github.plaza.core.update.ApkInstaller
 import io.github.plaza.core.update.isPreReleaseVersionName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import platform.Foundation.NSHTTPCookieStorage
 import platform.Foundation.NSURLSession
@@ -267,7 +276,7 @@ class IosAppContainer(
     private val transport by lazy {
         RetryingTransport(
             DynamicSignTransport(
-                CookieScrubbingTransport(NSUrlSessionTransport { forumSession.current }, sessionCookies),
+                CookieScrubbingTransport(NSUrlSessionTransport(joinOnCancellation = true) { forumSession.current }, sessionCookies),
                 userAgent.value,
             ),
         )
@@ -361,7 +370,9 @@ class IosAppContainer(
                 },
         )
 
-    override val postRepository: PostRepository by lazy {
+    override val postRepository: PostRepository by lazy { io.github.nodyssey.data.session.PrivatePostRepository(rawPostRepository, privateBoundary) }
+
+    private val rawPostRepository: PostRepository by lazy {
         OfflineFirstPostRepository(
             database,
             remotePosts,
@@ -391,9 +402,11 @@ class IosAppContainer(
         CategoryRepository(jsonClient, database.boardDao(), clock)
     }
 
+    private val settingsDataStore by lazy { createPreferenceDataStore("settings") }
+
     override val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(
-            dataStore = createPreferenceDataStore("settings"),
+            dataStore = settingsDataStore,
             devChannelDefault = isPreReleaseVersionName(appVersion.name),
         )
     }
@@ -423,8 +436,85 @@ class IosAppContainer(
         NetworkSearchRepository(jsonClient, htmlClient, dispatchers)
     }
 
+    private val postDraftStore by lazy { createPreferenceDataStore("post-composer") }
+    private val commentDraftStore by lazy { createPreferenceDataStore("comment-composer") }
+    internal val offlineFiles by lazy { IosOfflineFileStore.of(applicationSupportDirectory()) }
+
+    internal val privateBoundary: PrivateSessionBoundary by lazy {
+        // Mixed store: history is owner-private; preferences remain device-global.
+        // Include the legacy key as well: removing v3 alone would resurrect it on decode.
+        val historyKeys = listOf("search_history_v3", "recent_searches", "recent_boards").map(::stringPreferencesKey)
+        val participants = listOf(
+            PrivateStoreParticipant("settings-history", {
+                val preferences = settingsDataStore.data.first()
+                historyKeys.none { it in preferences }
+            }, {
+                settingsDataStore.edit { preferences -> historyKeys.forEach { preferences.remove(it) } }
+            }),
+            PrivateStoreParticipant("post-drafts", { postDraftStore.data.first().asMap().isEmpty() }, {
+                postDraftStore.edit { it.clear() }
+                Unit
+            }),
+            PrivateStoreParticipant("comment-drafts", { commentDraftStore.data.first().asMap().isEmpty() }, {
+                commentDraftStore.edit { it.clear() }
+                Unit
+            }),
+            PrivateStoreParticipant("room-private", {
+                database.useReaderConnection { connection ->
+                    listOf(
+                        "posts", "feed_positions", "feed_remote_keys", "post_details", "post_comments", "post_read_marks",
+                        "post_reading_positions", "self_profile", "offline_threads", "offline_comments", "offline_images",
+                        "collected_post_meta", "user_notes", "tracked_threads", "title_regex_hits",
+                    ).all { table ->
+                        connection.usePrepared("SELECT COUNT(*) FROM `$table`") { statement ->
+                            statement.step()
+                            statement.getLong(0) == 0L
+                        }
+                    }
+                }
+            }, {
+                rawPostRepository.clearSessionData()
+                // Derived IDs can outlive post pruning (there is no foreign key).
+                // The device-global keyword rules themselves are intentionally preserved.
+                database.titleKeywordDao().clearRegexHits()
+                profileRepository.clearCachedProfile()
+                rawOfflineLibrary.clearAll()
+                userNoteStore.notes.first().keys.forEach { userNoteStore.setNote(it, "") }
+                trackedThreadStore.all().forEach { trackedThreadStore.untrack(it.postId) }
+            }),
+            PrivateStoreParticipant("offline-files", { offlineFiles.isEmpty() }, { offlineFiles.clear() }),
+            PrivateStoreParticipant("reports", {
+                // Decoder fallback can hide corrupt/legacy bytes; absence alone proves empty.
+                stringPreferencesKey("report_compare_basket") !in settingsDataStore.data.first()
+            }, {
+                settingsDataStore.edit { it.remove(stringPreferencesKey("report_compare_basket")) }
+            }),
+            PrivateStoreParticipant("authenticated-images", {
+                val loader = SingletonImageLoader.get(PlatformContext.INSTANCE)
+                loader.memoryCache?.keys.orEmpty().isEmpty() && (loader.diskCache?.size ?: 0L) == 0L
+            }, {
+                val loader = SingletonImageLoader.get(PlatformContext.INSTANCE)
+                loader.memoryCache?.clear()
+                loader.diskCache?.clear()
+            }),
+        )
+        PrivateSessionBoundary(
+            PrivateStoreProvenance(createPreferenceDataStore("private-store-provenance", keepOutOfBackup = true), participants.map { it.id }.toSet()),
+            sessionCookies::privateOwnerProof,
+            participants,
+            beforePublication = {
+                notificationRepository.clearCounts()
+                settingsRepository.setNotificationSeenCounts(NotificationCounts())
+            },
+            publishSession = {
+                sessionRepository.publishReconciled()
+                Unit
+            },
+        )
+    }
+
     override val postComposerRepository: PostComposerRepository by lazy {
-        DefaultPostComposerRepository(createPreferenceDataStore("post-composer"), transport, dispatchers, clock)
+        DefaultPostComposerRepository(postDraftStore, transport, dispatchers, clock, privateBoundary)
     }
 
     override val accountSettingsRepository: AccountSettingsRepository by lazy {
@@ -440,14 +530,24 @@ class IosAppContainer(
         NetworkUserSpaceRepository(jsonClient, dispatchers)
     }
 
-    override val offlineLibrary: OfflineLibrary by lazy {
+    override val offlineLibrary: OfflineLibrary by lazy { PrivateOfflineLibrary(rawOfflineLibrary, privateBoundary) }
+
+    private val rawOfflineLibrary: RoomOfflineLibrary by lazy {
         RoomOfflineLibrary(
             dao = database.offlineDao(),
             remote = remotePosts,
-            files = IosOfflineFileStore.of(applicationSupportDirectory()),
+            files = offlineFiles,
             // The app's own session, so a stored picture arrives under the same cookies and headers
             // as one on screen. Lazily for the reason the Android container gives about its client.
-            images = UrlSessionOfflineImageSource { urlSession },
+            images = object : io.github.nodyssey.data.offline.OfflineImageSource {
+                override suspend fun fetch(url: String, maxBytes: Long): ByteArray? {
+                    val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        UrlSessionOfflineImageSource { urlSession }.fetch(url, maxBytes)
+                    }
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    return bytes
+                }
+            },
             collectedMeta = collectedPostMetaStore,
             settingsStore = OfflineSettingsStore(createPreferenceDataStore("offline")),
             scheduler = offlineScheduler,
@@ -480,11 +580,12 @@ class IosAppContainer(
 
     override val commentComposerRepository: CommentComposerRepository by lazy {
         DefaultCommentComposerRepository(
-            createPreferenceDataStore("comment-composer"),
+            commentDraftStore,
             transport,
             dispatchers,
             clock,
             postRepository::noteOwnReplyPublished,
+            privateBoundary,
         )
     }
 
@@ -500,7 +601,7 @@ class IosAppContainer(
     override val imageHostRepository: ImageHostRepository by lazy {
         DefaultImageHostRepository(
             settings = DataStoreImageHostSettings(secretStore("imagehost"), secretCipher),
-            http = NSUrlSessionTransport { imageHostSession.current },
+            http = NSUrlSessionTransport(joinOnCancellation = true) { imageHostSession.current },
             dispatchers = dispatchers,
         )
     }
@@ -512,7 +613,7 @@ class IosAppContainer(
     private val imagePreparer: ImagePreparer by lazy { IosImagePreparer(dispatchers) }
 
     override val stickerLibrary: StickerLibrary by lazy {
-        val thirdParty = NSUrlSessionTransport { imageHostSession.current }
+        val thirdParty = NSUrlSessionTransport(joinOnCancellation = true) { imageHostSession.current }
         StickerLibrary(
             dao = database.stickerDao(),
             github = GitHubStickerSource(thirdParty, dispatchers),
@@ -526,18 +627,12 @@ class IosAppContainer(
         )
     }
 
-    override val sessionRepository: SessionRepository by lazy { SessionRepository(sessionCookies) }
+    override val sessionRepository: SessionRepository by lazy { SessionRepository(sessionCookies, deferPublication = true) }
 
     override val accountSignOut: AccountSignOut by lazy {
-        DefaultAccountSignOut(
-            posts = postRepository,
-            profiles = profileRepository,
-            offline = offlineLibrary,
-            postDrafts = postComposerRepository,
-            commentDrafts = commentComposerRepository,
-            settings = settingsRepository,
-            session = sessionRepository,
-        )
+        // Signing out revokes access, not permission to destroy existing local data.
+        // Explicit recovery/reset is the only destructive account-transition path on iOS.
+        AccountSignOut { sessionRepository.signOut() }
     }
 
     override val signInRepository: SignInRepository by lazy { NodeSeekSignInRepository(jsonClient) }

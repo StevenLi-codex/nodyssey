@@ -51,7 +51,7 @@ struct SettingsKeywordsScreen: View {
     @StateObject private var store = NativeStore()
     @StateObject private var action = SettingsAction()
     @State private var regex = false
-    @State private var text = ""
+    @State private var draft = SettingsKeywordDraft()
     @State private var revision = 0
     private var kind: String { alerts ? "ALERT" : regex ? "BLOCK_REGEX" : "BLOCK" }
 
@@ -63,13 +63,15 @@ struct SettingsKeywordsScreen: View {
             else { Text("keywords_block_footer").font(.footnote) }
             Section {
                 if !alerts { Toggle("keywords_regex_toggle", isOn: $regex).disabled(action.busy) }
-                TextField(LocalizedStringKey(regex ? "keywords_regex_placeholder" : "keywords_add_placeholder"), text: $text)
+                TextField(LocalizedStringKey(regex ? "keywords_regex_placeholder" : "keywords_add_placeholder"), text: $draft.text)
                     .autocorrectionDisabled()
                 Button("keywords_add_action") {
-                    action.run(app, "keywords.add", ["kind": .string(kind), "text": .string(text)]) {
-                        store.value = $0; text = ""
+                    let submittedRevision = draft.revision
+                    action.run(app, "keywords.add", ["kind": .string(kind), "text": .string(draft.text)]) {
+                        store.value = $0
+                        draft.clearAfterSuccess(submittedRevision: submittedRevision)
                     }
-                }.disabled(action.busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.disabled(action.busy || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Section {
                 if store.value.array?.isEmpty == true { Text("keywords_empty").foregroundStyle(.secondary) }
@@ -88,7 +90,7 @@ struct SettingsKeywordsScreen: View {
         .task(id: "\(app.generation)-\(kind)-\(revision)") {
             await store.observe(app, "keywords.observe", ["kind": .string(kind)])
         }
-        .onChange(of: kind) { _ in action.cancel(); text = ""; store.invalidate() }
+        .onChange(of: kind) { _ in action.cancel(); draft.text = ""; store.invalidate() }
         .modifier(SettingsLifecycle(action: action))
     }
 }

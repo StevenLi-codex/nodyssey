@@ -29,16 +29,12 @@ struct ContentRichBody: View {
             }
         }
         .sheet(item: $poll) { poll in NavigationStack { ScrollView { ContentPollView(voteID: poll.id).padding() }.toolbar { Button(String(localized: "content.close", table: "Content")) { self.poll = nil } } } }
-        .sheet(item: $report) { report in NavigationStack { ContentReportView(code: report.code, postID: postID, sourceFirst: report.sourceFirst, threadTitle: threadTitle, floor: floor) } }
+        .sheet(item: $report) { report in NavigationStack { ContentReportView(code: report.code, postID: postID, sourceOverride: report.sourceOverride, threadTitle: threadTitle, floor: floor) } }
         .onChange(of: app.generation) { _ in poll = nil; report = nil }
     }
     private var actions: NativeRichTextActions {
         NativeRichTextActions(
-            onImage: { url, _ in
-                let urls = contentImageURLs(value)
-                let index = urls.firstIndex(of: url) ?? 0
-                app.open("ImageViewer", ["urls": .array((urls.isEmpty ? [url] : urls).map(JSONValue.string)), "index": .integer(Int64(index))])
-            },
+            onImage: ContentImageGallery.onImage(value: value, open: { app.open($0, $1) }),
             onVote: { poll = ContentRichPoll(id: $0) },
             onStardust: { receive in
                 app.open("Stardust", ["memberId": .integer(receive.memberId), "refId": .integer(receive.refId), "amount": .integer(Int64(receive.amount)), "description": .string(receive.description), "onetime": .bool(receive.onetime)])
@@ -54,25 +50,26 @@ struct ContentRichBody: View {
                     app.openLink(base + (floor.hasPrefix("#") ? floor : "#" + floor))
                 }
             },
-            onCode: { code, action in report = ContentRichReport(code: code, sourceFirst: action == .source) }
+            onCode: { code, action in
+                // Explicit source/adapted actions override only this report. Compare follows settings.
+                report = ContentRichReport(code: code, sourceOverride: action == .source ? true : action == .adaptedReport ? false : nil)
+            },
+            codeContent: { code, inheritedActions in
+                // A content-derived ID must not vary with JSON dictionary key order.
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .sortedKeys
+                return AnyView(ContentReportView(
+                    code: code, postID: postID, threadTitle: threadTitle, floor: floor,
+                    inline: true, actions: inheritedActions
+                ).id(try? encoder.encode(code)))
+            }
         )
     }
 }
 
 private struct ContentRichPoll: Identifiable { let id: Int64 }
-private struct ContentRichReport: Identifiable { let id = UUID(); let code: NativeCode; let sourceFirst: Bool }
+private struct ContentRichReport: Identifiable { let id = UUID(); let code: NativeCode; let sourceOverride: Bool? }
 
-private func contentImageURLs(_ value: JSONValue) -> [String] {
-    var result: [String] = []
-    func walk(_ value: JSONValue) {
-        if let object = value.object {
-            if ["img", "iimg"].contains(object["type"]?.string ?? ""), let url = object["url"]?.string, !result.contains(url) { result.append(url) }
-            for key in ["inlines", "children", "tabs", "items", "cells"] { if let nested = object[key] { walk(nested) } }
-        } else if let array = value.array { array.forEach(walk) }
-    }
-    walk(value)
-    return result
-}
 
 struct ContentReportView: View {
     @EnvironmentObject private var app: NativeAppModel
@@ -81,52 +78,27 @@ struct ContentReportView: View {
     let postID: Int64
     let threadTitle: String?
     let floor: String?
-    @State private var source: Bool
+    @State private var mode: ContentReportMode
+    private var source: Bool { mode.source(settings: app.settings) }
     @StateObject private var store = NativeStore()
     @StateObject private var command = ContentCommand()
     @State private var retry = 0
-    init(code: NativeCode, postID: Int64, sourceFirst: Bool, threadTitle: String? = nil, floor: String? = nil) {
-        self.code = code; self.postID = postID; self.threadTitle = threadTitle; self.floor = floor; _source = State(initialValue: sourceFirst)
+    let inline: Bool
+    var actions: NativeRichTextActions
+    init(code: NativeCode, postID: Int64, sourceOverride: Bool? = nil, threadTitle: String? = nil, floor: String? = nil, inline: Bool = false, actions: NativeRichTextActions = .init()) {
+        self.code = code; self.postID = postID; self.threadTitle = threadTitle; self.floor = floor
+        self.inline = inline; self.actions = actions
+        _mode = State(initialValue: ContentReportMode(sourceOverride: sourceOverride))
     }
     var body: some View {
-        List {
-            Picker(String(localized: "content.reportFormat", table: "Content"), selection: $source) {
-                Text(String(localized: "content.adapted", table: "Content")).tag(false)
-                Text(String(localized: "content.source", table: "Content")).tag(true)
-            }.pickerStyle(.segmented)
-            ContentCommandStatus(command: command)
-            if source { NativeCodeBlock(code: code, actions: .init()) }
+        Group {
+            if inline { VStack(alignment: .leading, spacing: 12) { reportContent } }
             else {
-                ContentStoreStatus(store: store) { retry += 1 }
-                if store.value != .null {
-                    Text(store.value.nativeString("title") ?? "").font(.title2)
-                    ForEach(["target", "generatedAt", "scriptVersion"], id: \.self) { key in
-                        if let text = store.value.nativeString(key) { Text(text).font(.subheadline) }
-                    }
-                    let sections = store.value.nativeArray("sections")
-                    ForEach(sections.indices, id: \.self) { index in
-                        Section {
-                            let blocks = sections[index].nativeArray("blocks")
-                            ForEach(blocks.indices, id: \.self) { block in reportBlock(blocks[block]) }
-                        } header: { Text(sections[index].nativeString("title") ?? "") }
-                    }
-                    ForEach(Array(store.value.nativeArray("footnotes").enumerated()), id: \.offset) { _, note in Text(note.string ?? "").font(.footnote).textSelection(.enabled) }
-                    Button(String(localized: "content.compare", table: "Content")) {
-                        command.run(app) {
-                            _ = try await app.request("reports.add", ["entry": .object(["report": store.value, "postId": .integer(postID), "threadTitle": threadTitle.map(JSONValue.string) ?? .null, "floor": floor.map(JSONValue.string) ?? .null])])
-                            _ = try await app.request("reports.get")
-                            try Task.checkCancellation()
-                            dismiss(); app.open("ReportCompare")
-                        }
-                    }.disabled(command.busy)
-                } else if !store.isLoading && store.failure == nil {
-                    Text(String(localized: "content.notReport", table: "Content"))
-                    NativeCodeBlock(code: code, actions: .init())
-                }
+                List { reportContent }
+                    .navigationTitle(Text(String(localized: "content.report", table: "Content")))
+                    .toolbar { Button(String(localized: "content.close", table: "Content")) { dismiss() } }
             }
         }
-        .navigationTitle(Text(String(localized: "content.report", table: "Content")))
-        .toolbar { Button(String(localized: "content.close", table: "Content")) { dismiss() } }
         .task(id: "\(app.generation)|\(retry)") {
             do {
                 let spans = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(code.spans))
@@ -134,6 +106,52 @@ struct ContentReportView: View {
             } catch { command.failure = .init(code: "INVALID_DATA", message: "Unable to encode report spans") }
         }
         .onDisappear { command.cancel() }
+    }
+    @ViewBuilder private var reportContent: some View {
+        if inline && store.value == .null {
+            // Ordinary code is not a report. Keep its real source visible while parsing,
+            // and do not offer an adapted/source picker unless Kotlin recognized a report.
+            NativeCodeBlock(code: code, actions: actions)
+            ContentStoreStatus(store: store) { retry += 1 }
+        } else {
+            reportDetails
+        }
+    }
+    @ViewBuilder private var reportDetails: some View {
+        Picker(String(localized: "content.reportFormat", table: "Content"), selection: Binding(get: { source }, set: { mode.sourceOverride = $0 })) {
+            Text(String(localized: "content.adapted", table: "Content")).tag(false)
+            Text(String(localized: "content.source", table: "Content")).tag(true)
+        }.pickerStyle(.segmented)
+        ContentCommandStatus(command: command)
+        if source { NativeCodeBlock(code: code, actions: actions) }
+        else {
+            ContentStoreStatus(store: store) { retry += 1 }
+            if store.value != .null {
+                Text(store.value.nativeString("title") ?? "").font(.title2)
+                ForEach(["target", "generatedAt", "scriptVersion"], id: \.self) { key in
+                    if let text = store.value.nativeString(key) { Text(text).font(.subheadline) }
+                }
+                let sections = store.value.nativeArray("sections")
+                ForEach(sections.indices, id: \.self) { index in
+                    Section {
+                        let blocks = sections[index].nativeArray("blocks")
+                        ForEach(blocks.indices, id: \.self) { block in reportBlock(blocks[block]) }
+                    } header: { Text(sections[index].nativeString("title") ?? "") }
+                }
+                ForEach(Array(store.value.nativeArray("footnotes").enumerated()), id: \.offset) { _, note in Text(note.string ?? "").font(.footnote).textSelection(.enabled) }
+                Button(String(localized: "content.compare", table: "Content")) {
+                    command.run(app) {
+                        _ = try await app.request("reports.add", ["entry": .object(["report": store.value, "postId": .integer(postID), "threadTitle": threadTitle.map(JSONValue.string) ?? .null, "floor": floor.map(JSONValue.string) ?? .null])])
+                        _ = try await app.request("reports.get")
+                        try Task.checkCancellation()
+                        if !inline { dismiss() }; app.open("ReportCompare")
+                    }
+                }.disabled(command.busy)
+            } else if !store.isLoading && store.failure == nil {
+                Text(String(localized: "content.notReport", table: "Content"))
+                NativeCodeBlock(code: code, actions: actions)
+            }
+        }
     }
     @ViewBuilder private func reportBlock(_ block: JSONValue) -> some View {
         switch block.nativeString("type") {

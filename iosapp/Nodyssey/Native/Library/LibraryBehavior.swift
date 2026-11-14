@@ -75,6 +75,11 @@ struct LibraryPayment: Equatable {
     var arguments: [String: JSONValue] {
         ["recipientUid": .integer(recipient), "amount": .integer(amount), "refId": .integer(refId), "onetime": .bool(onetime)]
     }
+    func shortfall(balance: Int64?) -> Int64? {
+        guard let balance, balance < amount else { return nil }
+        let difference = amount.subtractingReportingOverflow(balance)
+        return difference.overflow ? Int64.max : difference.partialValue
+    }
 }
 
 struct LibraryPaymentOutcome {
@@ -85,9 +90,71 @@ struct LibraryPaymentOutcome {
     var growth: JSONValue = .null
 }
 
+struct LibraryAttendanceOutcome {
+    var acknowledged = false
+    var writeFailure: NativeFailure?
+    var refreshFailure: NativeFailure?
+    var result: JSONValue = .null
+    var status: JSONValue = .null
+    var growth: JSONValue = .null
+}
+
+struct LibraryReceiptSummary {
+    let all: [JSONValue]
+    let mine: [JSONValue]
+    var payerCount: Int { all.count }
+    var received: Int64 { all.reduce(0) { $0 + max(0, $1["diff"]?.int ?? 0) } }
+    var paidByMe: Bool { !mine.isEmpty }
+}
+
 extension LibraryOperations {
+    @MainActor static func receipts(for payment: LibraryPayment, ownUID: Int64, request: LibraryRequest) async throws -> LibraryReceiptSummary {
+        var arguments: [String: JSONValue] = ["memberId": .integer(payment.recipient), "refId": .integer(payment.refId)]
+        let received = try await request("assets.receipts", arguments)
+        try Task.checkCancellation()
+        arguments["peerId"] = .integer(ownUID)
+        let own = try await request("assets.receipts", arguments)
+        guard let all = received.array, let mine = own.array else { throw NativeFailure(code: "INVALID_DATA", message: "") }
+        return LibraryReceiptSummary(all: all, mine: mine)
+    }
+
+    @MainActor static func signAttendance(mode: String, request: LibraryRequest) async throws -> LibraryAttendanceOutcome {
+        var outcome = LibraryAttendanceOutcome()
+        do {
+            outcome.result = try await request("attendance.sign", ["mode": .string(mode), "confirmed": .bool(true)])
+            outcome.acknowledged = true
+        } catch is CancellationError { throw CancellationError() }
+        catch let failure as NativeFailure {
+            if failure.code == "SESSION_CHANGED" { throw failure }
+            outcome.writeFailure = failure
+        } catch { outcome.writeFailure = NativeFailure(code: "INTERNAL", message: "") }
+        do {
+            outcome.status = try await request("attendance.status", [:])
+            outcome.growth = try await refreshedGrowth(request: request)
+        } catch is CancellationError { throw CancellationError() }
+        catch let failure as NativeFailure {
+            if failure.code == "SESSION_CHANGED" { throw failure }
+            outcome.refreshFailure = failure
+        } catch { outcome.refreshFailure = NativeFailure(code: "INTERNAL", message: "") }
+        return outcome
+    }
+
+    @MainActor static func refreshedGrowth(request: LibraryRequest) async throws -> JSONValue {
+        // Growth reads the 60-second profile cache; a ledger read does not invalidate it.
+        _ = try await request("profile.self", ["refresh": .bool(true)])
+        try Task.checkCancellation()
+        return try await request("assets.growth", [:])
+    }
+
     @MainActor static func pay(_ payment: LibraryPayment, confirmed: Bool, request: LibraryRequest) async throws -> LibraryPaymentOutcome {
         guard confirmed else { throw NativeFailure(code: "CONFIRMATION_REQUIRED", message: "") }
+        // Recheck immediately before spending as another device may have spent since review.
+        // An absent balance is unknown, not zero; a failed read is not an attempted write.
+        let profile = try await request("profile.self", ["refresh": .bool(true)])
+        try Task.checkCancellation()
+        guard payment.shortfall(balance: profile["starCount"]?.int) == nil else {
+            throw NativeFailure(code: "INSUFFICIENT_BALANCE", message: "")
+        }
         var outcome = LibraryPaymentOutcome()
         var arguments = payment.arguments
         arguments["confirmed"] = .bool(true)
@@ -102,7 +169,7 @@ extension LibraryOperations {
         // Refresh on BOTH known success and indeterminate transport failure. Never repeat the write.
         do {
             outcome.ledger = try await request("assets.stardust", [:])
-            outcome.growth = try await request("assets.growth", [:])
+            outcome.growth = try await refreshedGrowth(request: request)
         } catch is CancellationError { throw CancellationError() }
         catch let failure as NativeFailure {
             if failure.code == "SESSION_CHANGED" { throw failure }
