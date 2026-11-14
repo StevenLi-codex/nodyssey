@@ -6,6 +6,7 @@ import io.github.nodyssey.data.TitleBlockRule
 import io.github.nodyssey.data.dns.problem
 import io.github.nodyssey.data.imagehost.ImageHostException
 import io.github.nodyssey.data.imagehost.ImageHostProvider
+import io.github.nodyssey.data.imagehost.ImageHostRepository
 import io.github.nodyssey.data.proxy.problem
 import io.github.nodyssey.data.settings.AppLanguage
 import io.github.nodyssey.data.settings.ColorSource
@@ -47,9 +48,20 @@ private val settingsWriteLock = Mutex()
 private val settingsCodec = Json { encodeDefaults = true }
 
 internal suspend fun NativeContext.settingsRequest(operation: String, args: JsonObject): JsonElement? =
+    if (operation.startsWith("imageHost.")) {
+        settingsImageHostRequest(graph.imageHostRepository, operation, args)
+    } else {
+        settingsLockedRequest { settingsDispatch(operation, args) }
+    }
+
+/** Repository-only seam used by the app and iosTest; never creates a second lock or graph. */
+internal suspend fun settingsImageHostRequest(repository: ImageHostRepository, operation: String, args: JsonObject): JsonElement? =
+    settingsLockedRequest { settingsImageHostDispatch(repository, operation, args) }
+
+private suspend fun settingsLockedRequest(dispatch: suspend () -> JsonElement?): JsonElement? =
     settingsWriteLock.withLock {
         try {
-            settingsDispatch(operation, args)
+            dispatch()
         } catch (failure: ImageHostException) {
             throw NativeFailure(settingsImageHostErrorCode(failure.error))
         } catch (failure: StickerSourceException) {
@@ -65,6 +77,58 @@ internal suspend fun NativeContext.settingsRequest(operation: String, args: Json
             )
         }
     }
+
+private suspend fun settingsImageHostDispatch(repository: ImageHostRepository, operation: String, args: JsonObject): JsonElement? {
+    when (operation) {
+        "imageHost.login" -> throw NativeFailure("UNSUPPORTED")
+
+        "imageHost.get" -> return (if ("provider" in args) repository.config(args.settingsEnum<ImageHostProvider>("provider")) else repository.current).first().settingsJson()
+
+        "imageHost.select" -> {
+            repository.select(args.settingsEnum<ImageHostProvider>("provider"))
+            return repository.current.first().settingsJson()
+        }
+
+        "imageHost.save" -> {
+            val provider = args.settingsEnum<ImageHostProvider>("provider")
+            val draft = settingsImageHostDraft(args, repository.config(provider).first())
+            require(draft.problem() == null) { "Invalid image host configuration" }
+            repository.save(draft)
+            val saved = repository.config(provider).first()
+            if (draft.token.trim() != saved.token || draft.custom.headerValue.trim() != saved.custom.headerValue || draft.custom.formFields.trim() != saved.custom.formFields) {
+                throw NativeFailure("SECRET_NOT_STORED")
+            }
+            return saved.settingsJson()
+        }
+
+        "imageHost.disconnect" -> {
+            val provider = args.settingsEnum<ImageHostProvider>("provider")
+            repository.disconnect(provider)
+            return repository.config(provider).first().settingsJson()
+        }
+
+        "imageHost.images", "imageHost.test" -> {
+            val provider = repository.current.first().provider
+            // Optional for read-only callers; Media binds every displayed gallery to its provider.
+            if ("expectedProvider" in args && args.settingsEnum<ImageHostProvider>("expectedProvider") != provider) throw NativeFailure("SOURCE_CHANGED")
+            if (!provider.browsable) throw NativeFailure("UNSUPPORTED")
+            return settingsValue(repository.images().map { it.settingsJson() })
+        }
+
+        "imageHost.delete" -> {
+            val id = args.settingsString("id")
+            val expectedProvider = args.settingsEnum<ImageHostProvider>("expectedProvider")
+            // Validate the displayed provider inside settingsWriteLock, before any host I/O.
+            // Native selection/configuration writes share this lock through listing and deletion.
+            if (repository.current.first().provider != expectedProvider) throw NativeFailure("SOURCE_CHANGED")
+            // The deletion token never leaves Kotlin, including for hosts where it differs from id.
+            val image = repository.images().firstOrNull { it.id == id } ?: throw NativeFailure("NOT_FOUND")
+            repository.delete(image)
+            return JsonNull
+        }
+    }
+    return null
+}
 
 private suspend fun NativeContext.settingsDispatch(operation: String, args: JsonObject): JsonElement? {
     val settings = graph.settingsRepository
@@ -148,46 +212,7 @@ private suspend fun NativeContext.settingsDispatch(operation: String, args: Json
 
         "settings.changelog" -> return releaseNotesRequest(args)
 
-        "network.diagnostics", "imageHost.login", "settings.crashReport" -> throw NativeFailure("UNSUPPORTED")
-
-        "imageHost.get" -> return imageHostFlow(args).first()
-
-        "imageHost.select" -> {
-            graph.imageHostRepository.select(args.settingsEnum<ImageHostProvider>("provider"))
-            return graph.imageHostRepository.current.first().settingsJson()
-        }
-
-        "imageHost.save" -> {
-            val repository = graph.imageHostRepository
-            val provider = args.settingsEnum<ImageHostProvider>("provider")
-            val draft = settingsImageHostDraft(args, repository.config(provider).first())
-            require(draft.problem() == null) { "Invalid image host configuration" }
-            repository.save(draft)
-            val saved = repository.config(provider).first()
-            if (draft.token.trim() != saved.token || draft.custom.headerValue.trim() != saved.custom.headerValue || draft.custom.formFields.trim() != saved.custom.formFields) {
-                throw NativeFailure("SECRET_NOT_STORED")
-            }
-            return saved.settingsJson()
-        }
-
-        "imageHost.disconnect" -> {
-            val provider = args.settingsEnum<ImageHostProvider>("provider")
-            graph.imageHostRepository.disconnect(provider)
-            return graph.imageHostRepository.config(provider).first().settingsJson()
-        }
-
-        "imageHost.images", "imageHost.test" -> {
-            if (!graph.imageHostRepository.current.first().provider.browsable) throw NativeFailure("UNSUPPORTED")
-            return settingsValue(graph.imageHostRepository.images().map { it.settingsJson() })
-        }
-
-        "imageHost.delete" -> {
-            val id = args.settingsString("id")
-            // The deletion token never leaves Kotlin, including for hosts where it differs from id.
-            val image = graph.imageHostRepository.images().firstOrNull { it.id == id } ?: throw NativeFailure("NOT_FOUND")
-            graph.imageHostRepository.delete(image)
-            return JsonNull
-        }
+        "network.diagnostics", "settings.crashReport" -> throw NativeFailure("UNSUPPORTED")
 
         "offline.get" -> return offlineFlow().first()
 

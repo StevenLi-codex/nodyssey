@@ -47,7 +47,7 @@ The picker observes the real library, uses backend group order, filters hidden g
 ## Executed verification
 
 - `python3 iosapp/NativeMediaTests/run-mac-tests.py`: **11 Swift Testing behavioral tests passed**, on the existing isolated Mac CLT runner, Apple Swift 6.4.2. Compiles actual `MediaDomain.swift` and actual NativeCore. Synthetic recording transports are test-only; file staging tests use scratch files and actual byte copies. No network mutations/uploads/deletions were exercised.
-- `python3 iosapp/tests/native_image_host_selection_test.py`: **8 Kotlin behavioral tests passed** against exact `NativeSettings.kt`/mapping/release sources and real pinned JVM domain jars. Executes the actual dispatch and mutex, not a source-string gate. The abstract `iosTest` contract is instantiated by a JVM-only graph adapter (including explicit throwing Apple transport signatures); this is **not an Apple build or a standalone native test execution**. Covers a provider switch after the last frontend check with colliding IDs, queued selection before lock acquisition, selection blocked throughout delete listing, malformed/missing provider, successful backend-token deletion, missing image and cancellation/lock release.
+- `python3 iosapp/tests/native_image_host_selection_test.py`: **8 Kotlin behavioral tests passed** against exact `NativeSettings.kt`/mapping/release sources and real pinned JVM domain jars. Executes the concrete `iosTest` suite `io.github.nodyssey.ios.native.NativeImageHostSelectionTest` unchanged through `settingsImageHostRequest`, the same internal repository-only entry used by production settings dispatch. No JVM-generated test subclass, runtime app-graph fake or test-owned mutex remains. The compile-only graph/throwing Apple transport signatures are still necessary to compile unrelated parts of the exact source on JVM; they are not instantiated by these tests. This is **not an Apple build or native execution**. Covers a provider switch after the last frontend check with colliding IDs, queued selection before lock acquisition, selection blocked throughout delete listing, malformed/missing provider, successful backend-token deletion, missing image and cancellation/lock release.
 - Observed genuine behavioral **RED → GREEN** for Kotlin delete (stale request previously returned success), Kotlin bound listing (previously returned the other provider's rows), Swift delete payload (valid confirmation rejected by contract transport due to missing provider), and Swift listing payload (away-and-back selection previously granted a wrong-provider confirmation). Swift fixtures model the contract; the Kotlin harness independently exercises its actual enforcement.
 - Existing release-notes harness: **17 tests passed**; existing supplement/settings harness: **17 tests passed**. Scoped Spotless hook for the two owned Kotlin files reported `IS CLEAN` twice (outer task skipped by the IDE hook), not a repository-wide formatting gate.
 - Covered consequences: secret omission versus clear; group order/hidden provenance and canonical site insertion; URL/SHA/folder-selection freshness; pasted link HTTPS filtering/deduplication; upload-only provider rejection; confirmation/provider binding and delete readback; selected-provider change during a pending listing; Markdown escaping without identity changes; local file lifetime/byte preservation/type/size admission.
@@ -55,6 +55,37 @@ The picker observes the real library, uses backend group order, filters hidden g
 - `python3 iosapp/NativeMediaTests/run-mac-tests.py --typecheck-ui`: all media SwiftUI sources typechecked in Swift 6 against **macOS 26.5 SDK**, with test-only Foundation/Platform signatures and an iOS EditButton signature. The native Files/PhotosPicker/Quick Look signatures were checked on macOS. The iOS fullscreen branch is not checked by that command. This is **not** an iOS/Kotlin link or device test.
 - CLT default macOS 27 SDK failed because SwiftUIMacros.StateMacro was unavailable; the existing installed 26.5 SDK was used instead. Build output has CLT missing framework-search-path warnings and iOS-16-compatible one-argument onChange deprecation warnings on the newer macOS target. SSH banner timeouts occurred transiently; connectivity was checked and subsequent real runs succeeded.
 - Three native locale tables contain the same generated keys. Literal-key audit is a resource sanity check, not claimed behavioral UI coverage.
+
+## Concrete Apple image-host regression gate
+
+`NativeImageHostSelectionTest` is now a concrete class in the existing `iosTest` source set, with its requester directly calling internal `settingsImageHostRequest(repository, operation, args)`. Both the real `NativeContext.settingsRequest` image-host route and this requester enter `settingsLockedRequest`, which owns the **single existing `settingsWriteLock`**. The private image-host dispatcher cannot be invoked by tests without the lock. The non-image settings path uses that same lock, not another mutex. Select, save, disconnect, current-provider validation, listing and deletion remain inside its transaction; exception mapping and cancellation propagation are unchanged. Tests supply only the in-memory `ImageHostRepository`; they never create the app container or use credentials/live services.
+
+On an Apple-silicon Mac with full Xcode and a suitable simulator, run:
+
+```sh
+./gradlew :iosapp:iosSimulatorArm64Test --tests 'io.github.nodyssey.ios.native.NativeImageHostSelectionTest.*'
+```
+
+Require the test report to contain **all eight named cases executed, zero failures and zero skipped** (compile-only, disabled targets, stale reports and aggregate success do not satisfy this gate):
+
+- `missingOrMalformedExpectedProviderNeverListsOrDeletes`
+- `sameProviderDeletesExactImageWithBackendOnlyToken`
+- `missingIdDoesNotDeleteAnotherImage`
+- `queuedDeleteValidatesProviderAfterTakingSettingsLock`
+- `selectionCannotInterleaveBetweenDeletionListingAndDelete`
+- `cancellationDuringDeletionListingReleasesLockWithoutDeleting`
+- `providerBoundListRejectsSwitchBeforeDispatch`
+- `switchAfterLastFrontendCheckCannotDeleteCollidingIdOnAnotherProvider`
+
+`iosapp/scripts/verify_native_results.py` now requires this suite by default and checks every method above, not just the suite or total count. It rejects missing/skipped cases, duplicate cases (including duplicates replacing a missing case or spread across XML files), and failures/errors; existing suite/count/failure gates remain intact. Archived Apple Gradle reports use `method[iosSimulatorArm64]` testcase names and target-prefixed classnames, so the verifier accepts that exact suffix or a bare method name, not arbitrary suffix stripping. `--required` remains a repeatable replacement for the default suite list; the strict case gate applies whenever `NativeImageHostSelectionTest` is required. For the filtered run above, verify its fresh report with:
+
+```sh
+python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test --required NativeImageHostSelectionTest
+```
+
+Local verifier validation: **22 Python unittest tests passed**, including behavioral RED → GREEN for incomplete, skipped and duplicate-substituted case reports, unknown suffixes, the default suite requirement and declared skips. All prior verifier checks remain covered. These XML fixtures test the verifier only; **the eight concrete image-host cases have not been executed on Apple and remain pending the next committed CI run**. The existing CI invocation uses the verifier's default requirements; no workflow edit was needed. Reports must be fresh: this verifier checks contents, not commit provenance or report age.
+
+The seam follow-up was exercised locally on JVM only: the first direct-suite run failed because the class was abstract (`InstantiationException`); after making it concrete, compilation identified the missing injectable entry. These are discovery/API RED evidence, **not new behavioral RED assertions**. Extraction then passed all eight cases, plus the 17-test release-notes and 17-test supplement harnesses without source-list changes. Post-GREEN scratch-only mutations separately proved sensitivity: omitting provider validation caused two assertion failures; omitting the settings lock caused two assertion failures. Those mutation runs are not retroactive test-first claims. Scoped Spotless reported both owned Kotlin files `IS CLEAN`; Gradle also warned that Kotlin/Native cannot execute on this Linux arm64 host. No Apple test execution or Swift/Kotlin app integration is claimed. Save/disconnect exclusion and holding the lock through the delete call are preserved by the common lock structure, not separately suspended by these eight fixtures.
 
 ## Remaining acceptance / honest boundaries
 

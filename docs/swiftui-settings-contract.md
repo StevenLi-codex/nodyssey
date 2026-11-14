@@ -27,8 +27,8 @@ The implementation recognizes 83 distinct request/observe names, including expli
 | `imageHost.select` | `provider` | current redacted config |
 | `imageHost.save` | `provider,siteUrl?,token?,custom?` | persisted redacted config; absent secrets preserved, explicit empty clears |
 | `imageHost.disconnect` | `provider` | persisted redacted config |
-| `imageHost.test`, `imageHost.images` | none | selected host listing (only browsable hosts); unsupported is an error |
-| `imageHost.delete` | `id` | Unit; resolve deletion credential inside Kotlin from current listing |
+| `imageHost.test`, `imageHost.images` | optional `expectedProvider` (exact ImageHostProvider enum name) | selected host listing (only browsable hosts); if supplied, reject provider mismatch with `SOURCE_CHANGED` under the settings lock before host I/O |
+| `imageHost.delete` | `id`, required `expectedProvider` from displayed listing/confirmation | Unit; validate provider under the settings lock before listing/deleting; mismatch is `SOURCE_CHANGED`, missing/invalid enum is invalid arguments; deletion credential stays inside Kotlin |
 | `offline.get` / `offline.observe` | none | `{isAvailable,settings,usage,states:[{postId,state,...}]}` |
 | `offline.settings` | partial OfflineSettings fields | read-back offline snapshot |
 | `offline.download` | `postIds:[Int64]` | read-back snapshot, not a claim download completed |
