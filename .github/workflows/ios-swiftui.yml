@@ -66,7 +66,9 @@ jobs:
       - name: Compile Kotlin iOS bridge and native tests
         run: ./gradlew :iosapp:compileKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
       - name: Execute Kotlin simulator behavior tests
-        run: ./gradlew :iosapp:iosSimulatorArm64Test
+        run: |
+          ./gradlew :iosapp:iosSimulatorArm64Test
+          python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
       - name: Build simulator app
         run: |
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \

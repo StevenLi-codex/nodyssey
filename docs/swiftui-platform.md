@@ -97,6 +97,10 @@ Two baseline gaps are now handled in the facade:
 
 The existing SVG capture/worker mutex, pixel bounds, PDF→CoreGraphics→ImageIO pipeline are not recreated or changed. Bitmap/PNG conversion for the ABI runs on Dispatchers.Default and never closes a borrowed Coil bitmap.
 
+## Parent integration evidence
+
+The initial platform sources are committed in `92336381d6d61cd463c85e26070a32db4f5fd126`. Actions run `43555353912` completed actual `:iosapp:compileKotlinIosSimulatorArm64` including this facade. This proves Apple production source compilation only, not Objective-C/Swift call-site correctness or linking. Test compilation then exposed an undeclared `kotlinx-coroutines-test` import; commit `33d782448dde7baf600006639e047e48642196f2` preserves the cookie race test with explicit undispatched starts and the existing coroutine core dependency. The actual JVM core harness again passed all five cases after that correction. Simulator execution and the Swift app build still require the next CI run.
+
 ## Verification and remaining integration gates
 
 - `iosapp/src/iosTest/.../NativePlatformTest.kt` covers seed/dismiss serialization, stop/drain/publish order and idempotent close; stale clearance/login fingerprints; Wi-Fi explicit override; Turnstile dispatch; hostile URL schemes/userinfo/parser ambiguity.

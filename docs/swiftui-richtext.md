@@ -75,6 +75,10 @@ and `core/ansi/AnsiDecoder.kt`. The decoder is a tagged `Codable` enum, not a pa
   carries renderer-generated local action IDs, all intercepted with `.handled`/`.discarded`. No link
   is implicitly returned to the system. Navigation owners still enforce site/account boundaries.
 
+## Parent integration evidence
+
+The renderer and platform sources are included in branch commit `92336381d6d61cd463c85e26070a32db4f5fd126`. GitHub Actions run `43555353912` executed the same 12 rich-document tests successfully with full Xcode, as well as 20 NativeCore tests. Kotlin iOS production compilation succeeded, but its test-source compilation failed on an undeclared coroutines-test import; the focused fix is commit `33d782448dde7baf600006639e047e48642196f2`. That run never reached the Swift iOS app build. Runtime gallery, rich-text layout and callback consumption remain separate UI integration gates.
+
 ## Reproducible tests and honest limits
 
 Run on any suitable Swift toolchain with `TMPDIR` pointing to a scratch directory:
