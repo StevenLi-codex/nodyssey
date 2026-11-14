@@ -62,3 +62,6 @@ __pycache__/
 *.xcresult
 *.xcarchive
 *.ipa
+# Local raw validation logs; CI result artifacts remain the execution evidence.
+iosapp/**/Verification/*.log
+iosapp/**/Evidence/*.log

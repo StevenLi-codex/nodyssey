@@ -1,0 +1,8 @@
+"native.account.saved_refresh" = "已保存，但回读失败。请刷新，不要重复提交。";
+"native.account.uncertain" = "本次修改结果尚不确定。请先刷新再决定是否再次修改。";
+"native.account.one_tap" = "一键登录";
+"native.account.totp_boundary" = "绑定需要在验证器及站点流程中完成。返回后刷新状态；打开验证器不代表已启用双重验证。";
+"native.account.note" = "用户私密备注";
+"native.account.page_filter" = "搜索、版块筛选及倒序仅针对当前已加载页。此接口未提供全局筛选。";
+"native.account.server_order" = "服务器顺序";
+"native.account.page" = "页码";

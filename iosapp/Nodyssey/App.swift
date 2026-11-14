@@ -1,20 +1,20 @@
 import UIKit
+import SwiftUI
 import NodysseyShell
 
-/// The whole of the Swift in this app.
-///
-/// `MainActivity` is the Android counterpart and it is 76 lines; this is short, and the difference is
-/// not that iOS does less — it is that everything `MainActivity` does beyond installing a composition
-/// is about the platform's own hooks, and this app has one so far: the offline downloader's
-/// background tasks. `registerBackgroundTasks` installs their `BGTaskScheduler` handlers, which
-/// **must** happen before launch finishes, so it goes here rather than in the scene. When
-/// notifications and Universal Links arrive, this is where they land too.
+/// Platform lifecycle only. Kotlin remains the owner of the single repository graph,
+/// persistent account data and background downloads; SwiftUI owns the visible application.
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
+    // Process lifetime preserves each tab's navigation when UIKit reconnects the scene.
+    // UIApplicationSupportsMultipleScenes is false, so there is one live native shell.
+    let nativeApp = NativeAppModel()
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // BGTaskScheduler registration must finish before application launch returns.
         NodysseyApp.shared.registerBackgroundTasks()
         return true
     }
@@ -28,34 +28,47 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
-/// Where the window is made, which since iOS 26 is the only place it may be made.
-///
-/// The pre-scene shape — an app delegate that builds its own `UIWindow` in
-/// `didFinishLaunchingWithOptions` — no longer merely warns: `UIKit` traps at launch in
-/// `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption` unless `Info.plist` declares a
-/// `UIApplicationSceneManifest` and something adopts it. That trap is what the first run of this
-/// target did, and it looks exactly like an app that will not start.
-///
-/// The two-step root is `NodysseyApp.start`'s doing: the app's `User-Agent` has to be the one WebKit
-/// sends, WebKit will only say what that is asynchronously, and building the graph around a guess
-/// would mean throwing away a `cf_clearance` the moment the real answer arrived. So the window comes
-/// up empty for the few milliseconds that takes — which is what a launch screen is for.
+/// Keep the scene lifecycle required by modern UIKit. NativeRootView starts the shared
+/// graph asynchronously through its model; never call the old Compose controller factory.
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var nativeApp: NativeAppModel? {
+        (UIApplication.shared.delegate as? AppDelegate)?.nativeApp
+    }
 
     func scene(
         _ scene: UIScene,
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        guard let windowScene = scene as? UIWindowScene else { return }
+        guard let windowScene = scene as? UIWindowScene, let app = nativeApp else { return }
         let window = UIWindow(windowScene: windowScene)
         self.window = window
-        window.rootViewController = UIViewController()
+        window.rootViewController = UIHostingController(
+            rootView: NativeRootView().environmentObject(app)
+        )
         window.makeKeyAndVisible()
 
-        NodysseyApp.shared.start { controller in
-            window.rootViewController = controller
+        // The model resolves links against the active site, including during graph startup.
+        for context in connectionOptions.urlContexts {
+            app.openLink(context.url.absoluteString)
         }
+        for activity in connectionOptions.userActivities {
+            if activity.activityType == NSUserActivityTypeBrowsingWeb, let url = activity.webpageURL {
+                app.openLink(url.absoluteString)
+            }
+        }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for context in URLContexts {
+            nativeApp?.openLink(context.url.absoluteString)
+        }
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+              let url = userActivity.webpageURL else { return }
+        nativeApp?.openLink(url.absoluteString)
     }
 }

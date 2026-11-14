@@ -8,7 +8,8 @@ import xml.etree.ElementTree as ET
 REQUIRED_SUITES = (
     'NativeAccountTest', 'NativeBridgeTest', 'NativeContentMappingTest',
     'NativeContentTest', 'NativePlatformTest', 'NativeSettingsMappingTest',
-    'NativeSettingsPersistenceTest',
+    'NativeSettingsPersistenceTest', 'NativeSupplementTest',
+    'NativeReleaseNotesTest', 'NativeReleaseNotesAppleTest',
 )
 
 

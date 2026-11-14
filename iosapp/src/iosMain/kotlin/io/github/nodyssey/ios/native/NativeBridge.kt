@@ -66,6 +66,7 @@ object NativeBridge {
                     val data = context.contentRequest(operation, args)
                         ?: context.accountRequest(operation, args)
                         ?: context.settingsRequest(operation, args)
+                        ?: context.supplementRequest(operation, args)
                         ?: throw NativeFailure("UNKNOWN_OPERATION")
                     if (!changesSession) nativeCheckSession(session, graph.sessionRepository.peek())
                     nativeDeliver(coroutineContext[Job]!!, data, completion)
@@ -95,6 +96,7 @@ object NativeBridge {
                     val flow = context.contentObserve(operation, args)
                         ?: context.accountObserve(operation, args)
                         ?: context.settingsObserve(operation, args)
+                        ?: context.supplementObserve(operation)
                         ?: throw NativeFailure("UNKNOWN_OPERATION")
                     flow.collect { data ->
                         nativeCheckSession(session, graph.sessionRepository.peek())

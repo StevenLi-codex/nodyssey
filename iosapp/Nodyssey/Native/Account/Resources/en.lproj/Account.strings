@@ -1,0 +1,8 @@
+"native.account.saved_refresh" = "Saved. Reload failed; refresh without submitting again.";
+"native.account.uncertain" = "The write outcome is unknown. Refresh before considering another change.";
+"native.account.one_tap" = "One-tap sign-in";
+"native.account.totp_boundary" = "Enrolment is completed in the authenticator/site flow. Refresh the status after returning; opening the app does not enable two-factor verification.";
+"native.account.note" = "Private user note";
+"native.account.page_filter" = "Search, board filter and reverse order apply to this loaded page only. The server does not expose global filters for this endpoint.";
+"native.account.server_order" = "Server order";
+"native.account.page" = "Page";

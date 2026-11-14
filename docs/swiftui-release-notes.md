@@ -34,6 +34,12 @@ A public unauthenticated GET verified HTTP content at the original URL. Existing
 - **The body cap is not a streaming network-memory cap.** Existing `HttpTransport` delivers a fully buffered decoded String. The parser rejects oversized input before JSON parsing; changing that transport contract is outside this work. Existing `getBytes(maxBytes)` can stream-bound bytes but discards the HTTP/final-source detail needed here. No new metrics, platform capability, or memory-limit claim is fabricated.
 - Shared `ReleaseNote`, `compareVersionNames`, `isPreReleaseVersionName`, and `releaseNotesText` remain authoritative. No APK fields or installed-version comparison is exposed. `NoAppUpdates` remains unchanged; the new capability describes only history reading.
 
+## Parent Apple execution evidence
+
+Run `43560900650` at `492cbbac27ae0b7c85e085565dadb2e362a08730` compiled the production/test Kotlin sources and executed `NativeReleaseNotesTest` (**6 passed**) and `NativeReleaseNotesAppleTest` (**2 passed**), with zero failures/errors/skips in both XML suites. This verifies the actual Foundation session configuration assertions, not only throwing JVM signatures. The overall Kotlin run executed 48 tests with one separate SVG failure; the workflow was subsequently cancelled when the next diagnostic commit superseded it. The full run is not green. Native changelog screen behavior and actual network cancellation on Apple still require integration acceptance.
+
+Evidence: `/home/hermes/.hermes/cache/scratch/nodyssey-ci-43560900650/artifacts/`, artifact `14100573578`. Parent also updated the supplement JVM harness to compile the new release-notes dependency and reran its 17 tests successfully.
+
 ## Verification
 
 Command: `python3 iosapp/tests/native_release_notes_test.py --live` (optional `JAVA=/path/to/jdk21/bin/java`). The ordinary command is offline fixture-only; `--live` explicitly performs a real public GET.

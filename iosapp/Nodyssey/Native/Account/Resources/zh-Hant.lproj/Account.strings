@@ -1,0 +1,8 @@
+"native.account.saved_refresh" = "已儲存，但重新讀取失敗。請重新整理，不要重複提交。";
+"native.account.uncertain" = "本次修改結果尚不確定。請先重新整理再決定是否再次修改。";
+"native.account.one_tap" = "一鍵登入";
+"native.account.totp_boundary" = "綁定需要在驗證器及網站流程中完成。返回後重新整理狀態；開啟驗證器不代表已啟用雙重驗證。";
+"native.account.note" = "使用者私人備註";
+"native.account.page_filter" = "搜尋、看板篩選及倒序僅針對目前已載入頁。此介面未提供全域篩選。";
+"native.account.server_order" = "伺服器順序";
+"native.account.page" = "頁碼";

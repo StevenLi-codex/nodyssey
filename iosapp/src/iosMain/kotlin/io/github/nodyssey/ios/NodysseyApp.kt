@@ -4,6 +4,7 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import io.github.nodyssey.core.NodeSeekSite
+import io.github.nodyssey.ios.native.supplementForeground
 import io.github.nodyssey.nativeShellViewController
 import io.github.nodyssey.ui.settings.IosActiveSite
 import io.github.plaza.core.net.resolveWebKitUserAgent
@@ -79,6 +80,15 @@ object NodysseyApp {
      * traps if a `BGTaskScheduler` handler is registered after launch completes.
      */
     fun registerBackgroundTasks() = offlineScheduler.register()
+
+    /** Native scene activation: resume offline work without constructing any Compose controller. */
+    internal suspend fun nativeForeground() = supplementForeground(
+        ready = {
+            ensureContainer()
+            Unit
+        },
+        onLaunch = { offlineScheduler.onLaunch() },
+    )
 
     fun start(onReady: (UIViewController) -> Unit) {
         root?.let {

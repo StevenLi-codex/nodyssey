@@ -1,0 +1,35 @@
+# Native SwiftUI foundation
+
+## Parent integration (ready for wiring; validation below)
+
+- `NativeAppModel()` creates the real `NativeClient`; hold it on the process-lifetime AppDelegate. Inject `NativeRootView().environmentObject(model)` into the scene's UIHostingController. **Root owns `.task { await app.start() }`**, not App.swift. The task is intentionally NOT keyed by generation; screens are keyed by generation. Root also calls `foreground()` on scene activation; initial readiness calls it once. A scene delegate may call `foreground()` as well; concurrent calls are coalesced.
+- Root has actual Home / Notifications / Profile tabs, independent paths, sheet navigation, six exact domain factories. Stable IDs: `native.root`, `native.tab.home`, `native.tab.notifications`, `native.tab.profile`, `native.screen.<route>`.
+- First-launch onboarding is ONE page, ONE `native.onboarding.continue` button. It waits for authoritative `settings.set(onboardingSeen:true)` readback; errors leave onboarding visible. Help/Privacy are actual native destinations.
+- Add every Swift file under `Native/Foundation` to the app and **Foundation/Resources/{en,zh-Hans,zh-Hant}.lproj/Foundation.strings** as localized `Foundation` table resources. Existing common resource keys still use Localizable. Do not copy these strings into another domain.
+- Actual generated `NodysseyShell.h` from CI 43557573059 was read: `NativeBridge.shared.request(operation:argumentsJson:completion:)`, `.observe(...)`, `NativeRequest.cancel()` exactly match NativeClient. This does not yet prove final full iOS linkage.
+
+## Lifecycle and API
+
+Shared transport/errors/JSON remain in NativeCore. Foundation adds exact integration-contract helpers, ObservableObject model/store and UUID route identity; IDs never become Double. NativeStore delegates cancellation/stale-operation suppression to the tested NativeRequestState and adds weak registration for immediate session invalidation plus unexpected-observation-end errors. Observe must be awaited in each screen's `.task(id: app.generation)`; one operation per store.
+
+`start()` first calls real `site.get`, then independently observes `session.state` and `settings.observe`. Only after initial session/settings values does the shell expose content or drain queued deep links. It calls real `app.foreground`; failures remain visible, no fabricated scheduler success. `current` and `selected` are enum strings, not objects. A next-launch selection does not replace the active graph/namespace.
+
+Changes in session generation/sign-in status or running site synchronously clear registered stores, cancel pending non-session requests, clear all paths/sheets and advance local UI generation. Clearance-only changes without generation change don't discard draft navigation. Requests cannot publish success after crossing a session generation. Null observations clear values. No automatic mutation retry.
+
+`openLink` validates HTTP(S), credential-free URL structure, waits for site context, then uses NativeCore exact-host routing. Int64 IDs, post page and numeric floor fragment are preserved. Member names use real `search.resolveMember`. Cross-site/ordinary external links carry `Web` + `goal:EXTERNAL`; **NativeScreen handles only this explicit external case via NativeExternalBrowser/Safari** (no app-cookie injection). Other Web goals remain in NativeMediaScreens. Unknown native routes show an unsupported failure, never a generic web fallback. Challenge uses exact `CHALLENGE` goal; login uses the SignIn factory.
+
+## Appearance
+
+Uses native TabView/NavigationStack/Form/List surfaces; system chrome adopts Liquid Glass on iOS 26. Recovery actions use genuine `.buttonStyle(.glass)` with iOS 26 availability and bordered older/reduced-transparency fallback. Long-form content has no custom glass. Theme/language/custom/preset accent, e-ink light/monochrome treatment, Dynamic Type-preserving font scaling and reduced motion are applied at root and sheets. SwiftUI locale updates Text resources; domain strings built with `String(localized:)` remain subject to their own localization behavior.
+
+References: Apple's `Applying Liquid Glass to custom views` (standard components use glass), `PrimitiveButtonStyle.glass`; inspected current official documentation. Native semantic Dynamic Type sizes avoid scaleEffect clipping. Android Material palette variants are **not** recreated as a complete Material tonal system: native chrome uses original primary accent tokens, system contrast surfaces; SOFT/VIBRANT/EXPRESSIVE/NEUTRAL variants need capability/UI reconciliation before claiming exact visual parity.
+
+## Verification and remaining gates
+
+Real Mac SwiftPM behavioral tests and strict Swift 6 macOS SwiftUI signature typecheck are executed via `iosapp/NativeFoundationTests/run-mac-tests.py`; evidence in its `Verification/` directory. Typecheck uses actual macOS26.5 SwiftUI + compile-only domain/ExternalBrowser signatures, **not** UIKit/Kotlin linking or simulator behavior. The default macOS27.2 CLT SDK failed due missing SwiftUIMacros State macro plugin; existing26.5 SDK succeeded. CLT test linker warnings about omitted framework paths remain visible in logs. Intermittent SSH timeouts were retried, never relabeled as tests.
+
+Final execution: **15 behavioral tests passed in 4 suites**, real Apple Swift 6.4.2 / Testing 2403 on the approved Mac (`25-final-tests.log`). Strict Swift 6 macOS26.5 SwiftUI signature typecheck with `-warnings-as-errors` also exited 0 (`26-final-ui-typecheck.log`). Scoped `git diff --check` exited 0. Runtime RED→GREEN evidence includes private store leakage, clearance navigation loss, silent stream termination, cross-site external-browser routing, stale authentication downgrade, session-observer failure, root cancellation, and replacement-root subscription loss. Initial missing-API runs and the test-fixture syntax error are compile failures, not behavioral RED evidence.
+
+Root restart now cancels/awaits the prior lifecycle owner before subscribing; root cancellation revokes readiness and clears session-scoped state. Unexpected session/settings observation failure is fail-closed. A late older authentication snapshot throws SIGN_IN_SUPERSEDED rather than downgrading a newer session; that terminal error offers no mutation retry.
+
+Remaining gates: full iOS16+ SDK compilation/linking with actual six domain factories and Kotlin framework, simulator XCUITest accessibility/navigation/onboarding, actual session/CF/browser/device lifecycle, resource bundle registration/three languages, VoiceOver, iOS26/older visual behavior. macOS signature checks use compile-only domain declarations and exclude NativeClient's UIKit-dependent Kotlin import; no claim of full iOS acceptance. Multi-window concurrent independent root ownership is not claimed (latest root replaces the previous observer owner). No real posts/messages/uploads/security changes or transactions were sent. No App.swift, project, Kotlin, other-domain files, commits or pushes were modified by this task.
