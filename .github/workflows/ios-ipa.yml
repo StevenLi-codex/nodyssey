@@ -1,0 +1,87 @@
+name: Unsigned iPhone IPA only (no tests)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ios-swiftui-liquid-glass]
+    paths: ['.github/workflows/ios-ipa.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-only-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -Dorg.gradle.workers.max=2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: false
+      - name: Archive full-feature unsigned iPhone application without tests
+        run: |
+          set -o pipefail
+          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="1.2.22" CURRENT_PROJECT_VERSION="56" \
+            | tee "$RUNNER_TEMP/ipa-archive.log"
+      - name: Package actual device archive
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, plistlib, shutil, subprocess, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          source = root / 'Nodyssey.xcarchive/Products/Applications/Nodyssey.app'
+          info = plistlib.loads((source / 'Info.plist').read_bytes())
+          executable = source / info['CFBundleExecutable']
+          subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
+          subprocess.run(['xcrun', 'vtool', '-show-build', str(executable)], check=True)
+          assert info['CFBundleIdentifier'] == 'io.github.nodyssey', info['CFBundleIdentifier']
+          payload = root / 'Payload'
+          payload.mkdir(exist_ok=True)
+          shutil.copytree(source, payload / 'Nodyssey.app', symlinks=True)
+          ipa = root / 'nodyssey-swiftui-full-unsigned.ipa'
+          subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(payload), str(ipa)], check=True)
+          with zipfile.ZipFile(ipa) as z:
+              assert 'Payload/Nodyssey.app/Info.plist' in z.namelist()
+              assert z.testzip() is None
+          manifest = dict(commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), tests_run=False, signed=False, acceptance='Unverified full-feature test build; standalone SVG timeout remains unresolved')
+          (root / 'ipa-manifest.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nodyssey-swiftui-full-unsigned
+          path: |
+            ${{ runner.temp }}/nodyssey-swiftui-full-unsigned.ipa
+            ${{ runner.temp }}/ipa-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nodyssey-ipa-build-log
+          path: ${{ runner.temp }}/ipa-archive.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: always()
+        run: ./gradlew --stop
