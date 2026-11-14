@@ -56,7 +56,13 @@ xcodebuild test \
 
 Preserve the `.xcresult` even on failure. CI should stop Gradle in its always-run cleanup step. An alternative split invocation uses **the same arguments** with `build-for-testing`, followed by `test-without-building` (set the result bundle path only for the latter). Do not call `test-without-building` against unrelated/stale DerivedData. No retries should hide a failed first acceptance run.
 
-## Verification status
+## Parent Apple CI execution
+
+Run `43558825991` at `d30f9e8ec7e60eafebb11d879923f04c48b468c0` built and launched the actual app, compiled the UI test target, and executed all **3 XCUITests: 3 failed**. Each failed the startup wait: `Neither native tabs nor the real onboarding action became available`. The revision still used the old application entry; the complete SwiftUI entry and page domains were not committed in this run. This is a genuine behavioral RED, not navigation acceptance. It closes the earlier test-target compilation/discovery uncertainty only.
+
+Evidence: `native/14_Execute real native navigation tests.txt` and the uploaded `NativeNavigation.xcresult` under `/home/hermes/.hermes/cache/scratch/nodyssey-ci-43558825991/`. The next integrated application must run these unchanged behavioral checks successfully; do not skip the startup assertion or replace the real root to obtain green.
+
+## Original delegated verification status
 
 Tests were written before adding the Xcode target. No behavioral RED/GREEN run is available on the delegated machine: Linux has no `xcodebuild`, and the approved remote Mac has Command Line Tools only. This is an explicit blocked runtime gate, not a successful TDD cycle. Parent CI must compile/link the complete app, discover all three XCUITests, execute them on the simulator and retain the actual result bundle before claiming native navigation acceptance.
 

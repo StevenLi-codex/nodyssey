@@ -66,21 +66,8 @@ jobs:
       - name: Compile Kotlin iOS bridge and native tests
         id: native_compile
         run: ./gradlew :iosapp:compileKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
-      - name: Execute Kotlin simulator behavior tests
-        run: |
-          ./gradlew :iosapp:iosSimulatorArm64Test
-          python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
-      - name: Build simulator app
-        id: simulator_build
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
-        run: |
-          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
-            build CODE_SIGNING_ALLOWED=NO
-      - name: Launch app in actual ARM simulator
-        id: simulator_launch
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
+      - name: Create shared disposable diagnostic simulator
+        id: simulator_device
         run: |
           python3 - <<'PY'
           import json, os, subprocess
@@ -96,14 +83,55 @@ jobs:
           udid = subprocess.check_output(['xcrun', 'simctl', 'create', 'Nodyssey-Native-Acceptance', device_type, runtime], text=True).strip()
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               env.write('SIMULATOR_UDID=' + udid + '\n')
+              env.write('SIMULATOR_NAME=' + phone['name'] + '\n')
           subprocess.run(['xcrun', 'simctl', 'boot', udid], check=True)
           subprocess.run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], check=True)
+          PY
+      - name: Execute Kotlin simulator behavior tests
+        run: |
+          ./gradlew :iosapp:iosSimulatorArm64Test -PiosTestDevice="$SIMULATOR_UDID"
+          python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
+      - name: Build simulator app
+        id: simulator_build
+        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
+        run: |
+          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
+            build CODE_SIGNING_ALLOWED=NO
+      - name: Compare same Kotlin SVG renderer inside the app host
+        id: svg_host_tests
+        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
+        run: |
+          xcodebuild test -project iosapp/Nodyssey.xcodeproj -scheme NativeSvgHostTests \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
+            -resultBundlePath "$RUNNER_TEMP/native-svg-host.xcresult" \
+            -only-testing:NativeSvgHostTests/NativeSvgHostTests/testSameKotlinRasterizerPreservesPixels \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/native-svg-host.xcresult" > "$RUNNER_TEMP/native-svg-host-summary.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['RUNNER_TEMP'] + '/native-svg-host-summary.json') as source:
+              report = json.load(source)
+          assert report['totalTestCount'] == 1, report
+          assert report['passedTests'] == 1 and report['failedTests'] == 0 and report['skippedTests'] == 0, report
+          assert report['result'] == 'Passed', report
+          print('Verified one executed same-Kotlin-renderer app-hosted pixel test')
+          PY
+      - name: Launch app in actual ARM simulator
+        id: simulator_launch
+        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          udid = os.environ['SIMULATOR_UDID']
           app = os.environ['RUNNER_TEMP'] + '/NodysseySimulator/Build/Products/Debug-iphonesimulator/Nodyssey.app'
           subprocess.run(['xcrun', 'simctl', 'install', udid, app], check=True)
           subprocess.run(['xcrun', 'simctl', 'launch', udid, 'io.github.nodyssey'], check=True)
           subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', os.environ['RUNNER_TEMP'] + '/nodyssey-launch.png'], check=True)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as report:
-              report.write('\nInstalled and launched on ' + phone['name'] + '. Launch alone is not full interaction/login acceptance.\n')
+              report.write('\nInstalled and launched on ' + os.environ['SIMULATOR_NAME'] + '. Launch alone is not full interaction/login acceptance.\n')
           PY
       - name: Execute real native navigation tests
         id: navigation_tests
@@ -154,6 +182,8 @@ jobs:
           name: nodyssey-swiftui-verification
           path: |
             ${{ runner.temp }}/nodyssey-launch.png
+            ${{ runner.temp }}/native-svg-host.xcresult
+            ${{ runner.temp }}/native-svg-host-summary.json
             ${{ runner.temp }}/NativeNavigation.xcresult
             ${{ runner.temp }}/native-navigation-summary.json
             **/NodysseyShell.framework/Headers/NodysseyShell.h

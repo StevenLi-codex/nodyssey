@@ -30,6 +30,24 @@ The patch observes existing branches, without changing results, deadlines or ret
 
 WebKit creation/load/PDF/cleanup remain on Main. Immutable PDF data alone crosses to Default; PDF copying, CoreGraphics rasterization and ImageIO encoding remain there. The shared mutex, cancellation checks, native release blocks and transparent/no-flip drawing are unchanged. The test still requires a non-null PNG, exact signature and dimensions, both asymmetric color samples and both transparent alpha samples, and completed Main cleanup. No skip, fallback acceptance or longer timeout was added.
 
+## Parent Apple diagnostic evidence
+
+Run `43558825991` at `d30f9e8ec7e60eafebb11d879923f04c48b468c0` compiled the diagnostic production/test sources on Apple and executed the unchanged SVG test. It failed, with this actual XML `system-out`:
+
+```text
+pipeline.enter main=false elapsedMs=0
+capture.enter main=true elapsedMs=2
+webview.create main=true elapsedMs=2
+navigation.request main=true elapsedMs=5878
+webview.cleaned main=true elapsedMs=8014
+capture.timeout main=true elapsedMs=8014
+pipeline.null main=false elapsedMs=8015
+```
+
+This establishes a capture-stage deadline cancellation in this run, with roughly 5.9 seconds spent before navigation was requested. No navigation-finished/failure callback or worker entry was recorded. It does not establish whether the standalone host or cold WebKit startup caused the stall. Main cleanup executed. The earlier test's shorter JUnit duration remains unsuitable for identifying the cause; the new monotonic trace supplies the evidence.
+
+Artifacts: `/home/hermes/.hermes/cache/scratch/nodyssey-ci-43558825991/artifacts/`. An app-hosted comparison invoking the same Kotlin renderer, fixture, timeout and pixel assertions is now being added. Neither increasing the timeout nor replacing/skipping the failing test is accepted as a fix.
+
 ## Ranked hypotheses and falsifying observations
 
 1. **Navigation / WebContent process failure in the standalone host.** Predicts a navigation failure/termination event before `navigation.finished`, and no `worker.enter`. Hosting is only a hypothesis until the callback error and a controlled app-hosted comparison support it.
