@@ -2,8 +2,9 @@ package io.github.nodyssey.ios.native
 
 import io.github.nodyssey.data.session.SessionState
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +12,7 @@ import kotlin.test.assertTrue
 
 class NativePlatformTest {
     @Test
-    fun `closing during seed never starts observer and publishes only after drain`() = runTest {
+    fun `closing during seed never starts observer and publishes only after drain`() = runBlocking {
         val seeded = CompletableDeferred<Unit>()
         val events = mutableListOf<String>()
         val lifecycle = NativeCookieLifecycle(
@@ -24,10 +25,10 @@ class NativePlatformTest {
             drain = { events += "drain" },
             publish = { events += "publish" },
         )
-        val opening = launch { assertFalse(lifecycle.open()) }
-        testScheduler.runCurrent()
-        val closing = launch { lifecycle.close() }
-        testScheduler.runCurrent()
+        // Undispatched starts establish both suspension points before releasing seed;
+        // no timing/sleep or undeclared kotlinx-coroutines-test dependency is required.
+        val opening = launch(start = CoroutineStart.UNDISPATCHED) { assertFalse(lifecycle.open()) }
+        val closing = launch(start = CoroutineStart.UNDISPATCHED) { lifecycle.close() }
         seeded.complete(Unit)
         opening.join()
         closing.join()

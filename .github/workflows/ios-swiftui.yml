@@ -122,6 +122,8 @@ jobs:
           name: nodyssey-swiftui-verification
           path: |
             ${{ runner.temp }}/nodyssey-launch.png
+            **/NodysseyShell.framework/Headers/NodysseyShell.h
+            **/NodysseyShell.framework/Modules/module.modulemap
             **/build/reports/tests/
             **/build/test-results/
           if-no-files-found: ignore
