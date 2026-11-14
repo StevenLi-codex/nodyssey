@@ -13,7 +13,9 @@ import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.autoreleasepool
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -44,6 +46,7 @@ import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.kCGPDFMediaBox
 import platform.Foundation.NSData
 import platform.Foundation.NSError
+import platform.Foundation.NSThread
 import platform.Foundation.base64EncodedStringWithOptions
 import platform.ImageIO.CGImageDestinationAddImage
 import platform.ImageIO.CGImageDestinationCreateWithData
@@ -60,6 +63,7 @@ import platform.darwin.NSObject
 import platform.posix.memcpy
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
+import kotlin.time.TimeSource
 
 /**
  * Draws an SVG the way the site's own readers see it, by asking WebKit.
@@ -102,26 +106,34 @@ internal class WebKitSvgRasterizer {
         intrinsic: SvgSize,
         widthPx: Int,
         heightPx: Int,
-    ): ByteArray? =
-        pipeline.render(
-            widthPx,
-            heightPx,
-            // WebKit init/load/PDF and finally cleanup all finish on Main. Only immutable PDF data
-            // crosses to the worker; even its copy to a Kotlin byte array happens off Main.
-            capture = { renderPdf(markup, intrinsic) },
-            rasterize = { pdf ->
-                val job = currentCoroutineContext()
-                job.ensureActive()
-                autoreleasepool {
-                    if (pdf.length > Int.MAX_VALUE.toULong()) return@autoreleasepool null
-                    pdf.toByteArray().toPng(widthPx, heightPx) { job.ensureActive() }
-                }
-            },
-        )
+        diagnostic: ((String) -> Unit)? = null,
+    ): ByteArray? {
+        val trace = RenderTrace(diagnostic)
+        return trace.stage("pipeline") {
+            pipeline.render(
+                widthPx,
+                heightPx,
+                // WebKit init/load/PDF and finally cleanup all finish on Main. Only immutable PDF data
+                // crosses to the worker; even its copy to a Kotlin byte array happens off Main.
+                capture = { trace.stage("capture") { renderPdf(markup, intrinsic, trace) } },
+                rasterize = { pdf ->
+                    trace.stage("worker") {
+                        val job = currentCoroutineContext()
+                        job.ensureActive()
+                        autoreleasepool {
+                            if (pdf.length > Int.MAX_VALUE.toULong()) return@autoreleasepool null
+                            pdf.toByteArray().toPng(widthPx, heightPx, trace) { job.ensureActive() }
+                        }
+                    }
+                },
+            )
+        }
+    }
 
     private suspend fun renderPdf(
         markup: ByteArray,
         intrinsic: SvgSize,
+        trace: RenderTrace,
     ): NSData? {
         if (!intrinsic.width.isFinite() || !intrinsic.height.isFinite() ||
             intrinsic.width <= 0f || intrinsic.height <= 0f
@@ -133,18 +145,21 @@ internal class WebKitSvgRasterizer {
         // pixels are decided when it is rasterised. The bitmap budget does not bound WebKit layout,
         // embedded image decoding, SVG filters, PDF data or encoder scratch allocations.
         val frame = CGRectMake(0.0, 0.0, intrinsic.width.toDouble(), intrinsic.height.toDouble())
+        trace.event("webview.create")
         val webView = offscreenWebView(frame)
         // Held for the length of the render: `navigationDelegate` is a weak reference, and a delegate
         // that only the web view knows about is deallocated before it is ever called back.
-        val delegate = LoadDelegate()
+        val delegate = LoadDelegate(trace)
         webView.navigationDelegate = delegate
         try {
             val page = wrapperPage(markup, intrinsic)
+            trace.event("navigation.request")
             if (!delegate.awaitLoad { webView.loadHTMLString(page, baseURL = null) }) return null
-            return printToPdf(webView, frame)
+            return printToPdf(webView, frame, trace)
         } finally {
             webView.stopLoading()
             webView.navigationDelegate = null
+            trace.event("webview.cleaned")
         }
     }
 
@@ -171,10 +186,12 @@ internal class WebKitSvgRasterizer {
     }
 
     /** The loaded page as a one-page PDF of exactly [frame], or null when WebKit refused. */
-    private suspend fun printToPdf(webView: WKWebView, frame: CValue<CGRect>): NSData? =
+    private suspend fun printToPdf(webView: WKWebView, frame: CValue<CGRect>, trace: RenderTrace): NSData? =
         suspendCancellableCoroutine { continuation ->
             val configuration = WKPDFConfiguration().apply { rect = frame }
-            webView.createPDFWithConfiguration(configuration) { data, _ ->
+            trace.event("pdf.request")
+            webView.createPDFWithConfiguration(configuration) { data, error ->
+                trace.event(if (data == null) "pdf.callback.null" else "pdf.callback.data", error)
                 if (continuation.isActive) continuation.resume(data)
             }
         }
@@ -186,24 +203,31 @@ internal class WebKitSvgRasterizer {
      * No flip: a bitmap context and a PDF page both put their origin in the bottom-left corner, and
      * the flip this had at first drew the card upside down.
      */
-    private fun ByteArray.toPng(widthPx: Int, heightPx: Int, checkActive: () -> Unit): ByteArray? =
+    private fun ByteArray.toPng(widthPx: Int, heightPx: Int, trace: RenderTrace, checkActive: () -> Unit): ByteArray? =
         usePinned { pinned ->
             checkActive()
+            trace.event("pdf.bytes")
             if (isEmpty()) return@usePinned null
+            trace.event("pdf.provider")
             val provider = CGDataProviderCreateWithData(null, pinned.addressOf(0), size.toULong(), null)
                 ?: return@usePinned null
+            trace.event("pdf.document")
             val document = CGPDFDocumentCreateWithProvider(provider)
             CGDataProviderRelease(provider)
             if (document == null) return@usePinned null
             try {
+                trace.event("pdf.page")
                 val page = CGPDFDocumentGetPage(document, 1u) ?: return@usePinned null
+                trace.event("pdf.bounds")
                 val box = CGPDFPageGetBoxRect(page, kCGPDFMediaBox)
                 val boxWidth = box.useContents { size.width }
                 val boxHeight = box.useContents { size.height }
                 if (!boxWidth.isFinite() || !boxHeight.isFinite() || boxWidth <= 0.0 || boxHeight <= 0.0) return@usePinned null
 
                 checkActive()
+                trace.event("bitmap.colorspace")
                 val colorSpace = CGColorSpaceCreateDeviceRGB() ?: return@usePinned null
+                trace.event("bitmap.context")
                 val context =
                     CGBitmapContextCreate(
                         data = null,
@@ -217,14 +241,16 @@ internal class WebKitSvgRasterizer {
                 CGColorSpaceRelease(colorSpace)
                 if (context == null) return@usePinned null
                 try {
+                    trace.event("bitmap.draw")
                     CGContextScaleCTM(context, widthPx / boxWidth, heightPx / boxHeight)
                     CGContextDrawPDFPage(context, page)
                     // Native drawing/encoding cannot be interrupted inside the call. Keep the gate
                     // until finally releases everything, and stop before starting the next stage.
                     checkActive()
+                    trace.event("bitmap.image")
                     val image = CGBitmapContextCreateImage(context) ?: return@usePinned null
                     try {
-                        encodePng(image, checkActive)
+                        encodePng(image, trace, checkActive)
                     } finally {
                         CGImageRelease(image)
                     }
@@ -237,21 +263,27 @@ internal class WebKitSvgRasterizer {
         }
 
     /** ImageIO encodes a task-local CGImage directly, without creating any UIKit object. */
-    private fun encodePng(image: CGImageRef, checkActive: () -> Unit): ByteArray? {
+    private fun encodePng(image: CGImageRef, trace: RenderTrace, checkActive: () -> Unit): ByteArray? {
         checkActive()
+        trace.event("png.buffer")
         val data = CFDataCreateMutable(null, 0) ?: return null
         try {
+            trace.event("png.type")
             val pngType = CFStringCreateWithCString(null, "public.png", kCFStringEncodingUTF8) ?: return null
             val destination = try {
+                trace.event("png.destination")
                 CGImageDestinationCreateWithData(data, pngType, 1u, null)
             } finally {
                 CFRelease(pngType)
             } ?: return null
             try {
+                trace.event("png.add_image")
                 CGImageDestinationAddImage(destination, image, null)
                 checkActive()
+                trace.event("png.finalize")
                 if (!CGImageDestinationFinalize(destination)) return null
                 checkActive()
+                trace.event("png.bytes")
                 val length = CFDataGetLength(data)
                 if (length <= 0 || length > Int.MAX_VALUE.toLong()) return null
                 return ByteArray(length.toInt()).apply {
@@ -291,7 +323,7 @@ internal class WebKitSvgRasterizer {
      * Every callback resumes it, because every one of them ends the wait: a document that failed to
      * load is one this renderer has nothing to draw, and the caller's fallback is the same either way.
      */
-    private class LoadDelegate :
+    private class LoadDelegate(private val trace: RenderTrace) :
         NSObject(),
         WKNavigationDelegateProtocol {
         private var pending: ((Boolean) -> Unit)? = null
@@ -306,7 +338,13 @@ internal class WebKitSvgRasterizer {
             }
 
         override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
+            trace.event("navigation.finished")
             pending?.invoke(true)
+        }
+
+        override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
+            // Observe only: do not change the existing deadline/fallback behavior during diagnosis.
+            trace.event("navigation.process_terminated")
         }
 
         // The two failures share a signature once Objective-C selectors are erased, which is what the
@@ -317,6 +355,7 @@ internal class WebKitSvgRasterizer {
             didFailNavigation: WKNavigation?,
             withError: NSError,
         ) {
+            trace.event("navigation.failed", withError)
             pending?.invoke(false)
         }
 
@@ -326,7 +365,40 @@ internal class WebKitSvgRasterizer {
             didFailProvisionalNavigation: WKNavigation?,
             withError: NSError,
         ) {
+            trace.event("navigation.provisional_failed", withError)
             pending?.invoke(false)
+        }
+    }
+
+    /** Opt-in test diagnostics; never export NSError descriptions/userInfo, URLs or markup. */
+    private class RenderTrace(private val diagnostic: ((String) -> Unit)?) {
+        private val started = TimeSource.Monotonic.markNow()
+
+        fun event(stage: String, error: NSError? = null) {
+            val sink = diagnostic ?: return
+            val failure = if (error == null) {
+                ""
+            } else {
+                val domain = when (error.domain) {
+                    "WKErrorDomain", "NSURLErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain" -> error.domain
+                    else -> "other"
+                }
+                " errorDomain=$domain errorCode=${error.code}"
+            }
+            sink("stage=$stage main=${NSThread.isMainThread} elapsedMs=${started.elapsedNow().inWholeMilliseconds}$failure")
+        }
+
+        suspend fun <T> stage(name: String, block: suspend () -> T?): T? {
+            event("$name.enter")
+            try {
+                return block().also { event(if (it == null) "$name.null" else "$name.ok") }
+            } catch (cancelled: TimeoutCancellationException) {
+                event("$name.timeout")
+                throw cancelled
+            } catch (cancelled: CancellationException) {
+                event("$name.cancelled")
+                throw cancelled
+            }
         }
     }
 }

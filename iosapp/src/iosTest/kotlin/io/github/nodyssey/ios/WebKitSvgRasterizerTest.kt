@@ -53,6 +53,8 @@ class WebKitSvgRasterizerTest {
                     SvgSize(8f, 8f),
                     16,
                     16,
+                    // Only fixed stage names, timing, thread and sanitized error codes; no SVG/URLs.
+                    diagnostic = { println("[svg-raster] $it") },
                 )
             }
             val deadline = NSDate.dateWithTimeIntervalSinceNow(15.0)
@@ -60,7 +62,10 @@ class WebKitSvgRasterizerTest {
                 NSRunLoop.mainRunLoop.runUntilDate(NSDate.dateWithTimeIntervalSinceNow(0.01))
             }
             assertTrue(render.isCompleted, "WebKit render did not finish")
-            val png = assertNotNull(runBlocking { render.await() })
+            val png = assertNotNull(
+                runBlocking { render.await() },
+                "SVG raster returned null; see [svg-raster] stages in standard output",
+            )
             assertEquals(listOf<Byte>(-119, 80, 78, 71, 13, 10, 26, 10), png.take(8))
             val image = assertNotNull(UIImage.imageWithData(png.toNSData()))
             val cgImage = assertNotNull(image.CGImage)
