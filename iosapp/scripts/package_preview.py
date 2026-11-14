@@ -17,7 +17,7 @@ assert info['CFBundleDisplayName'] == 'Nodyssey Preview'
 assert 'iPhoneOS' in info['CFBundleSupportedPlatforms']
 executable = app / info['CFBundleExecutable']
 assert executable.is_file() and executable.stat().st_size > 0
-subprocess.run(['xcrun', 'lipo', '-verify_arch', 'arm64', str(executable)], check=True)
+subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
 assert not (app / 'embedded.mobileprovision').exists(), 'Unexpected provisioned application'
 assert not list(app.rglob('*.entitlements')), 'Unexpected shared/keychain entitlements'
 payload = output / 'Payload'
