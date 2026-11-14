@@ -20,15 +20,23 @@ import kotlin.uuid.Uuid
 
 class NativeSettingsPersistenceTest {
     @Test
-    fun unimplementedWifiImageControlDoesNotPretendToSave() = runBlocking {
+    fun imageCapabilitiesMatchTheNativePlatformWithoutInventingOtherSupport() {
+        val capabilities = settingsCapabilities(offlineAvailable = true, networkDiagnosticsAvailable = false)
+        assertEquals("true", capabilities["imagesOnWifiOnly"].toString())
+        assertEquals("true", capabilities["offlineImageReading"].toString())
+        assertEquals("false", capabilities["networkDiagnostics"].toString())
+        assertEquals("false", capabilities["notificationPolling"].toString())
+    }
+
+    @Test
+    fun wifiImageControlPersistsTheSettingConsumedByNativePlatform() = runBlocking {
         val path = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "native-settings-${Uuid.random()}.preferences_pb"
         val job = SupervisorJob()
         try {
             val repository = SettingsRepository(PreferenceDataStoreFactory.createWithPath(scope = CoroutineScope(job + Dispatchers.Default), produceFile = { path }))
-            val error = assertFailsWith<NativeFailure> {
-                settingsApply(repository, Json.parseToJsonElement("{\"key\":\"imagesOnWifiOnly\",\"value\":true}").jsonObject)
-            }
-            assertEquals("UNSUPPORTED_SETTING", error.code)
+            settingsApply(repository, Json.parseToJsonElement("{\"key\":\"imagesOnWifiOnly\",\"value\":true}").jsonObject)
+            assertEquals(true, repository.settings.first().imagesOnWifiOnly)
+            settingsApply(repository, Json.parseToJsonElement("{\"key\":\"imagesOnWifiOnly\",\"value\":false}").jsonObject)
             assertEquals(false, repository.settings.first().imagesOnWifiOnly)
         } finally {
             job.cancelAndJoin()
@@ -45,6 +53,7 @@ class NativeSettingsPersistenceTest {
             val first = repository()
             settingsApply(first, Json.parseToJsonElement("{\"key\":\"appLanguage\",\"value\":\"ENGLISH\"}").jsonObject)
             settingsApply(first, Json.parseToJsonElement("{\"key\":\"fontScale\",\"value\":100}").jsonObject)
+            settingsApply(first, Json.parseToJsonElement("{\"key\":\"imagesOnWifiOnly\",\"value\":true}").jsonObject)
             assertFailsWith<IllegalArgumentException> {
                 settingsApply(first, Json.parseToJsonElement("{\"key\":\"appLanguage\",\"value\":\"invalid\"}").jsonObject)
             }
@@ -53,6 +62,7 @@ class NativeSettingsPersistenceTest {
             val reloaded = repository().settings.first()
             assertEquals(AppLanguage.ENGLISH, reloaded.appLanguage)
             assertEquals(SettingsRepository.MAX_FONT_SCALE, reloaded.fontScale)
+            assertEquals(true, reloaded.imagesOnWifiOnly)
         } finally {
             job.cancelAndJoin()
             FileSystem.SYSTEM.delete(path, mustExist = false)

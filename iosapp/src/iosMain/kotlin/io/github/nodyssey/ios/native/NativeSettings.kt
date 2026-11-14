@@ -146,7 +146,9 @@ private suspend fun NativeContext.settingsDispatch(operation: String, args: Json
             return settingsObject("host" to result.host, "addresses" to result.addresses, "elapsedMillis" to result.elapsedMillis)
         }
 
-        "network.diagnostics", "imageHost.login", "settings.changelog", "settings.crashReport" -> throw NativeFailure("UNSUPPORTED")
+        "settings.changelog" -> return releaseNotesRequest(args)
+
+        "network.diagnostics", "imageHost.login", "settings.crashReport" -> throw NativeFailure("UNSUPPORTED")
 
         "imageHost.get" -> return imageHostFlow(args).first()
 
@@ -479,6 +481,8 @@ internal suspend fun settingsApply(repository: SettingsRepository, args: JsonObj
 
         "einkMode" -> repository.setEinkMode(args.settingsBoolean("value"))
 
+        "imagesOnWifiOnly" -> repository.setImagesOnWifiOnly(args.settingsBoolean("value"))
+
         "stickerUniformSize" -> repository.setStickerUniformSize(args.settingsBoolean("value"))
 
         "stickerSize" -> repository.setStickerSize(args.settingsInt("value"))
@@ -506,12 +510,14 @@ internal suspend fun settingsApply(repository: SettingsRepository, args: JsonObj
     }
 }
 
-private fun NativeContext.settingsCapabilities(): JsonObject = settingsObject(
-    "offline" to graph.offlineLibrary.isAvailable, "networkDiagnostics" to (graph.networkDiagnostics != null),
+private fun NativeContext.settingsCapabilities(): JsonObject = settingsCapabilities(graph.offlineLibrary.isAvailable, graph.networkDiagnostics != null)
+
+internal fun settingsCapabilities(offlineAvailable: Boolean, networkDiagnosticsAvailable: Boolean): JsonObject = settingsObject(
+    "offline" to offlineAvailable, "networkDiagnostics" to networkDiagnosticsAvailable,
     "notificationPolling" to false, "appUpdates" to false, "wallpaperColors" to false,
     "clipboardPostPrompt" to false, "imageHostPasswordLogin" to false,
-    "imagesOnWifiOnly" to false, "releaseNotes" to false, "crashReports" to false,
-    "offlineImageReading" to false,
+    "imagesOnWifiOnly" to true, "releaseNotes" to true, "crashReports" to false,
+    "offlineImageReading" to true,
     "imageHosts" to ImageHostProvider.entries.map { settingsObject("provider" to it, "needsSiteUrl" to it.needsSiteUrl, "browsable" to it.browsable, "connectionTest" to it.browsable) },
     "retentionChoices" to OfflineSettings.RETENTION_CHOICES,
 )
