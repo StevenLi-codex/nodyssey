@@ -9,7 +9,14 @@ source = root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/native/Preview
 assert source.exists(), 'Missing production guest gate: account operations currently reach repositories'
 cache = Path.home() / '.gradle/caches/modules-2/files-2.1'
 def jar(group, name, version):
-    return str(next((cache / group / name / version).glob('*/*.jar')))
+    exact = list((cache / group / name / version).glob('*/*.jar'))
+    # The compiler's coroutine runtime can differ from the application's pinned runtime
+    # on a Native-only runner; the policy itself uses no coroutine API.
+    if not exact and name == 'kotlinx-coroutines-core-jvm':
+        exact = list((cache / group / name).glob('*/*/*.jar'))
+    if not exact:
+        raise RuntimeError(f'Missing compiler dependency: {group}:{name}:{version}')
+    return str(sorted(exact)[0])
 cp = ':'.join([jar('org.jetbrains.kotlin', 'kotlin-stdlib', '2.4.20'), jar('org.jetbrains', 'annotations', '23.0.0'), jar('org.jetbrains.kotlinx', 'kotlinx-coroutines-core-jvm', '1.11.0')])
 compiler = jar('org.jetbrains.kotlin', 'kotlin-compiler-embeddable', '2.4.20')
 tests = '''package io.github.nodyssey.ios.native
