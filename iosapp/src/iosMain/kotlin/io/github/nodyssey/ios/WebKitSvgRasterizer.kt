@@ -14,9 +14,7 @@ import kotlinx.cinterop.autoreleasepool
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -25,11 +23,7 @@ import platform.CoreFoundation.CFDataCreateMutable
 import platform.CoreFoundation.CFDataGetBytePtr
 import platform.CoreFoundation.CFDataGetLength
 import platform.CoreFoundation.CFRelease
-import platform.CoreFoundation.CFRunLoopGetMain
-import platform.CoreFoundation.CFRunLoopPerformBlock
-import platform.CoreFoundation.CFRunLoopWakeUp
 import platform.CoreFoundation.CFStringCreateWithCString
-import platform.CoreFoundation.kCFRunLoopCommonModes
 import platform.CoreFoundation.kCFStringEncodingUTF8
 import platform.CoreGraphics.CGBitmapContextCreate
 import platform.CoreGraphics.CGBitmapContextCreateImage
@@ -67,7 +61,6 @@ import platform.WebKit.WKWebViewConfiguration
 import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
 import platform.posix.memcpy
-import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 import kotlin.time.TimeSource
@@ -99,18 +92,7 @@ import kotlin.time.TimeSource
  * must not have twenty web views alive at once, and each of these is a process.
  */
 internal class WebKitSvgRasterizer {
-    private val pipeline = SvgRasterPipeline(WebKitMainRunLoop, Dispatchers.Default)
-
-    // WebKit can enter a nested native run loop during initialization. Unlike a GCD Main
-    // callback, a CF run-loop block leaves the main dispatch queue available to that loop.
-    // This dispatch (and initialization itself) remains inside the pipeline's deadline.
-    private object WebKitMainRunLoop : CoroutineDispatcher() {
-        override fun dispatch(context: CoroutineContext, block: Runnable) {
-            val main = CFRunLoopGetMain()
-            CFRunLoopPerformBlock(main, kCFRunLoopCommonModes) { block.run() }
-            CFRunLoopWakeUp(main)
-        }
-    }
+    private val pipeline = SvgRasterPipeline(Dispatchers.Main, Dispatchers.Default)
 
     /**
      * Renders [markup] into PNG bytes [widthPx] × [heightPx], or null when it could not be done — a
