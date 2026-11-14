@@ -10,7 +10,7 @@ This isolated branch starts from verified simulator-built snapshot `47c7ae5324cf
 
 ## Artifact and installation
 
-The separate `ios-preview.yml` workflow archives the real ARM64 device application with Xcode, checks its identity and packages `nodyssey-preview-unsigned.ipa`. A successful archive is **not** full acceptance. The existing full verification workflow is unchanged.
+The separate `ios-preview.yml` workflow archives the real ARM64 device application with Xcode (Debug configuration: the first Release Kotlin/Native link exceeded the 3 GB heap), checks its identity and packages `nodyssey-preview-unsigned.ipa`. A successful archive is **not** full acceptance. The existing full verification workflow is unchanged.
 
 Use your own IPA signing service to sign the IPA (and embedded frameworks if required). Preserve the preview bundle ID or use another unique ID, never the main app ID. Install the resulting signed IPA on a provisioned compatible iPhone. This build has not been physically installed by CI and does not contain an Apple signing identity or provisioning profile.
 
