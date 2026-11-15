@@ -116,3 +116,39 @@ https://github.com/emilkowalski/skills/blob/main/skills/apple-design/SKILL.md
 
 Build62 evidence: `nodyssey-thread62-delivery.json`, `nodyssey-thread62-*-tests.log`,
 `nodyssey-thread62-typecheck.log`, and `nodyssey-thread62-renders/` in Hermes scratch.
+
+## Build 63: opening-post composition and one reply surface
+
+Primary surface remains **Inspect**; the approved feed/profile are unchanged.
+
+- The opening post now has its own title-first header: complete wrapping semantic title2
+  semibold text, compact author/time metadata, then body and signature on the same leading
+  edge. Replies remain titleless. Server badges/edited time belong to metadata rather than
+  an isolated line interrupting title/body. Original-poster metadata is not repeated.
+- `NativeRichText` uses SwiftUI Text and a media-only native Layout, not a UITextView or
+  UIViewRepresentable. No evidence justifies a UIKit intrinsic-height workaround. Body
+  typography, selection, links, recursive code/quote rendering and build62 signature roles
+  remain unchanged. No artificial minimum body height or empty spacer is introduced.
+- Only `ContentPostDetail` sets the iOS 16 native tab-bar visibility preference to hidden.
+  Its existing safe-area inset now contains one full-width native-material reply entry,
+  without a bordered inner field or added divider. Material fills the bottom system safe
+  area; Reduce Transparency/increased contrast use an opaque system background. The
+  existing guest/login, loaded-thread and quote guards remain authoritative; entry never
+  sends a comment. No root/keyboard/safe-area override or tab-height constant is added.
+- Scoped tab visibility is structurally attached to a navigation destination under each
+  root NavigationStack/TabView, not mutated globally. Return-to-root behavior, iPhone bottom
+  safe area, keyboard, VoiceOver and iOS Dynamic Type remain runtime acceptance checks:
+  the available Mac has CLT only and no simctl. The device archive is a compile/link gate,
+  not a simulator screenshot or installed-device test.
+- Focused macOS Content composition suite: 32 tests reported passed (one optional existing
+  repository replay skipped); Editor: 38 passed. CLT production SwiftUI typecheck passed.
+  Disposable production-composition renders include the exact short-post text supplied by
+  the user plus longer content, light/dark at 320/390pt and end-of-scroll. Nine inherited
+  signature-role probes still pass. macOS accessibility captures do not exercise iOS metrics.
+- No auth/storage/Kotlin/NativeAppModel/route-contract/editor changes; paging, read position,
+  floor IDs, share/bookmark, quote context and spend confirmation remain unchanged. The
+  build-only workflow changes only build 62→63 and still archives the normal Debug iPhone
+  application, bundle `io.github.nodyssey`, without full/SVG suite execution.
+
+Build63 evidence and remaining verification limits are recorded in
+`nodyssey-thread63-delivery.json` and `nodyssey-thread63-*` in Hermes scratch.

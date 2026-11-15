@@ -96,6 +96,8 @@ struct ContentPostDetail: View {
         }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        // Destination-scoped preference: the root tab bar returns when this detail is popped.
+        .toolbar(.hidden, for: .tabBar)
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -169,34 +171,18 @@ struct ContentPostDetail: View {
     @ViewBuilder private func floor(_ value: JSONValue, page: Int64, opening: Bool) -> some View {
         let identity = value.nativeString("floor") ?? (opening ? "#0" : value.nativeInt("commentId").map(String.init) ?? "unknown")
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                Button {
-                    if let uid = value.nativeInt("authorUid") { app.open("UserSpace", ["uid": .integer(uid)]) }
-                } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        ContentAvatar(value: value)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(value.nativeString("authorName") ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                            if let time = value.nativeString("createdAtText") { Text(time).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }.frame(minHeight: 44, alignment: .topLeading).contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(value.nativeInt("authorUid") == nil)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    if let label = value.nativeString("floor") { Text(label).foregroundStyle(.secondary) }
-                    if value.nativeBool("isOriginalPoster") == true {
-                        Text(String(localized: "content.originalPoster", table: "Content")).foregroundStyle(.tint)
-                    }
-                }.font(.caption)
-            }
-            if opening { Text(thread.value.nativeString("title") ?? "").font(.headline).textSelection(.enabled) }
-            if !value.nativeArray("badges").isEmpty {
-                Text(value.nativeArray("badges").compactMap(\.string).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-            }
-            if value.nativeBool("isEdited") == true {
-                HStack {
-                    Text(String(localized: "content.edited", table: "Content")); Text(value.nativeString("editedAtText") ?? "")
-                }.font(.caption).foregroundStyle(.secondary)
+            if opening {
+                // The opening post is an article, not a comment with a title inserted into it.
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(thread.value.nativeString("title") ?? "")
+                        .font(.title2.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled).accessibilityAddTraits(.isHeader)
+                    authorMetadata(value, compact: true)
+                }
+            } else {
+                authorMetadata(value, compact: false)
             }
             if value.nativeBool("isBlocked") == true && !expanded.contains(identity) {
                 Button(String(localized: "content.revealBlocked", table: "Content")) { expanded.insert(identity) }
@@ -255,6 +241,40 @@ struct ContentPostDetail: View {
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         .listRowSeparator(.hidden).listRowBackground(ContentThreadCanvas())
         .onAppear { visibleTarget = ContentReadingTarget(floor: value.nativeString("floor"), page: page) }
+    }
+    private func authorMetadata(_ value: JSONValue, compact: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                if let uid = value.nativeInt("authorUid") { app.open("UserSpace", ["uid": .integer(uid)]) }
+            } label: {
+                HStack(alignment: .center, spacing: 8) {
+                    ContentAvatar(value: value, size: compact ? 28 : 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(value.nativeString("authorName") ?? "")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        if let time = value.nativeString("createdAtText") {
+                            Text(time).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if value.nativeBool("isEdited") == true {
+                            Text(String(localized: "content.edited", table: "Content") + " " + (value.nativeString("editedAtText") ?? ""))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }.frame(minHeight: 44, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(value.nativeInt("authorUid") == nil)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 3) {
+                if let label = value.nativeString("floor") { Text(label) }
+                if value.nativeBool("isOriginalPoster") == true {
+                    Text(String(localized: "content.originalPoster", table: "Content"))
+                }
+                // Keep other server badges, without repeating the localized OP label.
+                let badges = value.nativeArray("badges").compactMap(\.string).filter {
+                    value.nativeBool("isOriginalPoster") != true || $0 != String(localized: "content.originalPoster", table: "Content")
+                }
+                if !badges.isEmpty { Text(badges.joined(separator: " · ")) }
+            }.font(.caption).foregroundStyle(.secondary)
+        }
     }
     private func reactionButton(_ action: String, field: String, count: String, symbol: String, value: JSONValue, commentID: Int64, page: Int64, opening: Bool) -> some View {
         let spent = value["reactions"]?.nativeBool(field) == true
@@ -351,22 +371,26 @@ private struct ContentThreadCanvas: View {
 
 /// An editor entry, not a text field or send button. The system owns keyboard/tab safe areas.
 struct ContentDirectReplyBar: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let enabled: Bool
     var reply: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            Button(action: reply) {
-                Label(String(localized: "content.writeComment", table: "Content"), systemImage: "square.and.pencil")
-                    .font(.body).labelStyle(.titleAndIcon)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .padding(.horizontal, 14).padding(.vertical, 2)
-                    .contentShape(Rectangle())
+        Button(action: reply) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.and.pencil").foregroundStyle(.tint)
+                Text(String(localized: "content.writeComment", table: "Content"))
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.bordered).foregroundStyle(.primary).disabled(!enabled)
+            .font(.body).foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(.horizontal, 16).padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .background(ContentSurface())
+        .buttonStyle(.plain).disabled(!enabled)
+        .background(reduceTransparency || contrast == .increased
+            ? AnyShapeStyle(.background)
+            : AnyShapeStyle(.regularMaterial))
     }
 }
