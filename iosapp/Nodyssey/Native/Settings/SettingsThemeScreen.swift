@@ -51,8 +51,10 @@ struct SettingsThemeScreen: View {
                     var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
                     if UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) {
                         hex = String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+                    } else {
+                        action.failure = NativeFailure(code: "INVALID_DATA", message: "Could not convert selected color")
                     }
-                }), supportsOpacity: false)
+                }), supportsOpacity: false).disabled(action.busy)
                 PhotosPicker(selection: $photo, matching: .images) { Text("settings_seed_pick_from_image") }
                 if let preview {
                     Image(uiImage: preview).resizable().scaledToFit().frame(maxHeight: 240)

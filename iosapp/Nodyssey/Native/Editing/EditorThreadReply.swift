@@ -79,6 +79,13 @@ private struct EditorReplySheet: View {
     @State private var panel: EditorPanel?
     @State private var photos = false
     @State private var emoji = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var selectedDetent: PresentationDetent = .height(240)
+    private var expanded: Bool { dynamicTypeSize.isAccessibilitySize || selectedDetent == .large }
+    private var detentSelection: Binding<PresentationDetent> {
+        Binding(get: { dynamicTypeSize.isAccessibilitySize ? .large : selectedDetent },
+                set: { selectedDetent = $0 })
+    }
     private var session: EditorSession { model.session }
     private var canPublish: Bool {
         model.ready && !session.busy && !session.accepted && session.pendingRestore == nil && model.attachments.isEmpty && !session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -126,7 +133,9 @@ private struct EditorReplySheet: View {
                         else { ProgressView() }
                     }
                     MarkedTextEditor(buffer: Binding(get: { session.body }, set: session.changeBody), focus: model.focus, accessibilityLabel: EL("body"), autofocus: model.ready && owner.initialFocusAllowed)
-                        .frame(minHeight: 80, idealHeight: 160, maxHeight: 260)
+                        // Match the original reply's bounded editor, not a half-page empty field.
+                        // Dragging the sheet larger gives long replies more room; UITextView still scrolls.
+                        .frame(height: expanded ? 260 : 80)
                         .simultaneousGesture(TapGesture().onEnded { emoji = false })
                     attachments
                     if session.accepted { Text(EL("acceptedDetail")).font(.caption) }
@@ -148,8 +157,9 @@ private struct EditorReplySheet: View {
         .disabled(owner.closing || app.departureRunning || session.busy)
         .interactiveDismissDisabled(true)
         .background(EditorReplyDismissAttempt(onAttempt: close))
-        .presentationDetents([.height(430), .large])
+        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height(240), .large], selection: detentSelection)
         .presentationDragIndicator(.visible)
+        .onChange(of: emoji) { if $0 { selectedDetent = .large } }
         .sheet(item: $panel) { panel in NavigationStack { EditorPanelView(panel: panel, model: model) } }
         .sheet(isPresented: $photos) { EditorPhotoPicker(model: model) }
         .onDisappear { model.focus.handoff {} }

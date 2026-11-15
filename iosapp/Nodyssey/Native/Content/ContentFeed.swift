@@ -41,8 +41,7 @@ struct ContentPostList: View {
                 .menuStyle(.borderlessButton)
                 #endif
                 .menuIndicator(.hidden).fixedSize()
-                .background(ContentSurface())
-            }.background(ContentSurface())
+            }.background(ContentBoardNavigationBackground())
             Divider()
 
             ContentStoreStatus(store: categories) { retry += 1 }
@@ -128,6 +127,14 @@ struct ContentPostList: View {
     }
 }
 
+/// A translucent tint over the native surface keeps arbitrary custom seeds readable.
+private struct ContentBoardNavigationBackground: View {
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        ContentSurface().overlay { Rectangle().fill(.tint.opacity(scheme == .dark ? 0.16 : 0.08)) }
+    }
+}
+
 /// Board selection remains bound to the canonical feed/paging arguments.
 struct ContentBoardTabs: View {
     let categories: JSONValue
@@ -148,6 +155,9 @@ struct ContentBoardTabs: View {
             Text(title).font(.subheadline.weight(selection == slug ? .semibold : .regular))
                 .foregroundStyle(selection == slug ? Color.primary : Color.secondary)
                 .frame(minWidth: 44, minHeight: 44)
+                .overlay(alignment: .bottom) {
+                    if selection == slug { Capsule().fill(.tint).frame(height: 3) }
+                }
         }
         .buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
     }

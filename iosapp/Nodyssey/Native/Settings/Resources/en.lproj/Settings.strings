@@ -14,7 +14,7 @@
 "native_settings_cache_confirmation" = "Clear post and image caches without removing bookmarks. This cannot be undone.";
 "native_settings_photo_eyedropper" = "Open Edit, then use the system eyedropper to sample the image above. The image stays in this screen’s memory and is never uploaded.";
 "native_settings_photo_failed" = "Could not read the selected image. Choose it again.";
-"native_settings_custom_source_hint" = "Saving a color does not change its source. Select Custom to use it. Edit a saved theme’s name here and save again to rename it.";
+"native_settings_custom_source_hint" = "Save applies this color and selects Custom. Selecting a saved theme applies it too. To keep or rename a theme without applying it, use Save theme.";
 "native_settings_wallpaper_limit" = "iOS provides no public API for system wallpaper colors or Monet palettes. No fabricated candidates or inactive auto-update switch are offered. Choose a custom color or sample a photo in Theme.";
 "native_settings_secret_preserved" = "A password is stored. Leaving it untouched preserves it; typing replaces it. Clear removes it when you save.";
 "native_settings_clear_password" = "Clear stored password on save";

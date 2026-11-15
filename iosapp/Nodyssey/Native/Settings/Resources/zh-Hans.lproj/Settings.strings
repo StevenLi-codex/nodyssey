@@ -14,7 +14,7 @@
 "native_settings_cache_confirmation" = "清除帖子与图片缓存，不会取消收藏。此操作无法撤销。";
 "native_settings_photo_eyedropper" = "点“编辑”打开系统取色器，再用滴管选取上方图片的颜色。图片仅留在本页内存，不会上传。";
 "native_settings_photo_failed" = "无法读取所选图片，请重新选择。";
-"native_settings_custom_source_hint" = "保存颜色不会改变配色来源；选择“自定义”后使用该颜色。主题名称可在此修改后再次保存。";
+"native_settings_custom_source_hint" = "保存后会应用此颜色并切换至“自定义”；点选已存主题也会直接应用。仅收藏或重命名而不应用，请用“保存主题”。";
 "native_settings_wallpaper_limit" = "iOS 不提供读取系统壁纸颜色与 Monet 调色板的公开接口。本页不会生成虚假的壁纸候选，也不会保存无效的自动更新开关。可在主题页自行选择颜色或从照片取色。";
 "native_settings_secret_preserved" = "已保存密码；不编辑则保留。输入新密码将替换，清除按钮会在保存时删除密码。";
 "native_settings_clear_password" = "清除已保存密码（保存后生效）";

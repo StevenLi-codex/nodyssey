@@ -10,13 +10,24 @@ final class SettingsAction: ObservableObject {
 
     func run(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:],
              receive: @escaping (JSONValue) -> Void = { _ in }) {
+        runReadback(app, operation, arguments, readback: { $0 }, receive: receive)
+    }
+
+    private func runReadback(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue],
+                             readback: @escaping (JSONValue) async throws -> JSONValue,
+                             receive: @escaping (JSONValue) -> Void) {
         guard let token = gate.begin() else { return }
         busy = true
         failure = nil
         let generation = app.generation
         task = Task { @MainActor in
             do {
-                let result = try await app.request(operation, arguments)
+                try Task.checkCancellation()
+                guard generation == app.generation else { throw CancellationError() }
+                var result = try await app.request(operation, arguments)
+                try Task.checkCancellation()
+                guard generation == app.generation else { throw CancellationError() }
+                result = try await readback(result)
                 guard gate.finish(token) else { return }
                 busy = false
                 guard !Task.isCancelled, generation == app.generation else { return }
@@ -37,7 +48,35 @@ final class SettingsAction: ObservableObject {
         failure = nil
     }
     func setting(_ app: NativeAppModel, _ key: String, _ value: JSONValue) {
-        run(app, "settings.set", ["key": .string(key), "value": value]) { app.settings = $0 }
+        let themeKeys = ["seedColor", "presetId", "colorSource", "themeMode", "paletteStyle"]
+        guard themeKeys.contains(key) else {
+            run(app, "settings.set", ["key": .string(key), "value": value]) { app.settings = $0 }
+            return
+        }
+        let generation = app.generation
+        runReadback(app, "settings.set", ["key": .string(key), "value": value], readback: { receipt in
+            guard receipt[key] == value else {
+                throw NativeFailure(code: "INVALID_DATA", message: "Theme preference was not persisted")
+            }
+            // The shared repository deliberately retains a seed/preset independently
+            // of its source. Choosing one in this screen means applying it as well.
+            let source = key == "seedColor" ? "CUSTOM" : key == "presetId" ? "PRESET" : nil
+            if let source, receipt["colorSource"]?.string != source {
+                try Task.checkCancellation()
+                guard generation == app.generation else { throw CancellationError() }
+                let selected = try await app.request("settings.set", ["key": .string("colorSource"), "value": .string(source)])
+                guard selected["colorSource"]?.string == source else {
+                    throw NativeFailure(code: "INVALID_DATA", message: "Theme source was not persisted")
+                }
+            }
+            try Task.checkCancellation()
+            guard generation == app.generation else { throw CancellationError() }
+            let snapshot = try await app.request("settings.get")
+            guard snapshot[key] == value, source == nil || snapshot["colorSource"]?.string == source else {
+                throw NativeFailure(code: "INVALID_DATA", message: "Theme readback did not match selection")
+            }
+            return snapshot
+        }) { app.settings = $0 }
     }
 }
 

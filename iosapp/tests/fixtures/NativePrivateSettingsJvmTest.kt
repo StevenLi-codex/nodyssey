@@ -236,6 +236,55 @@ class NativePrivateSettingsJvmTest {
     }
 
     @Test
+    fun selectedNativeColorsObserveAndSurviveReopeningWithSignedArgb() = runBlocking {
+        val fixture = Fixture()
+        val received = Channel<JsonElement>(Channel.UNLIMITED)
+        var observer: kotlinx.coroutines.Job? = null
+        val reopenedJob = SupervisorJob()
+        try {
+            observer = launch {
+                fixture.context.settingsObserve("settings.observe", JsonObject(emptyMap()))!!.collect { received.send(it) }
+            }
+            withTimeout(3000) { received.receive() }
+            suspend fun write(key: String, value: Any) = fixture.context.settingsRequest("settings.set", settingsObject("key" to key, "value" to value))!!.jsonObject
+            for (mode in listOf("SYSTEM", "LIGHT", "DARK")) {
+                assertEquals(mode, write("themeMode", mode).settingsString("themeMode"))
+            }
+            // Same two one-field requests used by the real native color action.
+            assertEquals(-65536, write("seedColor", -65536).settingsInt("seedColor"))
+            assertEquals("CUSTOM", write("colorSource", "CUSTOM").settingsString("colorSource"))
+            val live = withTimeout(3000) {
+                var value = received.receive().jsonObject
+                while (value.settingsString("colorSource") != "CUSTOM") value = received.receive().jsonObject
+                value
+            }
+            assertEquals(-65536, live.settingsInt("seedColor"))
+            assertEquals("DARK", live.settingsString("themeMode"))
+            assertEquals("reimu", write("presetId", "reimu").settingsString("presetId"))
+            assertEquals("PRESET", write("colorSource", "PRESET").settingsString("colorSource"))
+            // Repository's signed Int32 contract must reject unsigned/overflow JSON,
+            // never silently truncate an Int64 at the native boundary.
+            kotlin.test.assertFailsWith<IllegalArgumentException> { write("seedColor", 4294901760L) }
+            observer.cancelAndJoin()
+            fixture.job.cancelAndJoin()
+            val store = PreferenceDataStoreFactory.createWithPath(
+                scope = CoroutineScope(reopenedJob + Dispatchers.Default),
+                produceFile = { fixture.directory.resolve("settings.preferences_pb").path.toPath() },
+            )
+            val reopened = SettingsRepository(store).settings.first().settingsJson(false)
+            assertEquals(-65536, reopened.settingsInt("seedColor"))
+            assertEquals("PRESET", reopened.settingsString("colorSource"))
+            assertEquals("reimu", reopened.settingsString("presetId"))
+            assertEquals("DARK", reopened.settingsString("themeMode"))
+        } finally {
+            observer?.cancelAndJoin()
+            reopenedJob.cancelAndJoin()
+            fixture.close()
+            received.close()
+        }
+    }
+
+    @Test
     fun unknownPublicMutationRemainsUsableAndItsResponseIsRedacted() = runBlocking {
         val fixture = Fixture()
         try {

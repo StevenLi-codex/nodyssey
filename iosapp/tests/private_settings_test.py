@@ -49,7 +49,7 @@ for group in ['androidx.datastore', 'androidx.paging', 'com.squareup.okio',
               'androidx.collection', 'androidx.compose.runtime', 'org.jetbrains.compose.runtime']:
     jars += list((cache / group).rglob('*.jar'))
 for module in ['shared', 'richtext', 'ui', 'designsys']:
-    jar = root / f'{module}/build/libs/{module}-jvm.jar'
+    jar = Path(os.environ.get('SETTINGS_REPOSITORY_JARS', str(root))) / f'{module}/build/libs/{module}-jvm.jar'
     if not jar.is_file():
         raise SystemExit(f'Missing real repository jar: {jar}')
     # Concurrent Gradle owners may replace a jar while Kotlin mmap reads it.
@@ -66,9 +66,12 @@ cp = ':'.join(map(str, jars))
 main = root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/native'
 common = root / 'shared/src/commonMain/kotlin'
 # Graph getter signatures come from the actual iOS graph, not guessed interfaces.
-graph_source = (main.parent / 'IosAppContainer.kt').read_text()
+graph_source = (root / 'ui/src/commonMain/kotlin/io/github/nodyssey/di/AppContainer.kt').read_text()
 imports = {x.rsplit('.', 1)[-1]: x for x in re.findall(r'^import (.*)$', graph_source, re.M)}
-props = dict(re.findall(r'override val (\w+): ([\w<>?]+)', graph_source))
+props = dict(re.findall(r'val (\w+): ([\w.<>?]+)', graph_source))
+# Preserve concrete Apple refinements (notably non-null DohSupport).
+apple_source = (main.parent / 'IosAppContainer.kt').read_text()
+props.update(dict(re.findall(r'override val (\w+): ([\w.<>?]+)', apple_source)))
 source = (main / 'NativeSettings.kt').read_text()
 names = sorted(set(re.findall(r'graph\.(\w+)', source)) - {'privateBoundary'})
 lines = ['package io.github.nodyssey.ios']

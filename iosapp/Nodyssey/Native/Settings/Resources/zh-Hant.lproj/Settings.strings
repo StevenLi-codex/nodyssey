@@ -14,7 +14,7 @@
 "native_settings_cache_confirmation" = "清除帖子與圖片快取，不會取消收藏。此操作無法復原。";
 "native_settings_photo_eyedropper" = "點「編輯」開啟系統取色器，再用滴管選取上方圖片的顏色。圖片僅留在本頁記憶體，不會上傳。";
 "native_settings_photo_failed" = "無法讀取所選圖片，請重新選擇。";
-"native_settings_custom_source_hint" = "儲存顏色不會改變配色來源；選擇「自訂」後使用該顏色。主題名稱可在此修改後再次儲存。";
+"native_settings_custom_source_hint" = "儲存後會套用此顏色並切換至「自訂」；點選已存主題也會直接套用。僅收藏或重新命名而不套用，請用「儲存主題」。";
 "native_settings_wallpaper_limit" = "iOS 不提供讀取系統桌布顏色與 Monet 調色盤的公開介面。本頁不會產生虛假的桌布候選，也不會儲存無效的自動更新開關。可在主題頁自行選擇顏色或從照片取色。";
 "native_settings_secret_preserved" = "已儲存密碼；不編輯則保留。輸入新密碼將取代，清除按鈕會在儲存時刪除密碼。";
 "native_settings_clear_password" = "清除已儲存密碼（儲存後生效）";

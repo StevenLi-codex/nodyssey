@@ -100,7 +100,9 @@ import SwiftUI
     var requestCount = 0
     var pending: CheckedContinuation<JSONValue, Error>?
     var returned = false
+    var respond: ((String, [String: JSONValue]) async throws -> JSONValue)?
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
+        if let respond { return try await respond(operation, arguments) }
         precondition(operation == "keywords.add")
         self.arguments = arguments
         requestCount += 1
@@ -178,7 +180,74 @@ struct NativeFailureView: View {
               "\(scenario.name): failure is not converted to success")
     }
 }
+@MainActor func themeActionTests() async {
+    // Scripted bridge receipts, not a replacement preference store. DataStore reopen
+    // is covered independently by NativeSettingsPersistenceTest.
+    for (key, value, source) in [("seedColor", JSONValue.integer(-65536), "CUSTOM"),
+                                  ("presetId", JSONValue.string("reimu"), "PRESET")] {
+        let app = NativeAppModel()
+        let action = SettingsAction()
+        let before: JSONValue = .object(["colorSource": .string(source == "CUSTOM" ? "PRESET" : "CUSTOM")])
+        let written: JSONValue = .object([key: value, "colorSource": before["colorSource"]!])
+        let applied: JSONValue = .object([key: value, "colorSource": .string(source)])
+        app.settings = before
+        var calls: [(String, [String: JSONValue])] = []
+        app.respond = { operation, arguments in
+            calls.append((operation, arguments))
+            if operation == "settings.get" { return applied }
+            return arguments["key"] == .string("colorSource") ? applied : written
+        }
+        action.setting(app, key, value)
+        _ = await waitForKeywordAction { !action.busy }
+        check(app.settings == applied, "\(key): choosing a color activates its source, not just its dormant value")
+        check(calls.map(\.0) == ["settings.set", "settings.set", "settings.get"], "\(key): verify active color through authoritative readback")
+        check(calls.first?.1 == ["key": .string(key), "value": value], "\(key): preserves exact bridge payload")
+        check(action.failure == nil, "\(key): valid readback succeeds")
+    }
+    for outcome in ["sourceRefused", "finalMismatch", "readFailure", "cancel", "generation"] {
+        let app = NativeAppModel()
+        let action = SettingsAction()
+        var operations: [String] = []
+        var continuation: CheckedContinuation<JSONValue, Error>?
+        app.respond = { operation, arguments in
+            operations.append(operation)
+            if operations.count == 1 {
+                return try await withCheckedThrowingContinuation { continuation = $0 }
+            }
+            if arguments["key"] == .string("colorSource") {
+                return .object(["colorSource": .string(outcome == "sourceRefused" ? "PRESET" : "CUSTOM")])
+            }
+            if outcome == "readFailure" { throw NativeFailure(code: "NETWORK", message: "Synthetic read failure") }
+            return .object(["seedColor": .integer(-1), "colorSource": .string("PRESET")])
+        }
+        action.setting(app, "seedColor", .integer(-65536))
+        guard await waitForKeywordAction({ continuation != nil }) else { check(false, "theme write did not start"); continue }
+        if outcome == "cancel" { action.cancel() }
+        if outcome == "generation" { app.generation += 1 }
+        continuation!.resume(returning: .object(["seedColor": .integer(-65536), "colorSource": .string("PRESET")]))
+        _ = await waitForKeywordAction { !action.busy }
+        // Yield once after a cancelled action's already-cleared busy flag.
+        await Task.yield()
+        check(app.settings == .null, "\(outcome): unverified or obsolete color never publishes")
+        check(!action.busy, "\(outcome): color gate released")
+        if ["cancel", "generation"].contains(outcome) {
+            check(operations == ["settings.set"], "\(outcome): stale color cannot activate a source or read")
+        } else {
+            check(action.failure?.code == (outcome == "readFailure" ? "NETWORK" : "INVALID_DATA"), "\(outcome): explicit color failure remains visible")
+        }
+    }
+    for key in ["seedColor", "presetId", "themeMode", "colorSource", "paletteStyle"] {
+        let app = NativeAppModel()
+        let action = SettingsAction()
+        app.respond = { _, _ in .object([:]) }
+        action.setting(app, key, key == "seedColor" ? .integer(-1) : .string("unacknowledged"))
+        _ = await waitForKeywordAction { !action.busy }
+        check(action.failure?.code == "INVALID_DATA", "\(key): missing/mismatched color readback must be visible failure")
+        check(app.settings == .null, "\(key): ignored value must not be published as saved")
+    }
+}
 await keywordActionTests()
+await themeActionTests()
 #endif
 
 keywordEditedDraftTest()
