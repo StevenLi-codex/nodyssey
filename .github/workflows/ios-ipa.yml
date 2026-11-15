@@ -43,7 +43,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.22" CURRENT_PROJECT_VERSION="64" \
+            MARKETING_VERSION="1.2.24" CURRENT_PROJECT_VERSION="66" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |
@@ -64,7 +64,7 @@ jobs:
           with zipfile.ZipFile(ipa) as z:
               assert 'Payload/Nodyssey.app/Info.plist' in z.namelist()
               assert z.testzip() is None
-          manifest = dict(commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), tests_run=False, signed=False, acceptance='Unverified full-feature test build; standalone SVG timeout remains unresolved')
+          manifest = dict(commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), configuration='Debug', tests_run=False, signed=False, storage_namespace='io.github.nodyssey.single-local-v1', acceptance='Internal archive only; device login, scrolling, overlay installation and full original-page parity unverified')
           (root / 'ipa-manifest.json').write_text(json.dumps(manifest, indent=2))
           print(json.dumps(manifest, indent=2))
           PY

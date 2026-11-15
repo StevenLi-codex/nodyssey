@@ -3,6 +3,16 @@ import Testing
 @testable import AccountBehavior
 
 struct ProfileDateTests {
+    @Test func directoryMembershipKeepsSiteYearMonthRatherThanConvertingTheInstant() throws {
+        let month = try #require(AccountProfileDate.registrationMonth("2025-01-01T00:00:00+14:00"))
+        #expect(month.year == 2025)
+        #expect(month.month == 1)
+        #expect(AccountProfileDate.registrationMonth("2025-01") == month)
+        for raw in ["", "unknown", "2025", "2025-1", "prefix 2025-01"] {
+            #expect(AccountProfileDate.registrationMonth(raw) == nil)
+        }
+    }
+
     @Test func registrationTimestampAcceptsFractionalAndOffsetForms() throws {
         let fractional = try #require(AccountProfileDate.date("2025-01-05T04:07:29.000Z"))
         #expect(AccountProfileDate.date("2025-01-05T04:07:29Z") == fractional)

@@ -8,6 +8,7 @@ struct NativeDestination { var route: String; var arguments: [String: JSONValue]
     @Published var generation = 0
     var transport: any NativeTransport { fatalError() }
     var siteOrigin: String? { fatalError() }
+    var siteName: String? { fatalError() }
     var isSignedIn: Bool { fatalError() }
     var ownsAuthenticationPresentation: Bool { fatalError() }
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue { fatalError() }

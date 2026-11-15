@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import NodysseyNativeCore
 
 /// The view owns task lifetime; the ticket prevents an old completion clearing a newer load.
@@ -165,6 +166,148 @@ struct ContentJumpEntry {
         guard let number = Int32(text) else { return nil }
         return floor ? .init(floor: "#\(max(0, number))", page: nil).clamped(to: total)
             : .init(floor: nil, page: max(1, Int64(number))).clamped(to: total)
+    }
+}
+
+/// Geometry callbacks belong to one observation, board/sort and identity generation.
+struct ContentFeedTicket: Equatable {
+    let generation: Int
+    let board: String
+    let sort: String
+    let observation: UUID
+}
+
+struct ContentFeedVisibleRow: Equatable {
+    let ticket: ContentFeedTicket
+    let id: Int64
+    let page: Int64?
+    let frame: CGRect
+}
+
+enum ContentFeedViewport {
+    static func firstVisible(_ rows: [ContentFeedVisibleRow], viewport: CGRect, ticket: ContentFeedTicket) -> ContentFeedVisibleRow? {
+        guard viewport.width > 0, viewport.height > 0 else { return nil }
+        return rows.filter {
+            $0.ticket == ticket && $0.frame.width > 0 && $0.frame.height > 0 &&
+                $0.frame.intersects(viewport) && $0.frame.maxY > viewport.minY && $0.frame.minY < viewport.maxY
+        }.min { $0.frame.minY == $1.frame.minY ? $0.id < $1.id : $0.frame.minY < $1.frame.minY }
+    }
+}
+
+struct ContentFeedSheet {
+    private(set) var owner: ContentFeedTicket?
+    mutating func present(_ ticket: ContentFeedTicket) { owner = ticket }
+    mutating func cancel() { owner = nil }
+    mutating func take(_ page: Int64, current: ContentFeedTicket) -> Int64? {
+        defer { owner = nil }
+        return owner == current ? page : nil
+    }
+}
+
+struct ContentFeedDirection {
+    private(set) var expanded = true
+    private var previous: (index: Int64, minY: CGFloat)?
+    mutating func record(index: Int64, minY: CGFloat) {
+        if let previous {
+            if index != previous.index { expanded = index < previous.index }
+            else if abs(minY - previous.minY) >= 8 { expanded = minY > previous.minY }
+            else { return }
+        }
+        previous = (index, minY)
+    }
+}
+
+enum ContentFeedCompose: Equatable {
+    case signIn
+    case compose([String: JSONValue])
+    static func resolve(signedIn: Bool, board: String) -> Self {
+        signedIn ? .compose(board.isEmpty ? [:] : ["boardSlug": .string(board)]) : .signIn
+    }
+}
+
+/// Navigation only: Kotlin still owns rows, load state and the append/prepend mechanism.
+struct ContentFeedJump {
+    enum Action: Equatable {
+        case scroll(Int64)
+        case access([String: JSONValue])
+        case retry(String)
+        case replace(Int64)
+    }
+    // Original PostListScreen.APPEND_WAIT_MILLIS, using monotonic rather than wall time.
+    static let appendWait: TimeInterval = 15
+    struct Wait: Equatable {
+        let id = UUID()
+        let deadline: TimeInterval
+    }
+    private(set) var wait: Wait?
+    private(set) var pendingPage: Int64?
+    private var pendingPager: String?
+    // Monotonic time is injectable so navigation tests never sleep for a network deadline.
+    private let uptime: () -> TimeInterval
+    private let owner: ContentFeedTicket?
+    init(owner: ContentFeedTicket? = nil, uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.owner = owner
+        self.uptime = uptime
+    }
+
+    mutating func request(_ requested: Int64, snapshot: JSONValue) throws -> Action {
+        let window = try ContentPagingWindow(snapshot)
+        let target = min(max(1, requested), max(1, snapshot["totalPages"]?.int ?? 1))
+        cancel()
+        if let row = window.rows.first(where: { $0.page == target }) { return .scroll(row.id) }
+        if let last = window.rows.last, let page = last.page, page < Int64.max, target == page + 1,
+           snapshot["append"]?["endOfPaginationReached"]?.bool != true,
+           let arguments = window.accessArguments(for: last.id), let pagerID = window.pagerID {
+            pendingPage = target
+            pendingPager = pagerID
+            wait = Wait(deadline: uptime() + Self.appendWait)
+            if snapshot["append"]?["status"]?.string == "Error" { return .retry(pagerID) }
+            return .access(arguments)
+        }
+        return .replace(target)
+    }
+
+    mutating func arrived(snapshot: JSONValue) throws -> Int64? {
+        if case .scroll(let id) = try update(snapshot: snapshot) { return id }
+        return nil
+    }
+
+    mutating func update(snapshot: JSONValue, current: ContentFeedTicket? = nil) throws -> Action? {
+        guard let pendingPage else { return nil }
+        guard owner == current else { cancel(); return nil }
+        let window = try ContentPagingWindow(snapshot)
+        guard window.pagerID == pendingPager else {
+            // A bound observation replaced its pager. Unbound ID-only consumers can ignore
+            // unrelated snapshots, but the UI must retire both the destination and timer.
+            if owner != nil { cancel() }
+            return nil
+        }
+        let action: Action
+        if let row = window.rows.first(where: { $0.page == pendingPage }) { action = .scroll(row.id) }
+        else if snapshot["append"]?["status"]?.string == "Error" {
+            // Keep the destination for explicit Retry, but never retry/replace from a timer.
+            wait = nil
+            return nil
+        }
+        else if snapshot["append"]?["status"]?.string == "NotLoading",
+                snapshot["append"]?["endOfPaginationReached"]?.bool == true { action = .replace(pendingPage) }
+        else if let wait, remaining(wait) == 0 { action = .replace(pendingPage) }
+        else { return nil }
+        cancel()
+        return action
+    }
+
+    func remaining(_ wait: Wait) -> TimeInterval { max(0, wait.deadline - uptime()) }
+
+    mutating func timeout(_ expected: Wait, snapshot: JSONValue, current: ContentFeedTicket? = nil) throws -> Action? {
+        guard wait == expected else { return nil }
+        return try update(snapshot: snapshot, current: current)
+    }
+
+    mutating func cancel() {
+        pendingPage = nil
+        pendingPager = nil
+        wait = nil
     }
 }
 

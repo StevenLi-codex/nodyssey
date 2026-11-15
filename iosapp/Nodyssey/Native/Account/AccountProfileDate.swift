@@ -3,6 +3,21 @@ import Foundation
 /// `createdAt` is account registration, not last activity. Date-only legacy values
 /// are calendar days in the display zone; timestamp values represent instants.
 enum AccountProfileDate {
+    struct RegistrationMonth: Equatable {
+        let year: Int
+        let month: Int
+    }
+
+    /// The My directory mirrors ProfileViewModel's anchored year/month prefix.
+    /// This is site calendar metadata, not an instant to shift across time zones.
+    /// Full dates on user spaces and author cards retain the formatter below.
+    static func registrationMonth(_ raw: String) -> RegistrationMonth? {
+        guard let range = raw.range(of: #"^([0-9]{4})-([0-9]{2})"#, options: .regularExpression) else { return nil }
+        let parts = raw[range].split(separator: "-")
+        guard let year = Int(parts[0]), let month = Int(parts[1]) else { return nil }
+        return RegistrationMonth(year: year, month: month)
+    }
+
     static func date(_ raw: String, timeZone: TimeZone = .current) -> Date? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }

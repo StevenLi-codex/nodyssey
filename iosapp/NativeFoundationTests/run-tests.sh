@@ -12,6 +12,9 @@ for file in EditorState EditorViewModel NativeEditorScreens; do
 done
 cp "$HERE/../Nodyssey/Native/Rendering/RichDocument.swift" "$HERE/Sources/"
 cp "$HERE/../NativeEditorTests/TestSupport/Focus.swift" "$HERE/Sources/"
+for file in AccountAuthState AccountAuthSubmission; do
+    cp "$HERE/../Nodyssey/Native/Account/$file.swift" "$HERE/Sources/"
+done
 if [ "$(xcode-select -p)" != /Library/Developer/CommandLineTools ]; then
     swift test --disable-xctest --package-path "$HERE"
     exit 0

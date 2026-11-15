@@ -10,6 +10,7 @@
 "native.account.page_filter" = "Search, board filter and reverse order apply to this loaded page only. The server does not expose global filters for this endpoint.";
 "native.account.server_order" = "Server order";
 "native.account.page" = "Page";
+"native.account.member_since" = "Joined %1$@/%2$@ · UID %3$@";
 "native.account.joined" = "Joined %@";
 "native.account.quick_card.title" = "Author quick card";
 "native.account.quick_card.unavailable" = "Author profile unavailable. Reload to try again.";

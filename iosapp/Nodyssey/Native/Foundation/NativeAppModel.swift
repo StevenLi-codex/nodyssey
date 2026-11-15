@@ -339,6 +339,12 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         guard operation != "session.resetPrivateStores" else {
             throw NativeFailure(code: "CONFIRMATION_REQUIRED", message: "Explicit confirmation required")
         }
+        // Native callers, like WebKit, can trigger a boundary epoch before their
+        // first response. The form owner holds its longer OTP/retry lease; cover
+        // direct native requests as well without replacing an existing browser lease.
+        let nativeAuthentication = ["session.signIn", "session.verifyTwoFactor"].contains(operation)
+        let presentation = nativeAuthentication && !ownsAuthenticationPresentation ? beginAuthenticationPresentation() : nil
+        defer { endAuthenticationPresentation(presentation) }
         return try await performRequest(operation, arguments)
     }
 

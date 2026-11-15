@@ -20,12 +20,14 @@ struct AccountProfileDirectory: View {
     }
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 240 : 88), spacing: 8)], spacing: 8) {
+        // Original ProfileScreen uses four tracks, including a short final row.
+        // Only accessibility categories change the column count, not phone width.
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: dynamicTypeSize.isAccessibilitySize ? 2 : 4), spacing: 4) {
             ForEach(entries) { entry in
                 Button { app.open(entry.route, entry.arguments) } label: {
                     VStack(spacing: 7) {
                         Image(systemName: entry.symbol).font(.body).foregroundStyle(.tint).accessibilityHidden(true)
-                        Text(LocalizedStringKey(entry.title)).font(.subheadline).foregroundStyle(.primary)
+                        Text(LocalizedStringKey(entry.title)).font(.caption.weight(.medium)).foregroundStyle(.primary)
                             .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.vertical, 8).frame(maxWidth: .infinity, minHeight: 56)
@@ -36,17 +38,66 @@ struct AccountProfileDirectory: View {
     }
 }
 
-/// Paths are the existing NodeSeekSite.PROVIDERS_PATH / FRIENDS_PATH, resolved
-/// against the installed site's origin rather than a second browser/session graph.
-struct AccountProfileWebShortcuts: View {
+/// Compact My-page identity, deliberately separate from the full space header.
+/// Bio, full registration date and repeated rank belong to the space, not here.
+struct AccountProfileIdentity: View {
+    @Environment(\.locale) private var locale
+    let profile: JSONValue
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(.secondary.opacity(0.10))
+                if let url = profile.nativeString("avatarUrl"), !url.isEmpty { NativeRemoteImage(url: url) }
+                else { Image(systemName: "person.fill").foregroundStyle(.secondary) }
+            }.frame(width: 44, height: 44).clipShape(Circle()).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.nativeString("name") ?? "").font(.headline).lineLimit(1)
+                if let uid = profile.nativeInt("uid") {
+                    if let raw = profile.nativeString("createdAt"), let month = AccountProfileDate.registrationMonth(raw) {
+                        // String arguments preserve the full Kotlin Long domain; %d would truncate UID.
+                        Text(String(format: String(localized: "native.account.member_since", table: "Account"), locale: locale,
+                                    String(month.year), String(month.month), String(uid)))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else { Text("UID \(String(uid))").font(.caption2).foregroundStyle(.secondary) }
+                }
+            }
+            Spacer(minLength: 0)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct AccountProfileWelcome: View {
     @EnvironmentObject private var app: NativeAppModel
     var body: some View {
-        if let origin = app.siteOrigin {
-            AccountProfileDirectory(entries: [
-                .init("profile_tile_providers", "building.2", "Web", ["url": .string(origin + "/providers"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_providers"))]),
-                .init("profile_tile_friends", "link", "Web", ["url": .string(origin + "/friends"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_friends"))])
-            ])
-        }
+        VStack(spacing: 8) {
+            Image(systemName: "person.fill").font(.system(size: 40))
+                .foregroundStyle(.tint).frame(width: 96, height: 96)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 32))
+                .accessibilityHidden(true)
+            Text(String(format: String(localized: "profile_signed_out_title"), app.siteName ?? ""))
+                .font(.title3.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
+                .padding(.top, 8)
+            Text("profile_signed_out_body").font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }.padding(.vertical, 16).frame(maxWidth: .infinity)
+    }
+}
+
+struct AccountProfileBenefit: View {
+    let symbol: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.title3).foregroundStyle(.tint)
+                .frame(width: 40, height: 40)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.medium))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }.fixedSize(horizontal: false, vertical: true)
+        }.padding(.vertical, 4)
     }
 }
 
@@ -96,10 +147,8 @@ struct AccountProfileBalances: View {
     @EnvironmentObject private var app: NativeAppModel
     let profile: JSONValue
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 20) { balances }
-            VStack(alignment: .leading, spacing: 4) { balances }
-        }
+        HStack(spacing: 2) { balances }
+            .clipShape(RoundedRectangle(cornerRadius: 14))
     }
     private var balances: some View {
         Group {
@@ -111,9 +160,15 @@ struct AccountProfileBalances: View {
     private func balance(_ title: LocalizedStringKey, key: String, route: String) -> some View {
         Button { app.open(route) } label: {
             VStack(alignment: .leading, spacing: 3) {
-                Text(profile.nativeInt(key).map(String.init) ?? "—").font(.headline).monospacedDigit().foregroundStyle(.primary)
-                Text(title).font(.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                Text(title).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                Text(key == "rank"
+                     ? profile.nativeInt(key).map { "Lv \($0)" } ?? String(localized: "profile_level_unknown")
+                     : profile.nativeInt(key).map(String.init) ?? "—")
+                    .font(.headline).monospacedDigit().foregroundStyle(.primary)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+            }.padding(10).frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                .background((key == "chickenCount" ? Color.orange : key == "starCount" ? Color.purple : Color.accentColor).opacity(0.10))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityElement(children: .combine)
     }
 }

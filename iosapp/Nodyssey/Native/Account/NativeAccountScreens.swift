@@ -156,19 +156,19 @@ struct AccountProfileScreen: View {
                     if let uid = profile.value.nativeInt("uid") {
                         Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
                             HStack {
-                                AccountProfileHeader(profile: profile.value, showBalances: false)
+                                AccountProfileIdentity(profile: profile.value)
                                 if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
                                 else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
                             }
                         }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
                     } else if profile.value != .null {
-                        AccountProfileHeader(profile: profile.value, showBalances: false)
+                        AccountProfileIdentity(profile: profile.value)
                     }
                     AccountProfileStatus(profile: profile)
                     AccountProfileBalances(profile: profile.value)
-                    AccountProfileAttendance()
-                }
-                Section("profile_section_content") {
+                }.listRowSeparator(.hidden)
+                Section { AccountProfileAttendance() }
+                Section {
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_topics", "text.bubble", "MyTopics"),
                         .init("profile_tile_comments", "bubble.left.and.bubble.right", "MyComments"),
@@ -178,48 +178,50 @@ struct AccountProfileScreen: View {
                         .init("profile_tile_followers", "person.2", "Follow", ["showFollowers": .bool(true)])
                     ])
                 }
-                Section("profile_section_community") {
+                Section {
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_award", "book", "Award"),
                         .init("profile_tile_lucky", "dice", "Lucky"),
                         .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
-                        .init("profile_tile_invite", "ticket", "Invite"),
-                        .init("profile_tools", "wrench.and.screwdriver", "CommunityTools"),
+                    ] + webEntries + [
                         .init("profile_tile_block", "hand.raised", "AccountBlockList", ["titles": .bool(false)]),
+                        .init("profile_tile_invite", "ticket", "Invite"),
                         .init("profile_tile_about_community", "info.circle", "AboutCommunity")
                     ])
                 }
-                Section { AccountProfileWebShortcuts() }
-                Section("profile_section_settings") {
+                Section {
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_account", "person.crop.circle", "AccountSettings"),
                         .init("profile_tile_notifications", "bell", "NotificationSettings"),
                         .init("profile_tile_theme", "paintpalette", "ThemeSettings"),
                         .init("profile_tile_about", "info.circle", "AboutApp")
                     ])
-                    Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
-                        .accessibilityIdentifier("native.profile.settings")
                 }
             } else {
-                VStack(alignment: .leading, spacing: 16) {
-                    Image(systemName: "person.crop.circle").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("profile_signed_out_body").font(.body)
-                    Button("action_sign_in") { app.showSignIn() }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
-                        .accessibilityIdentifier("native.profile.signin")
-                }.padding(.vertical, 20).frame(maxWidth: .infinity, alignment: .leading)
+                Section { AccountProfileWelcome() }
+                Section {
+                    AccountProfileBenefit(symbol: "square.and.pencil", title: "profile_guest_benefit_post", subtitle: "profile_guest_benefit_post_hint")
+                    AccountProfileBenefit(symbol: "envelope", title: "profile_guest_benefit_messages", subtitle: "profile_guest_benefit_messages_hint")
+                    AccountProfileBenefit(symbol: "calendar", title: "profile_guest_benefit_attendance", subtitle: "profile_guest_benefit_attendance_hint")
+                }.listRowSeparator(.hidden)
+                Section {
+                    VStack(spacing: 8) {
+                        Button("action_sign_in") { app.showSignIn() }
+                            .buttonStyle(.borderedProminent).controlSize(.large)
+                            .accessibilityIdentifier("native.profile.signin")
+                        Text("profile_sign_in_hint").font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }.frame(maxWidth: .infinity).padding(.vertical, 8)
+                }
             }
             if !app.isSignedIn { Section("profile_guest_section") {
-                route("profile_tile_history", "ReadHistory")
-                route("profile_tools", "CommunityTools")
-                route("profile_tile_award", "Award")
-                route("profile_tile_lucky", "Lucky")
-                route("profile_tile_ruling", "Ruling")
-                AccountProfileWebShortcuts()
-                route("profile_tile_about", "AboutApp")
-                route("profile_tile_about_community", "AboutCommunity")
-                Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
-                    .accessibilityIdentifier("native.profile.settings")
+                AccountProfileDirectory(entries: [
+                    .init("profile_tile_award", "book", "Award"),
+                    .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
+                    .init("profile_tile_lucky", "dice", "Lucky")
+                ] + Array(webEntries.prefix(1)) + [
+                    .init("profile_tools", "wrench.and.screwdriver", "CommunityTools")
+                ])
             } }
         }
         #if os(iOS)
@@ -230,7 +232,13 @@ struct AccountProfileScreen: View {
         .scrollContentBackground(.hidden)
         .listRowSeparatorTint(.secondary.opacity(0.15))
         .background(AccountSurface(canvas: true))
-        .navigationTitle("profile_space")
+        .navigationTitle("")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { app.open("Settings") } label: { Label("settings_title", systemImage: "gearshape") }
+                    .accessibilityIdentifier("native.profile.settings")
+            }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -240,19 +248,12 @@ struct AccountProfileScreen: View {
         }
         .refreshable { await profile.refresh() }
     }
-    private func route(_ title: String, _ destination: String) -> some View {
-        let symbols = ["MyTopics": "text.bubble", "MyComments": "bubble.left.and.bubble.right", "Bookmarks": "bookmark",
-                       "Assets": "calendar", "Credit": "gift", "Stardust": "star", "AccountSettings": "person.crop.circle.badge.gearshape",
-                       "ReadHistory": "clock", "CommunityTools": "wrench.and.screwdriver", "AboutCommunity": "info.circle"]
-        return Button { app.open(destination) } label: { navigationLabel(title, symbol: symbols[destination] ?? "chevron.right") }
-    }
-    private func navigationLabel(_ title: String, symbol: String) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: symbol).font(.body).frame(width: 24).foregroundStyle(.secondary)
-            Text(LocalizedStringKey(title)).font(.body).foregroundStyle(.primary)
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-        }.frame(minHeight: 44).contentShape(Rectangle())
+    private var webEntries: [AccountProfileDirectory.Entry] {
+        guard let origin = app.siteOrigin else { return [] }
+        return [
+            .init("profile_tile_providers", "building.2", "Web", ["url": .string(origin + "/providers"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_providers"))]),
+            .init("profile_tile_friends", "link", "Web", ["url": .string(origin + "/friends"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_friends"))])
+        ]
     }
 }
 
