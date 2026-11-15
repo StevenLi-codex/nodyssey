@@ -4,6 +4,8 @@
 "native_foundation_help" = "使用說明";
 "native_foundation_privacy" = "隱私權政策";
 
+"native_foundation_boundary_signed_in" = "已登入，私人資料仍鎖定";
+"native_foundation_boundary_signed_in_detail" = "帳號已登入。現有本機資料已保留，但無法驗證其歸屬；登入不會轉移資料歸屬，也不會自動解鎖或刪除。檢查狀態只讀取資訊，資料可能仍保持鎖定。";
 "native_foundation_boundary_title" = "私人資料已鎖定";
 "native_foundation_boundary_detail" = "無法驗證本機私人資料的歸屬，因此暫時無法存取。設定和登入仍可使用；登入不會自動接管舊資料。";
 "native_foundation_boundary_transition" = "正在檢查私人儲存空間，不會自動重設。";

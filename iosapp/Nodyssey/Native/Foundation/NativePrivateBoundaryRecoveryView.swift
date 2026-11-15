@@ -9,8 +9,11 @@ struct NativePrivateBoundaryRecoveryView: View {
         ScrollView {
             VStack(spacing: 16) {
                 Image(systemName: "lock.shield").font(.largeTitle).accessibilityHidden(true)
-                Text("native_foundation_boundary_title", tableName: "Foundation").font(.headline)
+                Text(LocalizedStringKey(app.isSignedIn ? "native_foundation_boundary_signed_in" : "native_foundation_boundary_title"), tableName: "Foundation").font(.headline)
                 Text("native_foundation_boundary_detail", tableName: "Foundation")
+                if app.isSignedIn {
+                    Text("native_foundation_boundary_signed_in_detail", tableName: "Foundation")
+                }
                 if (app.privateBoundary.nativeString("phase") == "TRANSITIONING" &&
                     app.privateBoundary.nativeBool("recoveryEligible") != true) || app.privateResetRunning {
                     ProgressView()

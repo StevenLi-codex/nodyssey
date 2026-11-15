@@ -43,7 +43,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.22" CURRENT_PROJECT_VERSION="57" \
+            MARKETING_VERSION="1.2.22" CURRENT_PROJECT_VERSION="58" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |

@@ -11,7 +11,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -19,9 +18,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -57,8 +53,10 @@ object NativeBridge {
     private val sessionControls = setOf("session.signIn", "session.verifyTwoFactor", "session.signOut")
 
     private fun publicOperation(operation: String): Boolean = operation.startsWith("session.") ||
-        operation in setOf("settings.get", "settings.set", "settings.observe", "settings.theme.save", "settings.theme.delete",
-            "settings.homeBoards", "settings.toolbar", "settings.capabilities", "settings.metadata", "platform.context", "app.foreground")
+        operation in setOf(
+            "settings.get", "settings.set", "settings.observe", "settings.theme.save", "settings.theme.delete",
+            "settings.homeBoards", "settings.toolbar", "settings.capabilities", "settings.metadata", "platform.context", "app.foreground",
+        )
 
     fun request(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest {
         // Main-confined one-shot: reentrant revocation may fail lease exit after success.
@@ -107,17 +105,38 @@ object NativeBridge {
                 }
                 val data = when (operation) {
                     "session.sync" -> context.nativeSessionDto()
+
                     "session.privateBoundary" -> graph.privateBoundary.state.value.nativeBoundaryDto()
+
                     "session.resetPrivateStores" -> {
                         graph.privateBoundary.reset(args.nativeBoolean("confirmed"), args.nativeText("identityEpoch"))
                         graph.privateBoundary.state.value.nativeBoundaryDto()
                     }
-                    in sessionControls -> graph.privateBoundary.sessionMutation { dispatch() }.let { result ->
+
+                    in sessionControls -> graph.privateBoundary.sessionMutation(
+                        allowEmptyRebind = { result: JsonElement ->
+                            operation in setOf("session.signIn", "session.verifyTwoFactor") &&
+                                (result as? JsonObject)?.get("status") == JsonPrimitive("SIGNED")
+                        },
+                    ) { dispatch() }.let { result ->
                         // Auth DTOs were assembled before finally reconciled the jar. Never export an old epoch.
                         val session = context.nativeSessionDto()
-                        if (operation in setOf("session.sync", "session.signOut")) session
-                        else if (result is JsonObject && result.containsKey("session")) JsonObject(result + ("session" to session)) else result
+                        if (operation in setOf("session.sync", "session.signOut")) {
+                            session
+                        } else if (result is JsonObject && result.containsKey("session")) {
+                            val boundary = graph.privateBoundary.state.value
+                            JsonObject(
+                                result + mapOf(
+                                    "session" to session,
+                                    "privateBoundary" to boundary.nativeBoundaryDto(),
+                                    "privateDataStatus" to JsonPrimitive(if (boundary.requiresConfirmation) "CONFIRMATION_REQUIRED" else "READY"),
+                                ),
+                            )
+                        } else {
+                            result
+                        }
                     }
+
                     else -> dispatch()
                 }
                 nativeDeliver(coroutineContext[Job]!!, data, publish)
@@ -164,8 +183,11 @@ object NativeBridge {
                 coroutineScope(block)
             } catch (cancelled: CancellationException) {
                 coroutineContext.ensureActive()
-                if (cancelled is io.github.nodyssey.data.session.PrivateWorkRevoked) completion(nativeFailure(NativeFailure("SESSION_CHANGED")))
-                else throw cancelled
+                if (cancelled is io.github.nodyssey.data.session.PrivateWorkRevoked) {
+                    completion(nativeFailure(NativeFailure("SESSION_CHANGED")))
+                } else {
+                    throw cancelled
+                }
             } catch (failure: Exception) {
                 coroutineContext.ensureActive()
                 completion(nativeFailure(failure))
@@ -173,8 +195,6 @@ object NativeBridge {
         }
         return NativeRequest(job)
     }
-
-
 }
 
 internal fun io.github.nodyssey.data.session.PrivateBoundaryState.nativeBoundaryDto(): JsonObject = buildJsonObject {
@@ -184,8 +204,10 @@ internal fun io.github.nodyssey.data.session.PrivateBoundaryState.nativeBoundary
     put("recoveryEligible", recoveryEligible)
 }
 
-internal fun NativeContext.nativeSessionDto(): JsonObject = JsonObject(graph.sessionRepository.state.value.accountDto() +
-    ("identityEpoch" to JsonPrimitive(graph.privateBoundary.state.value.identityEpoch)))
+internal fun NativeContext.nativeSessionDto(): JsonObject = JsonObject(
+    graph.sessionRepository.state.value.accountDto() +
+        ("identityEpoch" to JsonPrimitive(graph.privateBoundary.state.value.identityEpoch)),
+)
 
 internal fun nativeCheckSession(before: SessionState, after: SessionState) {
     if (before.isSignedIn != after.isSignedIn || before.fingerprint != after.fingerprint) {
@@ -209,6 +231,7 @@ internal fun nativeFailure(failure: Throwable): String {
     if (failure is CancellationException) throw failure
     val code = when (failure) {
         is NativeFailure -> failure.code
+
         is io.github.nodyssey.data.session.PrivateStoreAccessDenied -> "PRIVATE_STORE_RECOVERY_REQUIRED"
 
         is SiteException -> when (failure.error) {

@@ -22,8 +22,13 @@ struct NativeBrowser: View {
             ZStack(alignment: .top) {
                 NativeAuthenticationWebView(app: app, url: url, goal: goal, closeRequested: closeRequested, externalSignal: externalSignal,
                     onFailure: { failure = $0 }, onClosed: {
-                        onFinished()
-                        dismiss()
+                        Task {
+                            // Close has already awaited the cookie bridge's final drain.
+                            // Authentication and private admission are independent.
+                            await app.refreshPrivateBoundary()
+                            onFinished()
+                            dismiss()
+                        }
                     })
                 if let failure {
                     Text(failure).font(.callout).padding().background(.regularMaterial)

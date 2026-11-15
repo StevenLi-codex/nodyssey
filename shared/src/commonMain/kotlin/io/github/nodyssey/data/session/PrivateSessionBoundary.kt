@@ -115,7 +115,13 @@ class PrivateSessionBoundary(
         observed = candidate
     }
 
-    private data class Mutation(val proof: PrivateOwnerProof?, val observed: PrivateOwnerProof?, val state: PrivateBoundaryState, val token: String)
+    private data class Mutation(
+        val proof: PrivateOwnerProof?,
+        val observed: PrivateOwnerProof?,
+        val state: PrivateBoundaryState,
+        val token: String,
+        val emptyAfterDrain: Boolean = false,
+    )
     private var external: Mutation? = null
 
     private suspend fun beginMutation(): Mutation {
@@ -127,19 +133,30 @@ class PrivateSessionBoundary(
         // A confirmation from before this writer started must not become usable after it drains.
         mutableState.value = PrivateBoundaryState(PrivateStorePhase.TRANSITIONING, newEpoch())
         barrier.closeAndJoin { provenance.begin(owner(), mutation.token) }
-        return mutation
+        // Inventory only after all old admitted writers have terminated. UNKNOWN/legacy or
+        // interrupted journals never acquire an empty-store rebind capability through login.
+        return mutation.copy(
+            emptyAfterDrain = mutation.proof != null &&
+                mutation.state.phase == PrivateStorePhase.READY && participants.all { it.isEmpty() },
+        )
     }
 
-    private suspend fun finishMutation(mutation: Mutation) = withContext(NonCancellable) {
+    private suspend fun finishMutation(mutation: Mutation, allowEmptyRebind: Boolean = false) = withContext(NonCancellable) {
         val candidate = owner()
         beforePublication()
-        if (mutation.proof != null && mutation.proof == candidate && mutation.state.phase == PrivateStorePhase.READY) {
+        val same = mutation.proof != null && mutation.proof == candidate && mutation.state.phase == PrivateStorePhase.READY
+        val emptyRebind = !same && allowEmptyRebind && mutation.emptyAfterDrain && participants.all { it.isEmpty() }
+        if ((same || emptyRebind) && candidate == owner()) {
+            if (emptyRebind) provenance.begin(candidate, mutation.token)
             participants.forEach { provenance.completed(mutation.token, it.id) }
             provenance.commit(mutation.token)
             verified = candidate
             publishSession()
-            barrier.open(mutation.state.identityEpoch)
-            mutableState.value = mutation.state
+            // Same-cookie cancellation retains its epoch. A new auth proof must not revive
+            // guest/old-account routes, even when there are no bytes to inherit.
+            val ready = if (same) mutation.state else state.value.copy(phase = PrivateStorePhase.READY)
+            barrier.open(ready.identityEpoch)
+            mutableState.value = ready
         } else {
             verified = null
             provenance.unknown()
@@ -153,13 +170,14 @@ class PrivateSessionBoundary(
     }
 
     /** Serializes success/refusal/ordinary error/cancellation, never silently authorizing deletion. */
-    suspend fun <T> sessionMutation(block: suspend () -> T): T = controlled {
+    suspend fun <T> sessionMutation(allowEmptyRebind: (T) -> Boolean = { false }, block: suspend () -> T): T = controlled {
         if (external != null) throw PrivateStoreAccessDenied()
         val mutation = beginMutation()
+        var completed = false
         try {
-            block()
+            block().also { completed = allowEmptyRebind(it) }
         } finally {
-            finishMutation(mutation)
+            finishMutation(mutation, completed)
         }
     }
 
@@ -169,10 +187,10 @@ class PrivateSessionBoundary(
         external = beginMutation()
     }
 
-    suspend fun finishExternalMutation() = controlled {
+    suspend fun finishExternalMutation(allowEmptyRebind: Boolean = false) = controlled {
         val mutation = external ?: return@controlled
         try {
-            finishMutation(mutation)
+            finishMutation(mutation, allowEmptyRebind)
         } finally {
             // The browser has drained. Publication/journal failure must remain recoverable
             // through reconcile/reset, not latch a finished external writer forever.

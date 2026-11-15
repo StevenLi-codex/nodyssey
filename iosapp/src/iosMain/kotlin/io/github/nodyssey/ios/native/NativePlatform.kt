@@ -11,9 +11,7 @@ import coil3.toBitmap
 import io.github.nodyssey.core.NodeSeekSite
 import io.github.nodyssey.data.session.SessionState
 import io.github.nodyssey.ios.IosAppContainer
-import io.github.nodyssey.ios.IosOfflineFileStore
 import io.github.nodyssey.ios.NodysseyApp
-import io.github.nodyssey.ios.applicationSupportDirectory
 import io.github.plaza.core.net.WebKitCookieBridge
 import io.github.plaza.core.net.WebUrl
 import io.github.plaza.core.toNSData
@@ -262,7 +260,15 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
         start = { bridge.start() },
         stop = { bridge.stop() },
         drain = { bridge.drain() },
-        publish = { graph?.privateBoundary?.finishExternalMutation() },
+        publish = {
+            val ready = graph
+            val before = baseline
+            val now = ready?.sessionRepository?.peek()
+            ready?.privateBoundary?.finishExternalMutation(
+                allowEmptyRebind = before != null && now != null && goal in setOf("login", "oneTapLogin") &&
+                    nativeBrowserGoalReached(goal, before, now),
+            )
+        },
     )
 
     fun start(completion: (NativePlatformContext?, String?) -> Unit) {

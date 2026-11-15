@@ -77,7 +77,11 @@ struct AccountSignInScreen: View {
                 let result = try await app.request(challenge == nil ? "session.signIn" : "session.verifyTwoFactor", args)
                 guard !Task.isCancelled, form.accepts(ticket) else { return }
                 switch result.nativeString("status") {
-                case "SIGNED": form.cancel(); dismiss()
+                case "SIGNED":
+                    // NativeAppModel consumes privateDataStatus independently. A
+                    // locked boundary returns to the explained recovery surface,
+                    // not a failed-login error or another password submission.
+                    form.cancel(); dismiss()
                 case "TWO_FACTOR_REQUIRED":
                     guard let handle = result.nativeString("challengeId"), form.acceptChallenge(handle, ticket: ticket) else {
                         form.failed(ticket); failure = NativeFailure(code: "INVALID_DATA", message: ""); return

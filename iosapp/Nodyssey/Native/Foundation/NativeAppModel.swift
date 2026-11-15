@@ -345,6 +345,7 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     private func performRequest(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         try Task.checkCancellation()
         let capturedGeneration = generation
+        let capturedBoundaryRevision = boundaryRevision
         let id = UUID()
         let changesSession = ["session.sync", "session.signIn", "session.verifyTwoFactor", "session.signOut"].contains(operation)
         let transport = self.transport
@@ -374,6 +375,19 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
             } else if !["TWO_FACTOR_REQUIRED", "REFUSED"].contains(value.nativeString("status") ?? "") {
                 session = .null
                 throw NativeFailure(code: "INVALID_DATA", message: "Invalid session response")
+            }
+        }
+        if ["session.signIn", "session.verifyTwoFactor"].contains(operation), value.nativeString("status") == "SIGNED" {
+            // Authentication succeeded independently of local-data admission. Never
+            // convert a malformed/missing privacy result into a password failure.
+            // A collector that advanced while this call waited remains authoritative.
+            if capturedBoundaryRevision == boundaryRevision {
+                let boundary = value["privateBoundary"] ?? .null
+                let status = value.nativeString("privateDataStatus")
+                let matches = (status == "READY" && boundary.nativeString("phase") == "READY" &&
+                    boundary.nativeBool("requiresConfirmation") == false) ||
+                    (status == "CONFIRMATION_REQUIRED" && boundary.nativeBool("requiresConfirmation") == true)
+                applyPrivateBoundary(matches ? boundary : .null)
             }
         }
         if operation == "site.get" || operation == "site.select" { try applySite(value) }

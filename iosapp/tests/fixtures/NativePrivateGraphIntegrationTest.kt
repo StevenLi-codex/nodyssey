@@ -8,6 +8,7 @@ import androidx.room.useReaderConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.nodyssey.core.NodeSeekSite
 import io.github.nodyssey.core.net.JsonApi
+import io.github.nodyssey.core.net.NodeSeekJsonClient
 import io.github.nodyssey.data.*
 import io.github.nodyssey.data.composer.*
 import io.github.nodyssey.data.local.*
@@ -58,6 +59,16 @@ class NativePrivateGraphIntegrationTest {
         val transport = Proxy.newProxyInstance(HttpTransport::class.java.classLoader, arrayOf(HttpTransport::class.java)) { _, _, _ -> error("No live transport permitted") } as HttpTransport
         val rawPostDraft = DefaultPostComposerRepository(post, transport, dispatchers, clock)
         val rawCommentDraft = DefaultCommentComposerRepository(comment, transport, dispatchers, clock)
+        var authCalls = 0
+        var authResponse = """{"success":true}"""
+        val authTransport = object : HttpTransport {
+            override suspend fun execute(request: HttpRequest, onUploadProgress: UploadProgress?): HttpResponse {
+                check(request.method == "POST" && request.url.endsWith(NodeSeekJsonClient.PATH_ACCOUNT_SIGN_IN))
+                authCalls++
+                jar.header = "${NodeSeekSite.CONFIG.sessionCookieNames.first()}=new-authenticated-owner"
+                return HttpResponse(200, request.url, emptyMap(), authResponse)
+            }
+        }
         var loadDetail: suspend (Long, Int) -> PostDetail = { _, _ -> error("No live download") }
         val remote = object : PostRemoteDataSource {
             override suspend fun loadList(categorySlug: String?, page: Int, sort: FeedSort): PostListPage = error("No live list")
@@ -88,6 +99,8 @@ class NativePrivateGraphIntegrationTest {
                 "notificationRepository" to notifications, "rawPostRepository" to rawPosts,
                 "rawOfflineLibrary" to rawOffline, "offlineFiles" to files,
                 "transport" to transport, "dispatchers" to dispatchers, "clock" to clock,
+                "userAgent" to UserAgent("fixture", true),
+                "signInRepository" to NodeSeekSignInRepository(NodeSeekJsonClient(authTransport, dispatchers)),
                 "profileRepository" to profile, "userNoteStore" to UserNoteStore(db.userNoteDao(), clock),
                 "trackedThreadStore" to TrackedThreadStore(db.trackedThreadDao(), clock),
             )
@@ -250,6 +263,215 @@ class NativePrivateGraphIntegrationTest {
         assertEquals(0, preferences.writes)
         assertNativeDenied(d)
         d.assertRawPresent()
+    }
+
+    @Test
+    fun successfulPasswordLoginAfterPublicStartupAdmitsEmptyStores() = scenario { root, jar ->
+        jar.header = ""
+        var d = Disk(root, jar)
+        try {
+            success("site.get")
+            firstObservation("session.state")
+            firstObservation("settings.observe")
+            firstObservation("session.privateBoundary")
+            val guestEpoch = displayedEpoch()
+            assertEquals(PrivateStorePhase.READY, d.graph.privateBoundary.state.value.phase)
+            val signed = success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""").jsonObject
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertEquals(1, d.authCalls, "Execute actual sign-in parser and JSON client via native dispatch")
+            assertEquals(PrivateStorePhase.READY, d.graph.privateBoundary.state.value.phase,
+                "Successful clean login must not strand My behind private-data recovery")
+            assertNotEquals(guestEpoch, displayedEpoch(), "New auth identity must revoke guest epoch")
+            assertEquals(JsonNull, success("draft.post.get"))
+            d.close()
+            d = Disk(root, jar)
+            assertEquals(JsonNull, success("draft.post.get"), "Rebound provenance survives real DataStore reopen")
+        } finally { d.close() }
+    }
+
+    @Test
+    fun successfulLoginWithGuestBrowsingDataPreservesItAndReportsPrivacyGate() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            firstObservation("settings.observe")
+            firstObservation("session.privateBoundary")
+            // Public board browsing writes private history through the production supplement dispatcher.
+            success("boards.recent.record", """{"categorySlug":"trade"}""")
+            assertEquals(listOf("trade"), d.settings.settings.first().recentBoards)
+            val signed = success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""").jsonObject
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertTrue(d.session.state.value.isSignedIn)
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertEquals(listOf("trade"), d.settings.settings.first().recentBoards, "Guest bytes are not B's data")
+            denied("boards.recent.get")
+            assertEquals(JsonPrimitive("CONFIRMATION_REQUIRED"), signed["privateDataStatus"],
+                "Successful authentication must explicitly distinguish locked private data from login failure")
+            assertEquals(d.graph.privateBoundary.state.value.nativeBoundaryDto(), signed["privateBoundary"])
+        } finally { d.close() }
+    }
+
+    @Test
+    fun successfulLoginWithRoomGuestThreadDoesNotAdoptCachedContent() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            val body = PostContent(7, "#0", "public-author", 1, null, false, emptyList(), null, null, null, emptyList())
+            d.loadDetail = { id, page -> PostDetail(postId = id, title = "public-thread", body = body, comments = emptyList(), page = page, totalPages = 1, hasNextPage = false) }
+            d.graph.postRepository.refreshThread(42, 1)
+            assertNotNull(d.rawPosts.thread(42).first())
+            success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""")
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertNotNull(d.rawPosts.thread(42).first(), "Preserve guest Room bytes, never reassign them to a new auth owner")
+            assertFailsWith<PrivateStoreAccessDenied> { d.graph.postRepository.thread(42).first() }
+        } finally { d.close() }
+    }
+
+    @Test
+    fun malformedSignInResponseAfterCookieNeverUsesEmptyRebind() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            d.authResponse = "not-json"
+            val failed = request("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""")
+            assertEquals(JsonPrimitive(false), failed["ok"])
+            assertTrue(d.session.state.value.isSignedIn, "Cookie-side effects are reconciled even on parse error")
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            denied("draft.post.get")
+        } finally { d.close() }
+    }
+
+    @Test
+    fun newBytesDuringEmptyLoginPreventRebind() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            d.graph.privateBoundary.sessionMutation(allowEmptyRebind = { _: Unit -> true }) {
+                jar.header = "${NodeSeekSite.CONFIG.sessionCookieNames.first()}=owner-b"
+                d.rawPostDraft.saveDraft(PostDraft(title = "unattributed-late-bytes"))
+            }
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertEquals("unattributed-late-bytes", d.rawPostDraft.draft.first()?.title)
+            denied("draft.post.get")
+        } finally { d.close() }
+    }
+
+    @Test
+    fun interruptedEmptyJournalCannotGainTrustThroughSuccessfulLogin() = scenario { root, jar ->
+        jar.header = ""
+        var d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            d.graph.privateBoundary.beginExternalMutation()
+            d.close()
+            d = Disk(root, jar)
+            val signed = success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""").jsonObject
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertEquals(JsonPrimitive("CONFIRMATION_REQUIRED"), signed["privateDataStatus"])
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            denied("draft.post.get")
+        } finally { d.close() }
+    }
+
+    @Test
+    fun emptyLoginInventoryWaitsForNonCancellableGuestWriter() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        val entered = CompletableDeferred<Unit>()
+        val draining = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writer: Job? = null
+        var login: Deferred<JsonElement>? = null
+        try {
+            firstObservation("session.state")
+            writer = d.scope.launch {
+                d.graph.privateBoundary.protect {
+                    entered.complete(Unit)
+                    try { awaitCancellation() } finally {
+                        withContext(NonCancellable) {
+                            draining.complete(Unit)
+                            release.await()
+                            d.rawPostDraft.saveDraft(PostDraft(title = "guest-finally-write"))
+                        }
+                    }
+                }
+            }
+            withTimeout(5_000) { entered.await() }
+            login = d.scope.async { success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""") }
+            withTimeout(5_000) { draining.await() }
+            assertEquals(0, d.authCalls, "Auth may not run before the old writer terminates")
+            assertFalse(login.isCompleted)
+            release.complete(Unit)
+            val signed = withTimeout(5_000) { login.await() }.jsonObject
+            writer.join()
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertEquals("guest-finally-write", d.rawPostDraft.draft.first()?.title)
+            denied("draft.post.get")
+        } finally {
+            release.complete(Unit)
+            login?.cancelAndJoin()
+            writer?.cancelAndJoin()
+            d.close()
+        }
+    }
+
+    @Test
+    fun successfulLoginNeverAdoptsUntrustedLegacyData() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            d.seedRaw()
+            firstObservation("session.state")
+            val signed = success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""").jsonObject
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertNativeDenied(d)
+            d.assertRawPresent()
+        } finally { d.close() }
+    }
+
+    @Test
+    fun successfulBrowserLoginAfterPublicStartupAdmitsEmptyStoresOnlyAfterClose() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        val storage = platform.Foundation.NSHTTPCookieStorage.sharedHTTPCookieStorage
+        val web = platform.WebKit.WKHTTPCookieStore()
+        storage.cookies.forEach(storage::deleteCookie)
+        val browser = NativeBrowserSession(web, "login")
+        try {
+            firstObservation("session.state")
+            firstObservation("settings.observe")
+            firstObservation("session.privateBoundary")
+            val before = displayedEpoch()
+            val started = CompletableDeferred<String?>()
+            browser.start { _, error -> started.complete(error) }
+            assertNull(withTimeout(5_000) { started.await() })
+            assertEquals(PrivateStorePhase.TRANSITIONING, d.graph.privateBoundary.state.value.phase)
+            // Fixture adapter mirrors Foundation's real bridge output into the graph's cookie authority.
+            val name = NodeSeekSite.CONFIG.sessionCookieNames.first()
+            val host = requireNotNull(WebUrl.parse(NodeSeekSite.BASE_URL)?.host)
+            web.setCookie(platform.Foundation.NSHTTPCookie(name, "browser-owner", host)) {}
+            jar.header = storage.cookies.joinToString("; ") { "${it.name}=${it.value}" }
+            assertTrue(browser.goalReached())
+            denied("draft.post.get")
+            val closed = CompletableDeferred<String?>()
+            browser.close { closed.complete(it) }
+            assertNull(withTimeout(5_000) { closed.await() })
+            assertEquals(PrivateStorePhase.READY, d.graph.privateBoundary.state.value.phase)
+            assertNotEquals(before, displayedEpoch())
+            assertEquals(JsonNull, success("draft.post.get"))
+        } finally {
+            val closed = CompletableDeferred<String?>()
+            browser.close { closed.complete(it) }
+            withTimeout(5_000) { closed.await() }
+            storage.cookies.forEach(storage::deleteCookie)
+            d.close()
+        }
     }
 
     @Test

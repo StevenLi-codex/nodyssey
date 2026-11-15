@@ -4,6 +4,8 @@
 "native_foundation_help" = "How to use this app";
 "native_foundation_privacy" = "Privacy policy";
 
+"native_foundation_boundary_signed_in" = "Signed in — private data is locked";
+"native_foundation_boundary_signed_in_detail" = "Your account is signed in. Existing local data has been retained, but its ownership cannot be verified. Signing in does not transfer ownership or automatically unlock or delete it. Checking status is read-only and may leave it locked.";
 "native_foundation_boundary_title" = "Private data is locked";
 "native_foundation_boundary_detail" = "We cannot verify who owns the local private data. It remains inaccessible. Settings and sign-in are still available; signing in does not adopt old data.";
 "native_foundation_boundary_transition" = "Private storage is being checked. No reset is performed automatically.";
