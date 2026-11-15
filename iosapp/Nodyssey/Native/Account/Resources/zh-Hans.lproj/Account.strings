@@ -10,3 +10,4 @@
 "native.account.page_filter" = "搜索、版块筛选及倒序仅针对当前已加载页。此接口未提供全局筛选。";
 "native.account.server_order" = "服务器顺序";
 "native.account.page" = "页码";
+"native.account.joined" = "%@ 加入";

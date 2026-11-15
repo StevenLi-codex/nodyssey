@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage only renderer sources/tests on the approved Mac, then run SwiftPM."""
 import io
+import os
 import pathlib
 import shlex
 import subprocess
@@ -8,7 +9,7 @@ import sys
 import tarfile
 
 repo = pathlib.Path(__file__).resolve().parents[2]
-stage = "/Users/steven/.cache/hermes-build/nodyssey-account-ui"
+stage = os.environ.get("ACCOUNT_MAC_STAGE", "/Users/steven/.cache/hermes-build/nodyssey-account-ui")
 outer = ["ssh", "-p", "18323", "-i", "/home/hermes/.ssh/n100_london_ed25519", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/home/hermes/.ssh/known_hosts_n100_service", "steven@127.0.0.1"]
 inner = ["ssh", "-o", "Hostname=StevendeMacBook-Pro.local", "-o", "HostKeyAlias=192.168.31.128", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "macbook"]
 archive = io.BytesIO()

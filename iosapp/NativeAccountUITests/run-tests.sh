@@ -10,6 +10,7 @@ cp -R "$HERE/../NativeCore" "$STAGE/NativeCore"
 for FILE in "$HERE"/../Nodyssey/Native/Account/*State.swift; do
  [ ! -f "$FILE" ] || cp "$FILE" "$STAGE/Test/Sources/"
 done
+cp "$HERE/../Nodyssey/Native/Account/AccountProfileDate.swift" "$STAGE/Test/Sources/"
 touch "$STAGE/Test/Sources/Empty.swift"
 if [ "$(xcode-select -p)" != /Library/Developer/CommandLineTools ]; then
     swift test --disable-xctest --package-path "$STAGE/Test"

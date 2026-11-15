@@ -83,17 +83,19 @@ struct AccountSurface: View {
 }
 
 struct AccountProfileHeader: View {
+    @Environment(\.locale) private var locale
     let profile: JSONValue
+    var showBalances = true
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 14) {
                 ZStack {
                     Circle().fill(.secondary.opacity(0.10))
                     if let url = profile.nativeString("avatarUrl"), !url.isEmpty { NativeRemoteImage(url: url) }
                     else { Image(systemName: "person.fill").foregroundStyle(.secondary) }
-                }.frame(width: 64, height: 64).clipShape(Circle()).accessibilityHidden(true)
+                }.frame(width: 48, height: 48).clipShape(Circle()).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(profile.nativeString("name") ?? "").font(.title3.weight(.bold))
+                    Text(profile.nativeString("name") ?? "").font(.title3.weight(.semibold)).foregroundStyle(.primary)
                     if let uid = profile.nativeInt("uid") {
                         Text("UID \(String(uid))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
@@ -107,8 +109,11 @@ struct AccountProfileHeader: View {
             if let bio = profile.nativeString("bio"), !bio.isEmpty {
                 Text(bio).font(.subheadline).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
-            if let date = profile.nativeString("createdAt") { Text(date).font(.caption).foregroundStyle(.secondary) }
-            if profile.nativeInt("chickenCount") != nil || profile.nativeInt("starCount") != nil {
+            if let raw = profile.nativeString("createdAt"), let date = AccountProfileDate.formatted(raw, locale: locale) {
+                Text(String(format: String(localized: "native.account.joined", table: "Account"), locale: locale, date))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if showBalances && (profile.nativeInt("chickenCount") != nil || profile.nativeInt("starCount") != nil) {
                 HStack(spacing: 28) {
                     if let count = profile.nativeInt("chickenCount") { AccountProfileStat(title: "profile_chicken", value: count) }
                     if let count = profile.nativeInt("starCount") { AccountProfileStat(title: "profile_stars", value: count) }
@@ -132,7 +137,7 @@ struct AccountProfileStat: View {
 struct AccountProfileStatus: View {
     @ObservedObject var profile: AccountSelfProfileState
     var body: some View {
-        if profile.isLoading { ProgressView() }
+        if profile.isLoading && profile.value == .null { ProgressView("loading_indicator_label") }
         if let failure = profile.failure { NativeFailureView(failure: failure) }
         if profile.failure != nil || (profile.value == .null && !profile.isLoading) {
             Text("native.account.profile_unavailable", tableName: "Account")
@@ -147,25 +152,50 @@ struct AccountProfileScreen: View {
     var body: some View {
         List {
             if app.isSignedIn {
-                if profile.value != .null { AccountProfileHeader(profile: profile.value) }
-                AccountProfileStatus(profile: profile)
-                if let uid = profile.value.nativeInt("uid") {
-                    Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
-                        navigationLabel("profile_space", symbol: "person.crop.circle")
+                Section {
+                    if let uid = profile.value.nativeInt("uid") {
+                        Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
+                            HStack {
+                                AccountProfileHeader(profile: profile.value, showBalances: false)
+                                if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
+                                else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                            }
+                        }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
+                    } else if profile.value != .null {
+                        AccountProfileHeader(profile: profile.value, showBalances: false)
                     }
+                    AccountProfileStatus(profile: profile)
+                    AccountProfileBalances(profile: profile.value)
                 }
                 Section("profile_section_content") {
-                    route("profile_tile_topics", "MyTopics")
-                    route("profile_tile_comments", "MyComments")
-                    route("profile_tile_collections", "Bookmarks")
-                    Button { app.open("Follow", ["showFollowers": .bool(false)]) } label: { navigationLabel("profile_tile_following", symbol: "person.badge.plus") }
-                    Button { app.open("Follow", ["showFollowers": .bool(true)]) } label: { navigationLabel("profile_tile_followers", symbol: "person.2") }
+                    AccountProfileDirectory(entries: [
+                        .init("profile_tile_topics", "text.bubble", "MyTopics"),
+                        .init("profile_tile_comments", "bubble.left.and.bubble.right", "MyComments"),
+                        .init("profile_tile_collections", "bookmark", "Bookmarks"),
+                        .init("profile_tile_history", "clock", "ReadHistory"),
+                        .init("profile_tile_following", "person.badge.plus", "Follow", ["showFollowers": .bool(false)]),
+                        .init("profile_tile_followers", "person.2", "Follow", ["showFollowers": .bool(true)])
+                    ])
                 }
-                Section {
+                Section("profile_section_community") {
                     route("profile_attendance_title", "Assets")
-                    route("profile_chicken", "Credit")
-                    route("profile_stars", "Stardust")
-                    route("profile_tile_account", "AccountSettings")
+                    AccountProfileDirectory(entries: [
+                        .init("profile_tile_award", "book", "Award"),
+                        .init("profile_tile_lucky", "dice", "Lucky"),
+                        .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
+                        .init("profile_tile_invite", "ticket", "Invite"),
+                        .init("profile_tools", "wrench.and.screwdriver", "CommunityTools"),
+                        .init("profile_tile_about_community", "info.circle", "AboutCommunity")
+                    ])
+                }
+                Section("profile_section_settings") {
+                    AccountProfileDirectory(entries: [
+                        .init("profile_tile_account", "person.crop.circle", "AccountSettings"),
+                        .init("profile_tile_notifications", "bell", "NotificationSettings"),
+                        .init("profile_tile_theme", "paintpalette", "ThemeSettings")
+                    ])
+                    Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
+                        .accessibilityIdentifier("native.profile.settings")
                 }
             } else {
                 VStack(alignment: .leading, spacing: 16) {
@@ -176,15 +206,20 @@ struct AccountProfileScreen: View {
                         .accessibilityIdentifier("native.profile.signin")
                 }.padding(.vertical, 20).frame(maxWidth: .infinity, alignment: .leading)
             }
-            Section("profile_guest_section") {
+            if !app.isSignedIn { Section("profile_guest_section") {
                 route("profile_tile_history", "ReadHistory")
                 route("profile_tools", "CommunityTools")
                 route("profile_tile_about_community", "AboutCommunity")
-                Button { app.open("Settings") } label: { navigationLabel("profile_section_settings", symbol: "gearshape") }
+                Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
                     .accessibilityIdentifier("native.profile.settings")
-            }
+            } }
         }
-        .listStyle(.plain).scrollContentBackground(.hidden)
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #else
+        .listStyle(.inset)
+        #endif
+        .scrollContentBackground(.hidden)
         .listRowSeparatorTint(.secondary.opacity(0.15))
         .background(AccountSurface(canvas: true))
         .navigationTitle("profile_space")

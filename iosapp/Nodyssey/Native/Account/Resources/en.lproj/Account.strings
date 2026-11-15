@@ -10,3 +10,4 @@
 "native.account.page_filter" = "Search, board filter and reverse order apply to this loaded page only. The server does not expose global filters for this endpoint.";
 "native.account.server_order" = "Server order";
 "native.account.page" = "Page";
+"native.account.joined" = "Joined %@";

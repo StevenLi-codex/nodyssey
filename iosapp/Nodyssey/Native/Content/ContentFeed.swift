@@ -3,6 +3,7 @@ import NodysseyNativeCore
 
 struct ContentPostList: View {
     @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var categories = NativeStore()
     @StateObject private var recent = NativeStore()
     @StateObject private var command = ContentCommand()
@@ -32,12 +33,15 @@ struct ContentPostList: View {
                 .menuIndicator(.hidden).fixedSize()
                 .background(ContentSurface())
             }.background(ContentSurface())
-            HStack(spacing: 20) {
-                sortTab("content.lastReply", value: "LAST_REPLY")
-                sortTab("content.postTime", value: "POST_TIME")
-                Spacer(minLength: 0)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    ContentSortPicker(selection: sortSelection).pickerStyle(.menu)
+                } else {
+                    ContentSortPicker(selection: sortSelection).pickerStyle(.segmented)
+                }
             }
-            .padding(.horizontal, 16).background(ContentSurface())
+            .frame(minHeight: 44)
+            .padding(.horizontal, 16).padding(.vertical, 4).background(ContentSurface())
             .disabled(command.busy || app.settings == .null)
             Divider()
             if ContentPreferences(settings: app.settings).homePageBar {
@@ -77,18 +81,8 @@ struct ContentPostList: View {
         .task(id: app.generation) { await refreshCategories() }
         .onDisappear { command.cancel(); page = positions.position(board: category, sort: sort)?.page ?? page }
     }
-    private func sortTab(_ key: String.LocalizationValue, value: String) -> some View {
-        Button { command.setFeedSort(value, app: app) } label: {
-            Text(String(localized: key, table: "Content"))
-                .font(.subheadline.weight(sort == value ? .semibold : .regular))
-                .foregroundStyle(sort == value ? Color.primary : Color.secondary)
-                .frame(minHeight: 44)
-                .overlay(alignment: .bottom) {
-                    if sort == value { Capsule().fill(.tint).frame(width: 22, height: 3) }
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(sort == value ? [.isSelected] : [])
+    private var sortSelection: Binding<String> {
+        Binding(get: { sort }, set: { command.setFeedSort($0, app: app) })
     }
     private var homeCategories: JSONValue {
         let disabled = Set((app.settings.nativeArray("disabledHomeBoards") + app.settings.nativeArray("hiddenHomeBoards")).compactMap(\.string))
