@@ -33,7 +33,7 @@ class WorkspaceSettingsDataStore(
             global.updateData { current ->
                 val result = current.toMutablePreferences()
                 // Apply only this transform's diff, retaining concurrent global writers and legacy bytes.
-                (before.asMap().keys + after.asMap().keys).filter { it.name !in PRIVATE_KEYS }.forEach { key ->
+                (before.asMap().keys + after.asMap().keys).filter { it.name in PUBLIC_KEYS }.forEach { key ->
                     if (before.asMap()[key] != after.asMap()[key]) {
                         @Suppress("UNCHECKED_CAST")
                         val typed = key as Preferences.Key<Any>
@@ -59,7 +59,7 @@ class WorkspaceSettingsDataStore(
 
     private fun partition(source: Preferences, private: Boolean): Preferences {
         val result = emptyPreferences().toMutablePreferences()
-        source.asMap().filterKeys { (it.name in PRIVATE_KEYS) == private }.forEach { (key, value) ->
+        source.asMap().filterKeys { (it.name !in PUBLIC_KEYS) == private }.forEach { (key, value) ->
             @Suppress("UNCHECKED_CAST")
             val typed = key as Preferences.Key<Any>
             result[typed] = value
@@ -68,10 +68,19 @@ class WorkspaceSettingsDataStore(
     }
 
     companion object {
-        val PRIVATE_KEYS: Set<String> = setOf(
-            "search_history_v3", "recent_searches", "recent_boards", "report_compare_basket",
-            "notification_seen_replies", "notification_seen_mentions", "notification_seen_messages", "notification_seen_overlap",
-            "last_clipboard_post_link", "keyword_alert_last_post_id", "keyword_alert_last_post_id-deepflood",
+        // Positive allowlist: unknown/future keys are local, never exposed from the old mixed store.
+        val PUBLIC_KEYS: Set<String> = setOf(
+            "theme_mode", "app_language", "dynamic_color", "color_source", "preset_id", "seed_color",
+            "wallpaper_seed", "wallpaper_system_palette", "wallpaper_auto_update", "palette_style", "saved_themes",
+            "font_scale", "one_hand_mode", "eink_mode", "sticker_uniform_size", "sticker_size_sp",
+            "images_on_wifi_only", "report_format", "hidden_home_boards", "home_board_order", "disabled_home_boards",
+            "hidden_home_boards-deepflood", "home_board_order-deepflood", "disabled_home_boards-deepflood",
+            "post_toolbar_actions", "reply_toolbar_actions", "message_toolbar_actions", "feed_sort", "home_page_bar",
+            "clipboard_post_prompt", "onboarding_seen", "one_hand_tip_dismissed", "holiday_theme",
+            "notifications_enabled", "notification_poll_minutes", "notifications_wifi_only", "notification_quiet_hours",
+            "notify_interactions", "notify_mentions", "notify_replies", "notify_messages", "notify_keyword_alerts",
+            "notify_tracked_threads", "read_history_limit", "update_check_on_launch", "update_dev_channel",
+            "sticker_cdn", "sticker_cdn_custom", "sticker_group_order", "sticker_groups_hidden",
         )
     }
 }

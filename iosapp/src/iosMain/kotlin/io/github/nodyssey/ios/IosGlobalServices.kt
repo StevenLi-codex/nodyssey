@@ -54,7 +54,6 @@ import io.github.nodyssey.data.imagehost.DataStoreImageHostSettings
 import io.github.nodyssey.data.imagehost.DefaultImageHostRepository
 import io.github.nodyssey.data.imagehost.ImageHostRepository
 import io.github.nodyssey.data.local.createNodeSeekDatabase
-import io.github.nodyssey.data.local.importGlobalCatalogues
 import io.github.nodyssey.data.offline.OfflineSettingsStore
 import io.github.nodyssey.data.offline.OfflineWorkScheduler
 import io.github.nodyssey.data.proxy.DataStoreProxySettings
@@ -97,7 +96,6 @@ import io.github.plaza.core.net.appleUrlSession
 import io.github.plaza.core.net.deviceAcceptLanguage
 import io.github.plaza.core.readAppVersion
 import io.github.plaza.core.update.ApkInstaller
-import io.github.plaza.core.update.isPreReleaseVersionName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
@@ -234,19 +232,7 @@ internal class IosGlobalServices(
 
     internal val jsonClient by lazy { NodeSeekJsonClient(transport, dispatchers) }
 
-    internal val database by lazy { createNodeSeekDatabase("${privateWorkspaceDirectory()}/global-catalogues.db") }
-
-    @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
-    internal suspend fun initializeCatalogues() {
-        database.importGlobalCatalogues {
-            val path = io.github.nodyssey.data.local.nodeSeekDatabasePath()
-            if (!platform.Foundation.NSFileManager.defaultManager.fileExistsAtPath(path)) {
-                null
-            } else {
-                androidx.sqlite.driver.bundled.BundledSQLiteDriver().open(path, 1) // SQLITE_OPEN_READONLY
-            }
-        }
-    }
+    internal val database by lazy { createNodeSeekDatabase("${singleLocalProfileDirectory()}/catalogues.db") }
 
     internal val remotePosts by lazy { NetworkPostDataSource(htmlClient, dispatchers, clock) }
 
@@ -391,7 +377,7 @@ internal class IosGlobalServices(
 
     override val accountSignOut: AccountSignOut by lazy {
         // Signing out revokes access, not permission to destroy existing local data.
-        // Explicit recovery/reset is the only destructive account-transition path on iOS.
+        // The single local profile is device-local, not bound to a cookie identity.
         AccountSignOut { sessionRepository.signOut() }
     }
 
@@ -410,9 +396,9 @@ internal class IosGlobalServices(
 
     internal lateinit var active: IosAppContainer
     internal val settingsDataStore by lazy { createPreferenceDataStore("settings") }
-    private val globalSettingsRepository by lazy { SettingsRepository(settingsDataStore, isPreReleaseVersionName(appVersion.name)) }
+    private val globalSettingsRepository get() = active.settingsRepository
     internal val settingsMutex = kotlinx.coroutines.sync.Mutex()
-    internal val offlineSettings by lazy { OfflineSettingsStore(createPreferenceDataStore("offline")) }
+    internal val offlineSettings by lazy { OfflineSettingsStore(createPreferenceDataStore("offline", directory = singleLocalProfileDirectory())) }
     override val postRepository: PostRepository get() = active.postRepository
     override val collectedPostMetaStore: CollectedPostMetaStore get() = active.collectedPostMetaStore
     override val userNoteStore: UserNoteStore get() = active.userNoteStore

@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--open-isolation', action='store_true', help='Legacy RAW composer bypass; intentionally expects obsolete automatic deletion and remains RED.')
 parser.add_argument('--graph-integration', action='store_true', help='Production inventory and dispatch regions with real file DataStore/Room; not Apple.')
 parser.add_argument('--drain', action='store_true')
+parser.add_argument('--single-local', action='store_true', help='Exercise production native auth dispatch with the iOS single-local boundary mode.')
 parser.add_argument('--open-publication', action='store_true', help='Run the unresolved counts-at-publication regression (expected RED).')
 parser.add_argument('--method', help='Run a single named JUnit method.')
 parser.add_argument('--repeat', type=int, default=1)
@@ -93,6 +94,8 @@ if args.graph_integration:
 cp = ':'.join(map(str, jars))
 java = os.environ.get('JAVA', str(Path.home() / '.cache/nodyssey-build/jdk21/bin/java'))
 # Only graph construction is replaced: property signatures come from the real shell.
+if args.graph_integration:
+    raise SystemExit(subprocess.call([sys.executable, str(root / "iosapp/tests/owned_workspace_graph_test.py")]))
 platform = (main / 'NativePlatform.kt').read_text()
 platform_region = platform[platform.index('    internal fun claim('):platform.index('\nprivate fun IosAppContainer.platformContext')]
 platform_source = '''package io.github.nodyssey.ios.native
@@ -127,7 +130,10 @@ lines += ['class IosAppContainer(val values: Map<String, Any>) {', 'val lifetime
 lines += [f'val {n}: {props[n]} get() = values.getValue("{n}") as {props[n]}' for n in names]
 lines += ['val privateBoundary: io.github.nodyssey.data.session.PrivateSessionBoundary by lazy {\n    val memory = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> {\n        private val value = kotlinx.coroutines.flow.MutableStateFlow(androidx.datastore.preferences.core.emptyPreferences())\n        override val data: kotlinx.coroutines.flow.Flow<androidx.datastore.preferences.core.Preferences> = value\n        override suspend fun updateData(transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences): androidx.datastore.preferences.core.Preferences {\n            value.value = transform(value.value)\n            return value.value\n        }\n    }\n    io.github.nodyssey.data.session.PrivateSessionBoundary(\n        io.github.nodyssey.data.session.PrivateStoreProvenance(memory, emptySet()),\n        sessionRepository::privateOwnerProof, emptyList(),\n        beforePublication = { notificationRepository.clearCounts() },\n        publishSession = { sessionRepository.publishReconciled(); Unit },\n    )\n}']
 lines += ['}', 'object NodysseyApp { val workspaces = kotlinx.coroutines.flow.MutableStateFlow<IosAppContainer?>(null); var fixture: IosAppContainer get() = checkNotNull(workspaces.value); set(value) { workspaces.value = value }; suspend fun createPrivateWorkspace(confirmed: Boolean, epoch: String): IosAppContainer = error("Workspace integration requires --graph-integration"); suspend fun ensureContainer() = fixture; fun nativeSiteMetadata(): kotlinx.serialization.json.JsonObject = error("Public bootstrap is exercised by --graph-integration only") }']
-(out / 'Graph.kt').write_text('\n'.join(lines))
+graph_source = '\n'.join(lines)
+if args.single_local:
+    graph_source = graph_source.replace('io.github.nodyssey.data.session.PrivateStoreProvenance(memory, emptySet()),', 'null,').replace('sessionRepository::privateOwnerProof, emptyList(),', 'sessionRepository::privateOwnerProof, emptyList(), singleAccountLocal = true,')
+(out / 'Graph.kt').write_text(graph_source)
 (out / 'UnusedDomains.kt').write_text('''package io.github.nodyssey.ios.native
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.flow.Flow

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the ENTIRE production IosAppContainer and router, run real JVM Room/DataStore.
+"""Compile the ENTIRE production single-local IosAppContainer, run real JVM Room/DataStore.
 Apple path/network/Coil and global process services are platform fixtures, not Apple execution.
 """
 from pathlib import Path
@@ -21,8 +21,7 @@ imports = [line for line in text.splitlines() if line.startswith('import ') and 
 (out / 'owned-source.json').write_text(json.dumps({'source':str(production),'sha256':hashlib.sha256(production.read_bytes()).hexdigest(),'class_body_sha256':hashlib.sha256(body.encode()).hexdigest()},indent=2))
 sources = [out / 'OwnedGraph.kt', base / 'IosAppCacheStore.kt', root / 'iosapp/tests/fixtures/OwnedWorkspacePlatform.kt', root / 'iosapp/tests/fixtures/OwnedWorkspaceGraphTest.kt']
 sources += list((root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session').glob('Private*.kt'))
-sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/local/GlobalCatalogueImport.kt']
-sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/settings/WorkspaceSettingsDataStore.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/local/WorkspaceTitleKeywordDao.kt']
+sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/settings/WorkspaceSettingsDataStore.kt']
 # JVM factory equivalents use the same explicit paths and owned scopes.
 (out / 'Factory.kt').write_text('''package io.github.nodyssey.data
 import androidx.datastore.preferences.core.*

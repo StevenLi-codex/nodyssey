@@ -1,8 +1,5 @@
 package io.github.nodyssey.ios
 
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.room.useReaderConnection
 import coil3.ImageLoader
 import coil3.PlatformContext
 import io.github.nodyssey.data.AppCacheStore
@@ -42,8 +39,6 @@ import io.github.nodyssey.data.offline.RoomOfflineLibrary
 import io.github.nodyssey.data.offline.UrlSessionOfflineImageSource
 import io.github.nodyssey.data.session.PrivateOfflineLibrary
 import io.github.nodyssey.data.session.PrivateSessionBoundary
-import io.github.nodyssey.data.session.PrivateStoreParticipant
-import io.github.nodyssey.data.session.PrivateStoreProvenance
 import io.github.nodyssey.data.settings.ReportCompareStore
 import io.github.nodyssey.data.settings.SettingsRepository
 import io.github.nodyssey.data.settings.WorkspaceSettingsDataStore
@@ -55,16 +50,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import platform.Foundation.NSURL
-/** Immutable, owned private repository snapshot. Never retarget a captured repository. */
+/** Immutable, owned device-local repository graph. Never retarget captured repositories. */
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 class IosAppContainer internal constructor(
     internal val services: IosGlobalServices,
-    internal val workspaceId: String?,
-    internal val workspaceRoot: String?,
+    internal val profileRoot: String,
 ) : AppContainer by services {
+    override val doh: io.github.nodyssey.data.dns.DohSupport get() = services.doh
     internal val lifetime = io.github.nodyssey.data.session.PrivateWorkspaceLifetime()
     private val storeJob = SupervisorJob()
     private val storeScope = CoroutineScope(storeJob + dispatchers.io)
@@ -76,17 +70,17 @@ class IosAppContainer internal constructor(
     private val offlineScheduler get() = services.offlineScheduler
     internal val urlSession get() = services.urlSession
     private val databaseDelegate = lazy {
-        if (workspaceRoot == null) createNodeSeekDatabase() else createNodeSeekDatabase("$workspaceRoot/private.db")
+        createNodeSeekDatabase("$profileRoot/private.db")
     }
     private val database get() = databaseDelegate.value
     private fun createPreferenceDataStore(name: String, keepOutOfBackup: Boolean = false) =
         io.github.nodyssey.data.createPreferenceDataStore(
             name,
             scope = storeScope,
-            directory = workspaceRoot ?: if (keepOutOfBackup) legacyProvenanceDirectory() else requireNotNull(applicationSupportDirectory().path),
+            directory = profileRoot,
         )
     private val loaderDelegate = lazy {
-        nodysseyImageLoader(PlatformContext.INSTANCE, privateBoundary, workspaceRoot?.let { "$it/cache/image_cache" }) { urlSession }
+        nodysseyImageLoader(PlatformContext.INSTANCE, privateBoundary, "$profileRoot/cache/image_cache") { urlSession }
     }
     internal val imageLoader: ImageLoader get() = loaderDelegate.value
 
@@ -121,13 +115,8 @@ class IosAppContainer internal constructor(
     }
 
     override val userNoteStore: UserNoteStore by lazy { UserNoteStore(database.userNoteDao(), clock) }
-    private val keywordDao by lazy {
-        io.github.nodyssey.data.local.WorkspaceTitleKeywordDao(services.database.titleKeywordDao(), database.titleKeywordDao())
-    }
-    internal suspend fun prepare() {
-        if (workspaceRoot != null) keywordDao.synchronize()
-    }
-    override val titleKeywordStore: TitleKeywordStore by lazy { TitleKeywordStore(keywordDao, clock) }
+    internal suspend fun prepare() = Unit
+    override val titleKeywordStore: TitleKeywordStore by lazy { TitleKeywordStore(database.titleKeywordDao(), clock) }
     override val trackedThreadStore: TrackedThreadStore by lazy { TrackedThreadStore(database.trackedThreadDao(), clock) }
 
     override val readingPositionStore: ReadingPositionStore by lazy {
@@ -135,10 +124,10 @@ class IosAppContainer internal constructor(
     }
 
     private val settingsDataStore by lazy {
-        if (workspaceRoot == null) services.settingsDataStore else createPreferenceDataStore("settings-private")
+        createPreferenceDataStore("settings-private")
     }
     private val routedSettings by lazy {
-        if (workspaceRoot == null) settingsDataStore else WorkspaceSettingsDataStore(services.settingsDataStore, settingsDataStore, services.settingsMutex)
+        WorkspaceSettingsDataStore(services.settingsDataStore, settingsDataStore, services.settingsMutex)
     }
 
     override val settingsRepository: SettingsRepository by lazy {
@@ -167,70 +156,14 @@ class IosAppContainer internal constructor(
     }
     private val postDraftStore by lazy { createPreferenceDataStore("post-composer") }
     private val commentDraftStore by lazy { createPreferenceDataStore("comment-composer") }
-    internal val offlineFiles by lazy { IosOfflineFileStore.of(workspaceRoot?.let { NSURL.fileURLWithPath(it, isDirectory = true) } ?: applicationSupportDirectory()) }
+    internal val offlineFiles by lazy { IosOfflineFileStore.of(NSURL.fileURLWithPath(profileRoot, isDirectory = true)) }
 
     internal val privateBoundary: PrivateSessionBoundary by lazy {
-        // Mixed store: history is owner-private; preferences remain device-global.
-        // Include the legacy key as well: removing v3 alone would resurrect it on decode.
-        val historyKeys = listOf("search_history_v3", "recent_searches", "recent_boards").map(::stringPreferencesKey)
-        val participants = listOf(
-            PrivateStoreParticipant("settings-history", {
-                val preferences = settingsDataStore.data.first()
-                historyKeys.none { it in preferences }
-            }, {
-                settingsDataStore.edit { preferences -> historyKeys.forEach { preferences.remove(it) } }
-            }),
-            PrivateStoreParticipant("post-drafts", { postDraftStore.data.first().asMap().isEmpty() }, {
-                postDraftStore.edit { it.clear() }
-                Unit
-            }),
-            PrivateStoreParticipant("comment-drafts", { commentDraftStore.data.first().asMap().isEmpty() }, {
-                commentDraftStore.edit { it.clear() }
-                Unit
-            }),
-            PrivateStoreParticipant("room-private", {
-                database.useReaderConnection { connection ->
-                    listOf(
-                        "posts", "feed_positions", "feed_remote_keys", "post_details", "post_comments", "post_read_marks",
-                        "post_reading_positions", "self_profile", "offline_threads", "offline_comments", "offline_images",
-                        "collected_post_meta", "user_notes", "tracked_threads", "title_regex_hits",
-                    ).all { table ->
-                        connection.usePrepared("SELECT COUNT(*) FROM `$table`") { statement ->
-                            statement.step()
-                            statement.getLong(0) == 0L
-                        }
-                    }
-                }
-            }, {
-                rawPostRepository.clearSessionData()
-                // Derived IDs can outlive post pruning (there is no foreign key).
-                // The device-global keyword rules themselves are intentionally preserved.
-                database.titleKeywordDao().clearRegexHits()
-                profileRepository.clearCachedProfile()
-                rawOfflineLibrary.clearAll()
-                userNoteStore.notes.first().keys.forEach { userNoteStore.setNote(it, "") }
-                trackedThreadStore.all().forEach { trackedThreadStore.untrack(it.postId) }
-            }),
-            PrivateStoreParticipant("offline-files", { offlineFiles.isEmpty() }, { offlineFiles.clear() }),
-            PrivateStoreParticipant("reports", {
-                // Decoder fallback can hide corrupt/legacy bytes; absence alone proves empty.
-                stringPreferencesKey("report_compare_basket") !in settingsDataStore.data.first()
-            }, {
-                settingsDataStore.edit { it.remove(stringPreferencesKey("report_compare_basket")) }
-            }),
-            PrivateStoreParticipant("authenticated-images", {
-                val loader = imageLoader
-                loader.memoryCache?.keys.orEmpty().isEmpty() && (loader.diskCache?.size ?: 0L) == 0L
-            }, {
-                val loader = imageLoader
-                loader.memoryCache?.clear()
-                loader.diskCache?.clear()
-            }),
-        )
         PrivateSessionBoundary(
-            PrivateStoreProvenance(createPreferenceDataStore("private-store-provenance", keepOutOfBackup = true), participants.map { it.id }.toSet()),
-            sessionCookies::privateOwnerProof,
-            participants,
+            provenance = null,
+            owner = sessionCookies::privateOwnerProof,
+            participants = emptyList(),
+            singleAccountLocal = true,
             beforePublication = {
                 notificationRepository.clearCounts()
                 settingsRepository.setNotificationSeenCounts(NotificationCounts())
@@ -310,7 +243,7 @@ class IosAppContainer internal constructor(
     }
     override val appCacheStore: AppCacheStore by lazy {
         IosAppCacheStore(
-            cacheDirectory = workspaceRoot?.let { NSURL.fileURLWithPath("$it/cache", isDirectory = true) } ?: cachesDirectory(),
+            cacheDirectory = NSURL.fileURLWithPath("$profileRoot/cache", isDirectory = true),
             dispatchers = dispatchers,
             // The singleton the screens draw through, not a loader of this store's own: emptying a
             // cache the app is not reading would report success and free nothing.

@@ -27,6 +27,7 @@ class CookieFixture : SessionCookieStore {
 internal class IosGlobalServices(val root: File, val jar: CookieFixture) : AppContainer by unused<AppContainer>() {
     val job = SupervisorJob()
     val scope = CoroutineScope(job + Dispatchers.Default)
+    override val doh: io.github.nodyssey.data.dns.DohSupport get() = error("DNS is not exercised by the JVM platform fixture")
     override val dispatchers = AppDispatchers()
     override val clock = AppClock.System
     val transport: HttpTransport = unused()

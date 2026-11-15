@@ -61,13 +61,6 @@ object NodysseyApp {
      */
     private var container: IosAppContainer? = null
     private var services: IosGlobalServices? = null
-    private var router: io.github.nodyssey.data.session.PrivateWorkspaceRouter<IosAppContainer>? = null
-    internal val workspaces = kotlinx.coroutines.flow.MutableStateFlow<IosAppContainer?>(null)
-
-    internal suspend fun createPrivateWorkspace(confirmed: Boolean, epoch: String): IosAppContainer {
-        ensureContainer()
-        return checkNotNull(router).create(confirmed, epoch)
-    }
     private var containerBuild: Deferred<IosAppContainer>? = null
 
     private var root: UIViewController? = null
@@ -147,30 +140,16 @@ object NodysseyApp {
             userAgent = resolveWebKitUserAgent(NodeSeekSite.CONFIG),
             offlineScheduler = offlineScheduler,
         ).also { services = it }
-        globals.initializeCatalogues()
-        val routing = router ?: io.github.nodyssey.data.session.PrivateWorkspaceRouter(
-            journal = io.github.nodyssey.data.createPreferenceDataStore("routing", directory = privateWorkspaceDirectory(), scope = scope),
-            owner = globals.sessionRepository::privateOwnerProof,
-            signedIn = { globals.sessionRepository.peek().isSignedIn },
-            build = { id: String? ->
-                IosAppContainer(globals, id, id?.let(::privateWorkspaceDirectory)).also {
-                    it.lifetime.start()
-                    if (id == null && legacyPrivateFilesExist()) it.privateBoundary.quarantine()
-                }
-            },
-            boundary = { it.privateBoundary },
-            close = { it.close() },
-            bind = { graph ->
-                if (!graph.privateBoundary.state.value.requiresConfirmation) graph.privateBoundary.protect { graph.prepare() }
-                // Coil 3.6.3 setSafe cannot replace a loader. Old admitted requests are joined first.
-                if (!graph.privateBoundary.state.value.requiresConfirmation) SingletonImageLoader.setUnsafe(graph.imageLoader)
-                globals.active = graph
-                offlineScheduler.attach(graph.privateBoundary)
-                container = graph
-                workspaces.value = graph
-            },
-        ).also { router = it }
-        return routing.start().also { containerBuild = null }
+        // Resolve the fixed versioned root before any local repository can open storage.
+        val graph = IosAppContainer(globals, singleLocalProfileDirectory())
+        globals.active = graph
+        graph.lifetime.start()
+        graph.privateBoundary.reconcile()
+        SingletonImageLoader.setUnsafe(graph.imageLoader)
+        offlineScheduler.attach(graph.privateBoundary)
+        container = graph
+        containerBuild = null
+        return graph
     }
 
     private suspend fun buildController(): UIViewController {

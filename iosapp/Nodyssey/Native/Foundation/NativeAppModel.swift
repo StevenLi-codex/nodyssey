@@ -8,13 +8,6 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     let generation: Int
 }
 
-struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
-    let id = UUID()
-    let identityEpoch: String
-    let generation: Int
-    let boundaryRevision: Int
-}
-
 @MainActor final class NativeAppModel: ObservableObject {
     let transport: any NativeTransport
     @Published var session: JSONValue = .null {
@@ -48,12 +41,7 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
     @Published private(set) var homePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
     @Published private(set) var notificationsPath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
     @Published private(set) var profilePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
-    @Published private(set) var sheet: NativeDestination? {
-        didSet {
-            navigationRevision += 1
-            if activeAuthenticationOrBrowser { privateWorkspaceConfirmation = nil }
-        }
-    }
+    @Published private(set) var sheet: NativeDestination? { didSet { navigationRevision += 1 } }
     @Published private(set) var sheetPath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
     private var navigationRevision = 0
     private struct Departure {
@@ -74,9 +62,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
             // Eligibility can be revoked without changing the displayed epoch.
             // Never resurrect a dialog after an active transition drains.
             if !canConfirmPrivateReset { privateResetConfirmation = nil }
-            if !canCreatePrivateWorkspace || privateWorkspaceConfirmation?.boundaryRevision != boundaryRevision {
-                privateWorkspaceConfirmation = nil
-            }
             if oldValue != .null,
                oldValue.nativeString("identityEpoch") != privateBoundary.nativeString("identityEpoch") ||
                (oldValue.nativeString("phase") == "READY" && privateBoundary.nativeString("phase") != "READY") {
@@ -95,15 +80,12 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
     @Published private(set) var privateBoundaryFailure: NativeFailure?
     @Published private(set) var privateResetConfirmation: NativePrivateResetConfirmation?
     @Published private(set) var privateResetRunning = false
-    @Published private(set) var privateWorkspaceConfirmation: NativePrivateWorkspaceConfirmation?
-    @Published private(set) var privateWorkspaceRunning = false
     private var boundaryRevision = 0
     private var activeStart: Task<Void, Never>?
     private var sessionReady = false
     private var settingsReady = false
     private var pendingLinks: [String] = []
     private var requests: [UUID: (changesSession: Bool, task: Task<JSONValue, Error>)] = [:]
-    @Published private var sessionRequestsRunning = 0
     private var foregroundTask: Task<Void, Never>?
     private var foregroundRunning = false
     private var authenticationPresentation: (token: UUID, destinationID: UUID)?
@@ -244,40 +226,15 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
     }
 
     var isPrivateReady: Bool {
-        !privateWorkspaceRunning && validEpoch(session) != nil && validEpoch(session) == validEpoch(privateBoundary) &&
+        validEpoch(session) != nil && validEpoch(session) == validEpoch(privateBoundary) &&
         session.nativeInt("generation") != nil && session.nativeBool("isSignedIn") != nil &&
         privateBoundary.nativeString("phase") == "READY" && privateBoundary.nativeBool("requiresConfirmation") == false
     }
 
     var canConfirmPrivateReset: Bool {
-        !privateWorkspaceRunning && !privateResetRunning && validEpoch(privateBoundary) != nil &&
+        !privateResetRunning && validEpoch(privateBoundary) != nil &&
         ["UNKNOWN", "TRANSITIONING"].contains(privateBoundary.nativeString("phase") ?? "") &&
-        privateBoundary.nativeBool("requiresConfirmation") == true &&
-        privateBoundary.nativeBool("recoveryEligible") == true
-    }
-
-    private var workspaceMetadata: (binding: String, preservedData: Bool)? {
-        guard let binding = privateBoundary.nativeString("workspaceBinding"),
-              ["LEGACY", "SESSION_PROOF"].contains(binding),
-              let preservedData = privateBoundary.nativeBool("preservedData") else { return nil }
-        return (binding, preservedData)
-    }
-
-    private var activeAuthenticationOrBrowser: Bool {
-        authenticationPresentation != nil || allDestinations.contains { $0.route == "SignIn" || $0.route == "Web" }
-    }
-
-    /// Missing capability metadata means unsupported, never permission.
-    var canCreatePrivateWorkspace: Bool {
-        guard !privateWorkspaceRunning, !privateResetRunning, isSignedIn,
-              !activeAuthenticationOrBrowser, sessionRequestsRunning == 0,
-              let boundaryEpoch = validEpoch(privateBoundary), boundaryEpoch == validEpoch(session),
-              ["UNKNOWN", "TRANSITIONING"].contains(privateBoundary.nativeString("phase") ?? ""),
-              privateBoundary.nativeBool("requiresConfirmation") == true,
-              privateBoundary.nativeBool("recoveryEligible") == true,
-              privateBoundary.nativeBool("canCreateWorkspace") == true,
-              workspaceMetadata != nil else { return false }
-        return true
+        privateBoundary.nativeBool("requiresConfirmation") == true && privateBoundary.nativeBool("recoveryEligible") == true
     }
 
     func canDisplay(_ destination: NativeDestination) -> Bool {
@@ -303,19 +260,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
             privateBoundaryFailure = NativeFailure(code: "INVALID_DATA", message: "Invalid boundary response")
             return
         }
-        // Optional additions retain compatibility with old bridges. Explicit
-        // malformed fields or a contradictory permission fail closed.
-        let capable = snapshot.nativeBool("canCreateWorkspace") ?? false
-        let binding = snapshot.nativeString("workspaceBinding")
-        let validWorkspace = (snapshot["canCreateWorkspace"] == nil || snapshot.nativeBool("canCreateWorkspace") != nil) &&
-            (snapshot["workspaceBinding"] == nil || ["LEGACY", "SESSION_PROOF"].contains(binding ?? "")) &&
-            (snapshot["preservedData"] == nil || snapshot.nativeBool("preservedData") != nil) &&
-            (!capable || (phase != "READY" && confirmation && recoveryEligible && binding != nil && snapshot.nativeBool("preservedData") != nil))
-        guard validWorkspace else {
-            privateBoundary = .null
-            privateBoundaryFailure = NativeFailure(code: "INVALID_DATA", message: "Invalid workspace metadata")
-            return
-        }
         privateBoundary = snapshot
         privateBoundaryFailure = nil
     }
@@ -335,7 +279,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
 
     func beginPrivateResetConfirmation() {
         guard canConfirmPrivateReset, let epoch = validEpoch(privateBoundary) else { return }
-        privateWorkspaceConfirmation = nil
         privateResetConfirmation = NativePrivateResetConfirmation(identityEpoch: epoch, generation: generation)
     }
 
@@ -355,68 +298,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
         } catch {
             if !Task.isCancelled { privateBoundaryFailure = nativeSafeFailure(error) }
         }
-    }
-
-    func beginPrivateWorkspaceConfirmation() {
-        guard canCreatePrivateWorkspace, let epoch = validEpoch(privateBoundary) else { return }
-        privateResetConfirmation = nil
-        privateWorkspaceConfirmation = NativePrivateWorkspaceConfirmation(
-            identityEpoch: epoch, generation: generation, boundaryRevision: boundaryRevision)
-    }
-
-    func cancelPrivateWorkspaceConfirmation() { privateWorkspaceConfirmation = nil }
-
-    /// The capability permits offering a dialog, never adopting old data. Only a
-    /// complete committed reply followed by boundary/session readback can admit UI.
-    func confirmPrivateWorkspace(_ confirmation: NativePrivateWorkspaceConfirmation) async {
-        guard !Task.isCancelled, privateWorkspaceConfirmation == confirmation,
-              canCreatePrivateWorkspace,
-              confirmation.identityEpoch == validEpoch(privateBoundary),
-              confirmation.generation == generation,
-              confirmation.boundaryRevision == boundaryRevision else { return }
-        privateWorkspaceConfirmation = nil
-        privateWorkspaceRunning = true
-        privateResetConfirmation = nil
-        privateBoundaryFailure = nil
-        defer { privateWorkspaceRunning = false }
-        do {
-            let response = try await performRequest("session.createPrivateWorkspace", [
-                "confirmed": .bool(true), "identityEpoch": .string(confirmation.identityEpoch)
-            ])
-            guard verifiesCreatedWorkspace(response, oldEpoch: confirmation.identityEpoch) else {
-                throw NativeFailure(code: "INVALID_DATA", message: "Invalid workspace response")
-            }
-            let newEpoch = validEpoch(response)
-            // The retired graph and the replacement may emit different epochs
-            // before returning. Do not adopt the reply or compare intermediate
-            // collector epochs: authoritative readback must match the receipt.
-            await refreshPrivateBoundary()
-            guard verifiesCreatedWorkspace(privateBoundary, oldEpoch: confirmation.identityEpoch),
-                  validEpoch(privateBoundary) == newEpoch else {
-                throw NativeFailure(code: "INVALID_DATA", message: "Workspace readback did not match")
-            }
-            // A boundary alone must not synthesize a session epoch. Sync uses the
-            // existing public cookie/session path, not an untrusted private store.
-            _ = try await request("session.sync")
-            guard isSignedIn, validEpoch(session) == newEpoch,
-                  validEpoch(privateBoundary) == newEpoch,
-                  verifiesCreatedWorkspace(privateBoundary, oldEpoch: confirmation.identityEpoch) else {
-                throw NativeFailure(code: "SESSION_CHANGED", message: "Session changed")
-            }
-        } catch {
-            applyPrivateBoundary(.null)
-            if !Task.isCancelled { privateBoundaryFailure = nativeSafeFailure(error) }
-        }
-    }
-
-    private func verifiesCreatedWorkspace(_ snapshot: JSONValue, oldEpoch: String) -> Bool {
-        validEpoch(snapshot) != nil && validEpoch(snapshot) != oldEpoch &&
-        snapshot.nativeString("phase") == "READY" &&
-        snapshot.nativeBool("requiresConfirmation") == false &&
-        snapshot.nativeBool("recoveryEligible") == false &&
-        snapshot.nativeBool("canCreateWorkspace") == false &&
-        snapshot.nativeString("workspaceBinding") == "SESSION_PROOF" &&
-        snapshot.nativeBool("preservedData") == true
     }
 
     private func becameReady() {
@@ -455,7 +336,7 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
     }
 
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
-        guard !["session.resetPrivateStores", "session.createPrivateWorkspace"].contains(operation) else {
+        guard operation != "session.resetPrivateStores" else {
             throw NativeFailure(code: "CONFIRMATION_REQUIRED", message: "Explicit confirmation required")
         }
         return try await performRequest(operation, arguments)
@@ -466,12 +347,7 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
         let capturedGeneration = generation
         let capturedBoundaryRevision = boundaryRevision
         let id = UUID()
-        let changesSession = ["session.sync", "session.signIn", "session.verifyTwoFactor", "session.signOut", "session.createPrivateWorkspace"].contains(operation)
-        if changesSession {
-            sessionRequestsRunning += 1
-            privateWorkspaceConfirmation = nil
-        }
-        defer { if changesSession { sessionRequestsRunning -= 1 } }
+        let changesSession = ["session.sync", "session.signIn", "session.verifyTwoFactor", "session.signOut"].contains(operation)
         let transport = self.transport
         let task = Task { try await transport.request(operation, arguments) }
         requests[id] = (changesSession, task)
@@ -482,7 +358,7 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
         }
         try Task.checkCancellation()
         let value = try result.get()
-        if changesSession && operation != "session.createPrivateWorkspace" {
+        if changesSession {
             let candidate = value["session"] ?? value
             if let incoming = candidate.nativeInt("generation"), candidate.nativeBool("isSignedIn") != nil {
                 if let current = session.nativeInt("generation"), incoming < current {
@@ -552,7 +428,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
     var isSignedIn: Bool { session.nativeBool("isSignedIn") == true }
 
     func open(_ route: String, _ arguments: [String: JSONValue] = [:]) {
-        if route == "SignIn" || route == "Web" { privateWorkspaceConfirmation = nil }
         let destination = NativeDestination(route, arguments)
         if route == "SignIn" || (route == "Web" && arguments["goal"]?.string == "CHALLENGE") {
             if !sheetDestinations.isEmpty {
@@ -700,7 +575,6 @@ struct NativePrivateWorkspaceConfirmation: Identifiable, Equatable {
         } : nil
         if authentication == nil { authenticationPresentation = nil }
         privateResetConfirmation = nil
-        privateWorkspaceConfirmation = nil
         let owners = Array(departures.values)
         departures = [:]
         for owner in owners { owner.revoke() } // Never flush under the new identity.

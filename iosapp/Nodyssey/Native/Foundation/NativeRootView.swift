@@ -33,32 +33,6 @@ struct NativeRootView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("native.root")
         .modifier(NativeSettingsAppearance(settings: app.settings))
-        .alert(Text("native_foundation_boundary_confirm_title", tableName: "Foundation"),
-               isPresented: Binding(get: { app.privateResetConfirmation != nil }, set: { _ in }),
-               presenting: app.privateResetConfirmation) { confirmation in
-            // Explicit actions consume the token, not the presentation setter
-            // (which SwiftUI may call before the destructive action runs).
-            Button(role: .destructive) { Task { await app.confirmPrivateReset(confirmation) } } label: {
-                Text("native_foundation_boundary_delete", tableName: "Foundation")
-            }
-            Button(role: .cancel) { app.cancelPrivateResetConfirmation() } label: {
-                Text("native_foundation_boundary_cancel", tableName: "Foundation")
-            }
-        } message: { _ in
-            Text("native_foundation_boundary_impact", tableName: "Foundation")
-        }
-        .alert(Text("native_foundation_workspace_title", tableName: "Foundation"),
-               isPresented: Binding(get: { app.privateWorkspaceConfirmation != nil }, set: { _ in }),
-               presenting: app.privateWorkspaceConfirmation) { confirmation in
-            Button { Task { await app.confirmPrivateWorkspace(confirmation) } } label: {
-                Text("native_foundation_workspace_create", tableName: "Foundation")
-            }
-            Button(role: .cancel) { app.cancelPrivateWorkspaceConfirmation() } label: {
-                Text("native_foundation_boundary_cancel", tableName: "Foundation")
-            }
-        } message: { _ in
-            Text("native_foundation_workspace_detail", tableName: "Foundation")
-        }
         .sheet(item: Binding(get: { app.sheet }, set: { value in
             if value == nil { Task { await app.dismissSheet() } }
         })) { destination in

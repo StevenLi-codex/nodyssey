@@ -36,24 +36,17 @@ def prepare(root, out, main):
         'trackedThreadStore': 'io.github.nodyssey.data.TrackedThreadStore',
         'reportCompareStore': 'io.github.nodyssey.data.settings.ReportCompareStore',
         'settingsRepository': 'io.github.nodyssey.data.settings.SettingsRepository',
-        'imageLoader': 'coil3.FixtureLoader',
     }
     for name, kind in dependencies.items():
         if not re.search(r'^val ' + name + ':', generated, re.M):
             generated += f'val {name}: {kind} get() = values.getValue("{name}") as {kind}\n'
-    generated = generated.replace('values.getValue("imageLoader") as coil3.FixtureLoader', '(values["imageLoader"] as? coil3.FixtureLoader ?: coil3.SingletonImageLoader.loader)')
     region = graph[graph.index('    internal val privateBoundary:'):graph.index('    override val postComposerRepository:')]
     generated += region + '\n'.join(wrappers.values())
     generated += '''
 fun createPreferenceDataStore(name: String, keepOutOfBackup: Boolean = false) = values.getValue(name) as androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>
 }
 object NodysseyApp {
-    val workspaces = kotlinx.coroutines.flow.MutableStateFlow<IosAppContainer?>(null)
-    var fixture: IosAppContainer
-        get() = checkNotNull(workspaces.value)
-        set(value) { workspaces.value = value }
-    var creator: (suspend (Boolean, String) -> IosAppContainer)? = null
-    suspend fun createPrivateWorkspace(confirmed: Boolean, epoch: String): IosAppContainer = checkNotNull(creator)(confirmed, epoch)
+    lateinit var fixture: IosAppContainer
     var graphRequests = 0
     suspend fun ensureContainer(): IosAppContainer { graphRequests++; return fixture }
     suspend fun nativeForeground(): Unit = error("Unused foreground platform scheduler")
@@ -75,7 +68,7 @@ import coil3.SingletonImageLoader
     app = app_path.read_text()
     # Verbatim public bootstrap; only the surrounding Apple object construction is substituted.
     metadata = app[app.index('    internal fun nativeSiteMetadata()'):app.index('    /** Native scene activation:')]
-    generated = generated.replace('    val workspaces =', metadata + '    val workspaces =')
+    generated = generated.replace('    lateinit var fixture: IosAppContainer', metadata + '    lateinit var fixture: IosAppContainer')
     (out / 'bootstrap-source-hashes.json').write_text(json.dumps({str(app_path): hashlib.sha256(app_path.read_bytes()).hexdigest(),
         'extracted_metadata_sha256': hashlib.sha256(metadata.encode()).hexdigest()}, indent=2))
     (out / 'Graph.kt').write_text(generated)
@@ -127,7 +120,7 @@ class NSUserDefaults {
                root / 'iosapp/tests/fixtures/PrivateGraphPlatformFixture.kt']
     # Compile current boundary sources, not a potentially stale shared jar.
     sources += list((root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session').glob('Private*.kt'))
-    sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/settings/WorkspaceSettingsDataStore.kt']
+    sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt']
     sources += [root / ('shared/src/commonMain/kotlin/io/github/nodyssey/data/composer/' + name) for name in ['PostComposerRepository.kt', 'CommentComposerRepository.kt']]
     (out / 'source-hashes.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [graph_path, content_path, settings_path, main / 'NativeBridge.kt']}, indent=2))
     (out / 'Coil.kt').write_text('''package coil3

@@ -16,9 +16,4 @@
 "native_foundation_boundary_confirm_title" = "Delete local private data?";
 "native_foundation_boundary_delete" = "Delete local data";
 "native_foundation_boundary_cancel" = "Cancel";
-
-"native_foundation_workspace_review" = "Continue in a new empty space…";
-"native_foundation_workspace_title" = "Create a new session workspace?";
-"native_foundation_workspace_create" = "Create empty space";
-"native_foundation_workspace_detail" = "Create a new empty private space for this login session. Previous local data stays on this device but is not opened, merged or deleted. This space is bound to this session, not a verified account ID; a later login may need a different space. This does not recover access to old data.";
 "native_foundation_boundary_impact" = "This permanently deletes local drafts, offline downloads and private caches for the active site. This cannot be undone and does not delete server content. Cancel to keep the data locked. Continue only if you accept losing these local copies.";

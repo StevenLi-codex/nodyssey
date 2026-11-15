@@ -2,7 +2,6 @@ package io.github.nodyssey.ios
 
 import androidx.datastore.preferences.core.*
 import io.github.nodyssey.data.composer.PostDraft
-import io.github.nodyssey.data.local.importGlobalCatalogues
 import io.github.nodyssey.data.session.*
 import io.github.nodyssey.data.settings.SettingsRepository
 import kotlinx.coroutines.*
@@ -12,83 +11,130 @@ import java.nio.file.Files
 import org.junit.Test
 import kotlin.test.*
 
+/** Real production graph, real Room/DataStore; Apple services/Coil are platform fixtures. */
 class OwnedWorkspaceGraphTest {
-    @Test fun productionGraphRoutesAllPrivateStoresAndReopensExactProof() = runBlocking {
-        val root = Files.createTempDirectory("owned-workspace-").toFile()
+    @Test fun cancelledLoginDuringOldWriterDrainReopensLocalProfile() = runBlocking {
+        val root = Files.createTempDirectory("single-cancel-").toFile()
+        fixtureRoot = root
+        val globals = IosGlobalServices(root, CookieFixture())
+        val graph = IosAppContainer(globals, File(root,"single-local-v1").apply { mkdirs() }.path)
+        val entered = CompletableDeferred<Unit>()
+        val draining = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            graph.lifetime.start(); graph.privateBoundary.reconcile()
+            val writer = launch {
+                graph.privateBoundary.protect {
+                    entered.complete(Unit)
+                    try { awaitCancellation() } finally {
+                        withContext(NonCancellable) { draining.complete(Unit); release.await() }
+                    }
+                }
+            }
+            withTimeout(2000) { entered.await() }
+            val login = launch { graph.privateBoundary.sessionMutation { error("Cancelled before auth dispatch") } }
+            withTimeout(2000) { draining.await() }
+            login.cancel(); release.complete(Unit)
+            withTimeout(2000) { login.join(); writer.join() }
+            assertEquals(PrivateStorePhase.READY, graph.privateBoundary.state.value.phase)
+            graph.postComposerRepository.saveDraft(PostDraft(title="cancel preserved usability"))
+        } finally { release.complete(Unit); graph.close(); globals.close(); root.deleteRecursively() }
+    }
+
+    @Test fun joinedOldWriterCannotPublishIntoNewEpochAndAuthErrorDoesNotLock() = runBlocking {
+        val root = Files.createTempDirectory("single-lifetime-").toFile()
         fixtureRoot = root
         val jar = CookieFixture()
+        val globals = IosGlobalServices(root, jar)
+        val graph = IosAppContainer(globals, File(root,"single-local-v1").apply { mkdirs() }.path)
+        val entered = CompletableDeferred<Unit>()
+        val cleaning = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var stalePublished = false
+        try {
+            graph.lifetime.start(); graph.privateBoundary.reconcile()
+            val old = graph.privateBoundary.state.value.identityEpoch
+            val writer = launch {
+                graph.privateBoundary.protect {
+                    entered.complete(Unit)
+                    try { awaitCancellation() } finally {
+                        withContext(NonCancellable) { cleaning.complete(Unit); release.await() }
+                    }
+                }
+                stalePublished = true
+            }
+            withTimeout(2000) { entered.await() }
+            val auth = async {
+                assertFailsWith<IllegalArgumentException> {
+                    graph.privateBoundary.sessionMutation {
+                        jar.header = "${io.github.nodyssey.core.NodeSeekSite.CONFIG.sessionCookieNames.first()}=new"
+                        throw IllegalArgumentException("fixture parser failure after cookie")
+                    }
+                }
+            }
+            withTimeout(2000) { cleaning.await() }
+            assertFalse(auth.isCompleted)
+            assertEquals(PrivateStorePhase.TRANSITIONING, graph.privateBoundary.state.value.phase)
+            release.complete(Unit)
+            withTimeout(2000) { writer.join(); auth.await() }
+            assertFalse(stalePublished)
+            assertNotEquals(old, graph.privateBoundary.state.value.identityEpoch)
+            assertEquals(PrivateStorePhase.READY, graph.privateBoundary.state.value.phase)
+            graph.postComposerRepository.saveDraft(PostDraft(title="after failed auth"))
+            assertEquals("after failed auth",graph.postComposerRepository.draft.first()?.title)
+            assertFailsWith<PrivateStoreAccessDenied> { graph.privateBoundary.reset(true, graph.privateBoundary.state.value.identityEpoch) }
+            Unit
+        } finally { release.complete(Unit); graph.close(); globals.close(); root.deleteRecursively() }
+    }
+
+    @Test fun singleLocalProfileSurvivesGuestLoginLogoutAndRestartWithoutAdoptingLegacy() = runBlocking {
+        val root = Files.createTempDirectory("single-profile-").toFile()
+        fixtureRoot = root
+        val jar = CookieFixture().apply { header = "" }
         var globals = IosGlobalServices(root, jar)
-        var graphs = mutableListOf<IosAppContainer>()
-        suspend fun router(): PrivateWorkspaceRouter<IosAppContainer> = PrivateWorkspaceRouter(
-            io.github.nodyssey.data.createPreferenceDataStore("routing", globals.scope, root.path),
-            globals.sessionRepository::privateOwnerProof, { globals.sessionRepository.peek().isSignedIn },
-            build = { id -> IosAppContainer(globals, id, id?.let { File(root,it).apply { mkdirs() }.path }).also { it.lifetime.start(); graphs += it } },
-            boundary = { it.privateBoundary }, close = { it.close() }, bind = { it.prepare() },
-        )
+        val profile = File(root, "single-local-v1").apply { mkdirs() }
+        var graph = IosAppContainer(globals, profile.path)
         try {
-            val settings = SettingsRepository(globals.settingsDataStore)
-            settings.recordRecentBoard("legacy")
-            globals.settingsDataStore.edit { it[stringPreferencesKey("report_compare_basket")] = "corrupt-private-report" }
-            val before = globals.settingsDataStore.data.first()
-            var routing = router()
-            val legacy = routing.start()
-            assertEquals(PrivateStorePhase.UNKNOWN, legacy.privateBoundary.state.value.phase)
-            val first = routing.create(true, legacy.privateBoundary.state.value.identityEpoch)
-            assertEquals(PrivateStorePhase.READY, first.privateBoundary.state.value.phase)
-            assertNull(first.postComposerRepository.draft.first())
-            assertTrue(first.settingsRepository.settings.first().recentBoards.isEmpty())
-            first.postComposerRepository.saveDraft(PostDraft(title="A-private"))
-            first.privateBoundary.protect { first.settingsRepository.recordRecentBoard("a-board"); first.offlineLibrary.download(listOf(77)) }
-            first.offlineFiles.write("private-image",byteArrayOf(7,8))
-            assertEquals(before, globals.settingsDataStore.data.first())
-            val id = first.workspaceId
-            first.privateBoundary.quarantine(); first.close(); globals.close()
-            graphs = mutableListOf()
-            globals = IosGlobalServices(root,jar)
-            routing = router()
-            val reopened = routing.start()
-            assertEquals(id,reopened.workspaceId)
-            assertEquals("A-private", reopened.postComposerRepository.draft.first()?.title)
-            assertEquals(listOf("a-board"), reopened.settingsRepository.settings.first().recentBoards)
-            assertFalse(reopened.offlineFiles.isEmpty())
-            jar.header = "${io.github.nodyssey.core.NodeSeekSite.CONFIG.sessionCookieNames.first()}=b"
-            reopened.privateBoundary.reconcile()
-            assertFailsWith<PrivateStoreAccessDenied> { reopened.postComposerRepository.draft.first() }
-            val next = routing.create(true,reopened.privateBoundary.state.value.identityEpoch)
-            assertNotEquals(id,next.workspaceId)
-            assertNull(next.postComposerRepository.draft.first())
-            assertTrue(next.settingsRepository.settings.first().recentBoards.isEmpty())
-            assertTrue(next.offlineFiles.isEmpty())
-            val preservedCache=File(root,"$id/cache/image_cache/old-byte").apply { parentFile.mkdirs(); writeText("preserve") }
-            val activeCache=File(root,"${next.workspaceId}/cache/temporary").apply { parentFile.mkdirs(); writeText("clear") }
-            next.appCacheStore.clear()
-            assertFalse(activeCache.exists())
-            assertEquals("preserve",preservedCache.readText())
-            assertTrue(File(root,"$id/offline/images/private-image").readBytes().contentEquals(byteArrayOf(7,8)))
-            assertEquals(before,globals.settingsDataStore.data.first())
-        } finally {
-            graphs.forEach { runCatching { it.privateBoundary.quarantine(); it.close() } }
-            globals.close(); root.deleteRecursively()
-        }
+            globals.settingsDataStore.edit {
+                it[stringPreferencesKey("recent_boards")] = "[\"legacy\"]"
+                it[stringPreferencesKey("report_compare_basket")] = "corrupt-private-report"
+                it[stringPreferencesKey("unknown_future_private_key")] = "must-not-import"
+                it[stringPreferencesKey("theme_mode")] = "DARK"
+            }
+            val legacyBytes = globals.settingsDataStore.data.first()
+            val preserved = listOf("legacy.db", "post-composer.preferences_pb", "comment-composer.preferences_pb", "offline/images/old", "cache/image_cache/old", "private-store-provenance.preferences_pb").map {
+                File(root,it).apply { parentFile.mkdirs(); writeText("UNKNOWN legacy bytes $it") }
+            }
+            val snapshots = preserved.associateWith { it.readBytes() }
+            graph.lifetime.start()
+            graph.privateBoundary.reconcile()
+            assertEquals(PrivateStorePhase.READY, graph.privateBoundary.state.value.phase)
+            assertTrue(graph.settingsRepository.settings.first().recentBoards.isEmpty())
+            assertNull(graph.postComposerRepository.draft.first())
+            graph.postComposerRepository.saveDraft(PostDraft(title="device-local draft"))
+            graph.privateBoundary.protect { graph.settingsRepository.recordRecentBoard("guest-read") }
+            val guestEpoch = graph.privateBoundary.state.value.identityEpoch
+            graph.privateBoundary.sessionMutation { jar.header = "${io.github.nodyssey.core.NodeSeekSite.CONFIG.sessionCookieNames.first()}=a" }
+            assertEquals(PrivateStorePhase.READY, graph.privateBoundary.state.value.phase)
+            assertNotEquals(guestEpoch, graph.privateBoundary.state.value.identityEpoch)
+            assertTrue(graph.sessionRepository.state.value.isSignedIn)
+            assertEquals("device-local draft", graph.postComposerRepository.draft.first()?.title)
+            graph.privateBoundary.sessionMutation { jar.removeAll() }
+            assertFalse(graph.sessionRepository.state.value.isSignedIn)
+            assertEquals(PrivateStorePhase.READY, graph.privateBoundary.state.value.phase)
+            graph.privateBoundary.sessionMutation { jar.header = "${io.github.nodyssey.core.NodeSeekSite.CONFIG.sessionCookieNames.first()}=b" }
+            graph.offlineFiles.write("new-image", byteArrayOf(7,8))
+            graph.appCacheStore.clear()
+            snapshots.forEach { (file, bytes) -> assertContentEquals(bytes, file.readBytes()) }
+            assertEquals(legacyBytes, globals.settingsDataStore.data.first())
+            graph.close(); globals.close()
+            globals = IosGlobalServices(root, jar)
+            graph = IosAppContainer(globals, profile.path)
+            graph.lifetime.start(); graph.privateBoundary.reconcile()
+            assertEquals("device-local draft", graph.postComposerRepository.draft.first()?.title)
+            assertEquals(listOf("guest-read"), graph.settingsRepository.settings.first().recentBoards)
+            assertFalse(graph.offlineFiles.isEmpty())
+            snapshots.forEach { (file, bytes) -> assertContentEquals(bytes, file.readBytes()) }
+        } finally { graph.close(); globals.close(); root.deleteRecursively() }
     }
-
-    @Test fun globalCatalogueImportNeverCopiesPrivateRowsOrRewritesLegacy() = runBlocking {
-        val root=Files.createTempDirectory("catalogue-import-").toFile()
-        val source=io.github.nodyssey.data.local.createNodeSeekDatabase(File(root,"legacy.db").path)
-        val target=io.github.nodyssey.data.local.createNodeSeekDatabase(File(root,"global.db").path)
-        try {
-            source.titleKeywordDao().insert(io.github.nodyssey.data.local.TitleKeywordEntity(io.github.nodyssey.model.TitleKeywordKind.BLOCK,"global-rule",1))
-            source.userNoteDao().upsert(io.github.nodyssey.data.local.UserNoteEntity(7,"private-note",1))
-            source.close()
-            val before=File(root,"legacy.db").readBytes()
-            target.importGlobalCatalogues { androidx.sqlite.driver.bundled.BundledSQLiteDriver().open(File(root,"legacy.db").path,1) }
-            assertEquals(listOf("global-rule"),target.titleKeywordDao().list(io.github.nodyssey.model.TitleKeywordKind.BLOCK).map { it.keyword })
-            assertTrue(target.userNoteDao().observeAll().first().isEmpty())
-            assertContentEquals(before,File(root,"legacy.db").readBytes())
-            target.titleKeywordDao().delete(io.github.nodyssey.model.TitleKeywordKind.BLOCK,"global-rule")
-            target.importGlobalCatalogues { error("Completed import must not reopen legacy") }
-            assertTrue(target.titleKeywordDao().list(io.github.nodyssey.model.TitleKeywordKind.BLOCK).isEmpty())
-        } finally { source.close(); target.close(); root.deleteRecursively() }
-    }
-
 }

@@ -264,7 +264,7 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
             val before = baseline
             val now = ready?.sessionRepository?.peek()
             ready?.privateBoundary?.finishExternalMutation(
-                allowEmptyRebind = ready?.workspaceId == null && before != null && now != null && goal in setOf("login", "oneTapLogin") &&
+                allowEmptyRebind = before != null && now != null && goal in setOf("login", "oneTapLogin") &&
                     nativeBrowserGoalReached(goal, before, now),
             )
         },
