@@ -234,6 +234,12 @@ internal fun NodysseyChrome(
                 LocalStickerLibrary provides container.stickerLibrary,
                 // The editors' 图床 key, for the same reason: three screens, no ViewModel of theirs.
                 LocalImageHostRepository provides container.imageHostRepository,
+                io.github.nodyssey.ui.composer.LocalSavedPhrases provides
+                    container.settingsRepository.savedPhrases.takeIf { container.manualNativeExtras },
+                io.github.nodyssey.ui.common.LocalQuickProfiles provides
+                    container.profileRepository.takeIf { container.manualNativeExtras },
+                io.github.nodyssey.ui.composer.LocalExtraSession provides
+                    container.sessionRepository.state.takeIf { container.manualNativeExtras },
                 // The one thing on this list that is not a setting: it is what the platform says this
                 // build is called, so that a debug build's screens say "Nodyssey·D" like its launcher
                 // icon does. See `LocalAppName`.

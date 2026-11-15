@@ -22,20 +22,30 @@ import platform.Foundation.NSUserDomainMask
  * on the same SQLite version as the schemas were generated against.
  */
 @OptIn(ExperimentalForeignApi::class)
-fun createNodeSeekDatabase(): NodeSeekDatabase =
+fun createNodeSeekDatabase(rootDirectory: String? = null): NodeSeekDatabase =
     Room
-        .databaseBuilder<NodeSeekDatabase>(name = nodeSeekDatabasePath())
+        .databaseBuilder<NodeSeekDatabase>(name = nodeSeekDatabasePath(rootDirectory))
         .setDriver(BundledSQLiteDriver())
         .addMigrations(*NODESEEK_MIGRATIONS)
-        // The same narrowing as the Android factory, and see the note there: only v1/v2 — the
-        // versions with no migration — and downgrades fall back destructively; a missing future
-        // migration crashes at open instead of silently emptying the store.
-        .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2)
-        .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
+        // Preserve the default Apple factory's legacy policy for other callers. The enhanced iOS
+        // edition explicitly supplies its fixed root and fails closed on unsupported schemas;
+        // neither downgrade nor v1/v2 can silently destroy even that edition's data.
+        .apply {
+            if (rootDirectory == null) {
+                fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2)
+                fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
+            }
+        }
         .build()
 
 @OptIn(ExperimentalForeignApi::class)
-private fun nodeSeekDatabasePath(): String {
+private fun nodeSeekDatabasePath(rootDirectory: String?): String {
+    if (rootDirectory != null) {
+        NSFileManager.defaultManager.createDirectoryAtPath(
+            rootDirectory, withIntermediateDirectories = true, attributes = null, error = null,
+        )
+        return "$rootDirectory/${databaseFileName(ActiveSite.current)}"
+    }
     val directory: NSURL? =
         NSFileManager.defaultManager.URLForDirectory(
             directory = NSApplicationSupportDirectory,

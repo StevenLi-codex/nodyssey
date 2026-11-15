@@ -1,5 +1,6 @@
 package io.github.nodyssey.ios
 
+import io.github.nodyssey.data.EnhancedEditionPaths
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSCachesDirectory
@@ -18,10 +19,27 @@ import platform.Foundation.NSUserDomainMask
  */
 
 @OptIn(ExperimentalForeignApi::class)
-internal fun applicationSupportDirectory(): NSURL = systemDirectory(NSApplicationSupportDirectory)
+internal fun applicationSupportDirectory(): NSURL = editionDirectory(editionPaths.supportRoot)
 
 @OptIn(ExperimentalForeignApi::class)
-internal fun cachesDirectory(): NSURL = systemDirectory(NSCachesDirectory)
+internal fun cachesDirectory(): NSURL = editionDirectory(editionPaths.cacheRoot)
+
+/** Selected before the graph opens DNS/settings, Room, drafts, offline files or Coil caches. */
+@OptIn(ExperimentalForeignApi::class)
+private val editionPaths: EnhancedEditionPaths by lazy {
+    EnhancedEditionPaths(
+        requireNotNull(systemDirectory(NSApplicationSupportDirectory).path),
+        requireNotNull(systemDirectory(NSCachesDirectory).path),
+    )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun editionDirectory(path: String): NSURL {
+    check(NSFileManager.defaultManager.createDirectoryAtPath(
+        path, withIntermediateDirectories = true, attributes = null, error = null,
+    )) { "Cannot create enhanced edition directory" }
+    return NSURL.fileURLWithPath(path, isDirectory = true)
+}
 
 @OptIn(ExperimentalForeignApi::class)
 private fun systemDirectory(directory: NSSearchPathDirectory): NSURL =

@@ -278,7 +278,7 @@ fun PostDetailRoute(
         onBack = onBack,
         onOpenBrowser = onOpenBrowser,
         onLinkClick = onLinkClick,
-        onAuthorClick = onAuthorClick,
+        onAuthorClick = io.github.nodyssey.ui.common.rememberAuthorQuickCard(onAuthorClick),
         onSignIn = onSignIn,
         onVerify = { onVerify(postUrl) },
         onImageClick = { url -> onImageClick(images.ifEmpty { listOf(url) }, url) },

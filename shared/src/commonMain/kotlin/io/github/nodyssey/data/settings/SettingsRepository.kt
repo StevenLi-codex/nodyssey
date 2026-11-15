@@ -54,6 +54,9 @@ class SettingsRepository(
     /** 表情管理's settings — CDN choice, group order — kept in this same store; see [StickerSettingsStore]. */
     val stickerSettings: StickerSettingsStore = StickerSettingsStore(dataStore)
 
+    /** Manual insertion only; empty on existing installations. No new store or migration. */
+    val savedPhrases: SavedPhraseStore = SavedPhraseStore(dataStore)
+
     val settings: Flow<UserSettings> = dataStore.data
         // A corrupt or unreadable store must not take the app down; fall back to defaults.
         .catch { throwable -> if (throwable is IOException) emit(emptyPreferences()) else throw throwable }

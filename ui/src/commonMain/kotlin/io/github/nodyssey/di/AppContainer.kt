@@ -64,6 +64,9 @@ import io.github.plaza.core.update.ApkInstaller
  * interface to bring it down here with the ViewModels that name it.
  */
 interface AppContainer {
+    /** Additive iOS-only UI; other shells retain their existing behavior. */
+    val manualNativeExtras: Boolean get() = false
+
     val dispatchers: AppDispatchers
     val clock: AppClock
 

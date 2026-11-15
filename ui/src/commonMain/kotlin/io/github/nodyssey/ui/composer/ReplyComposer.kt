@@ -427,6 +427,7 @@ private fun ReplyEditorSheet(
                 onCustomize = onCustomize,
                 appMenu = {
                     ComposerAppMenu(onInsertVote = onInsertVote, onInsertStardust = onInsertStardust)
+                    ManualPhraseButton(bodyState, editorState, enabled = !state.isPublishing)
                 },
                 emojiPanel = { panel ->
                     NodeSeekEmojiPanel(

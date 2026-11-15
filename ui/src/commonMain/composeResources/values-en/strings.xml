@@ -1615,4 +1615,14 @@
     <string name="messages_scam_warning_low_level">This account has a low level (Lv.%1$d). Private message scams are common — avoid advance payments, off-site chats, or unverified transfers, and use an official forum escrow for large trades.</string>
     <string name="messages_scam_warning_new_account">This account registered less than 100 days ago (%1$d d). Private message scams are common — avoid advance payments, off-site chats, or unverified transfers, and use an official forum escrow for large trades.</string>
     <string name="messages_scam_caution_general">Private message scams are common, and even high-level or older accounts may be compromised. Avoid advance payments, off-site chats, or unverified transfers, and use an official forum escrow for large trades.</string>
+    <string name="manual_phrases">Saved phrases</string>
+    <string name="manual_phrases_help">Tap to insert into the draft, never send. Phrases are saved on this device and shared by accounts.</string>
+    <string name="manual_phrase_edit">Edit</string>
+    <string name="manual_phrase_name">Name (saving the same name replaces it)</string>
+    <string name="manual_phrase_body">Text</string>
+    <string name="manual_extra_failed">Could not load or save. Close and try again.</string>
+    <string name="manual_author_card">Author details</string>
+    <string name="manual_author_full">Full profile</string>
+    <string name="manual_author_facts">UID %1$d · Rank %2$s\nJoined %3$s\nTopics %4$s · Comments %5$s</string>
+    <string name="manual_unknown">Unknown</string>
 </resources>

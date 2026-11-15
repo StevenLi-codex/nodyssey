@@ -80,7 +80,6 @@ import io.github.nodyssey.data.proxy.ProxyConnectionTester
 import io.github.nodyssey.data.proxy.ProxySettings
 import io.github.nodyssey.data.proxy.ProxyType
 import io.github.nodyssey.data.proxy.routes
-import io.github.nodyssey.data.security.LegacySecretMigration
 import io.github.nodyssey.data.security.PlaintextSecretCipher
 import io.github.nodyssey.data.session.AccountSignOut
 import io.github.nodyssey.data.session.DefaultAccountSignOut
@@ -158,6 +157,8 @@ class IosAppContainer(
     override val dispatchers: AppDispatchers = AppDispatchers(),
     override val clock: AppClock = AppClock.System,
 ) : AppContainer {
+    override val manualNativeExtras: Boolean = true
+
     /**
      * The jar `NSURLSession` reads — and the same one `WebViewScreen.ios.kt` points its
      * [io.github.plaza.core.net.WebKitCookieBridge] at.
@@ -277,23 +278,28 @@ class IosAppContainer(
 
     private val jsonClient by lazy { NodeSeekJsonClient(transport, dispatchers) }
 
-    private val database by lazy { createNodeSeekDatabase() }
+    @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    private val storageRoot = requireNotNull(applicationSupportDirectory().path)
+
+    private val database by lazy { createNodeSeekDatabase(rootDirectory = storageRoot) }
+
+    private fun preferenceStore(name: String, keepOutOfBackup: Boolean = false) =
+        createPreferenceDataStore(name, keepOutOfBackup = keepOutOfBackup, rootDirectory = storageRoot)
 
     private val remotePosts by lazy { NetworkPostDataSource(htmlClient, dispatchers, clock) }
 
     /*
      * The two stores that hold a credential — the proxy password and each image host's token. The
      * credential goes in as typed and the store goes where backups leave it out, which is what the
-     * Keychain used to give; see `KeychainLegacySecrets` for why it no longer does. The migration
-     * carries across whatever a build that still used it saved.
+     * Keychain used to give. This edition starts fresh: no legacy Keychain lookup, settings import
+     * or secret migration. The backup-exclusion factory can only move files inside our active root.
      */
-    private val secretCipher by lazy { PlaintextSecretCipher(KeychainLegacySecrets::read) }
+    private val secretCipher by lazy { PlaintextSecretCipher() }
 
     private fun secretStore(name: String) =
-        createPreferenceDataStore(
+        preferenceStore(
             name,
             keepOutOfBackup = true,
-            migrations = listOf(LegacySecretMigration(KeychainLegacySecrets::read)),
         )
 
     override val proxySettings: ProxySettings by lazy {
@@ -302,7 +308,7 @@ class IosAppContainer(
 
     override val proxyConnectionTester: ProxyConnectionTester by lazy { IosProxyConnectionTester(jsonClient) }
 
-    private val dohSettings: DohSettings by lazy { DataStoreDohSettings(createPreferenceDataStore("dns")) }
+    private val dohSettings: DohSettings by lazy { DataStoreDohSettings(preferenceStore("dns")) }
 
     /**
      * 加密 DNS, with two of its switches missing, one server instead of a list, and the third path to
@@ -393,7 +399,7 @@ class IosAppContainer(
 
     override val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(
-            dataStore = createPreferenceDataStore("settings"),
+            dataStore = preferenceStore("settings"),
             devChannelDefault = isPreReleaseVersionName(appVersion.name),
         )
     }
@@ -424,7 +430,7 @@ class IosAppContainer(
     }
 
     override val postComposerRepository: PostComposerRepository by lazy {
-        DefaultPostComposerRepository(createPreferenceDataStore("post-composer"), transport, dispatchers, clock)
+        DefaultPostComposerRepository(preferenceStore("post-composer"), transport, dispatchers, clock)
     }
 
     override val accountSettingsRepository: AccountSettingsRepository by lazy {
@@ -449,7 +455,7 @@ class IosAppContainer(
             // as one on screen. Lazily for the reason the Android container gives about its client.
             images = UrlSessionOfflineImageSource { urlSession },
             collectedMeta = collectedPostMetaStore,
-            settingsStore = OfflineSettingsStore(createPreferenceDataStore("offline")),
+            settingsStore = OfflineSettingsStore(preferenceStore("offline")),
             scheduler = offlineScheduler,
             clock = clock,
             dispatchers = dispatchers,
@@ -480,7 +486,7 @@ class IosAppContainer(
 
     override val commentComposerRepository: CommentComposerRepository by lazy {
         DefaultCommentComposerRepository(
-            createPreferenceDataStore("comment-composer"),
+            preferenceStore("comment-composer"),
             transport,
             dispatchers,
             clock,

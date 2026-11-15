@@ -36,6 +36,7 @@ fun createPreferenceDataStore(
     name: String,
     keepOutOfBackup: Boolean = false,
     migrations: List<DataMigration<Preferences>> = emptyList(),
+    rootDirectory: String? = null,
 ): DataStore<Preferences> =
     PreferenceDataStoreFactory.createWithPath(
         migrations = migrations,
@@ -43,7 +44,7 @@ fun createPreferenceDataStore(
             // The extension is Android's own, appended by `preferencesDataStore` there and stated here
             // so the two platforms write a file of the same name as well as the same format.
             val fileName = "$name.preferences_pb"
-            val directory = applicationSupportDirectory()
+            val directory = rootDirectory ?: applicationSupportDirectory()
             val path = if (keepOutOfBackup) backupExcludedPath(directory, fileName) else "$directory/$fileName"
             path.toPath()
         },

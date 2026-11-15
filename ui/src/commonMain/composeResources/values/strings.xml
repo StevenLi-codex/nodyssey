@@ -1883,4 +1883,14 @@
     <string name="messages_scam_warning_low_level">对方等级较低（Lv.%1$d）。近期私信诈骗频发，请勿轻信先款、口令红包或站外私聊交易，大额交易请务必使用论坛中介。</string>
     <string name="messages_scam_warning_new_account">对方注册时间不足 100 天（%1$d 天）。近期私信诈骗频发，请勿轻信先款、口令红包或站外私聊交易，大额交易请务必使用论坛中介。</string>
     <string name="messages_scam_caution_general">近期私信诈骗频发，高等级或老账号亦可能存在被盗风险。请勿轻信先款、口令红包或站外私聊交易，大额交易请务必使用论坛中介。</string>
+    <string name="manual_phrases">常用语</string>
+    <string name="manual_phrases_help">点选仅插入草稿，仍需手动发布。常用语保存在本机，各账号共用。</string>
+    <string name="manual_phrase_edit">编辑</string>
+    <string name="manual_phrase_name">名称（同名保存会替换）</string>
+    <string name="manual_phrase_body">内容</string>
+    <string name="manual_extra_failed">读取或保存失败，请关闭后重试。</string>
+    <string name="manual_author_card">作者资料</string>
+    <string name="manual_author_full">完整主页</string>
+    <string name="manual_author_facts">UID %1$d · 等级 %2$s\n注册 %3$s\n主题 %4$s · 评论 %5$s</string>
+    <string name="manual_unknown">未知</string>
 </resources>

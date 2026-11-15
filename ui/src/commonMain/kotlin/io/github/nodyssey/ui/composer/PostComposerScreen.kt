@@ -590,6 +590,7 @@ private fun EditorContent(
                     onInsertVote = { composingVote = true },
                     onInsertStardust = { composingReceiveCode = true },
                 )
+                ManualPhraseButton(bodyState, editorState, titleState, enabled = !state.isPublishing)
             },
         )
     }

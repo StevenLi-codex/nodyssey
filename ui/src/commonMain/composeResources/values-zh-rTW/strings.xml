@@ -1607,4 +1607,14 @@
     <string name="messages_scam_warning_low_level">對方等級較低（Lv.%1$d）。近期私訊詐騙頻發，請勿輕信先款、口令紅包或站外私聊交易，大額交易請務必使用論壇中介。</string>
     <string name="messages_scam_warning_new_account">對方註冊時間不足 100 天（%1$d 天）。近期私訊詐騙頻發，請勿輕信先款、口令紅包或站外私聊交易，大額交易請務必使用論壇中介。</string>
     <string name="messages_scam_caution_general">近期私訊詐騙頻發，高等級或老帳號亦可能存在被盜風險。請勿輕信先款、口令紅包或站外私聊交易，大額交易請務必使用論壇中介。</string>
+    <string name="manual_phrases">常用語</string>
+    <string name="manual_phrases_help">點選僅插入草稿，仍需手動發佈。常用語儲存在本機，各帳號共用。</string>
+    <string name="manual_phrase_edit">編輯</string>
+    <string name="manual_phrase_name">名稱（同名儲存會取代）</string>
+    <string name="manual_phrase_body">內容</string>
+    <string name="manual_extra_failed">讀取或儲存失敗，請關閉後重試。</string>
+    <string name="manual_author_card">作者資料</string>
+    <string name="manual_author_full">完整主頁</string>
+    <string name="manual_author_facts">UID %1$d · 等級 %2$s\n註冊 %3$s\n主題 %4$s · 評論 %5$s</string>
+    <string name="manual_unknown">未知</string>
 </resources>
