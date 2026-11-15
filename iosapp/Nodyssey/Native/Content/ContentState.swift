@@ -1,6 +1,19 @@
 import Foundation
 import NodysseyNativeCore
 
+/// The view owns task lifetime; the ticket prevents an old completion clearing a newer load.
+struct ContentThreadPageLoad {
+    private(set) var loading = false
+    private var token = UUID()
+    mutating func begin() -> UUID { token = UUID(); loading = true; return token }
+    mutating func finish(_ ticket: UUID, cancelled: Bool) {
+        // Cancellation suppresses publication, not cleanup of this task's loading lease.
+        guard ticket == token else { return }
+        loading = false
+    }
+    mutating func depart() { token = UUID(); loading = false }
+}
+
 /// Both direct comments and quoted replies use the existing editor route, never a send request.
 enum ContentReplyAction: Equatable {
     case signIn
@@ -14,24 +27,22 @@ enum ContentReplyAction: Equatable {
         if let floor = quote?["floor"]?.string.flatMap(ContentReadingTarget.floorNumber) { arguments["quotedFloor"] = .integer(floor) }
         if let author = quote?["authorName"]?.string { arguments["replyToAuthor"] = .string(author) }
         if let nodes = quote?["nodes"] { arguments["replyToText"] = .string(ContentQuoteContext.text(nodes)) }
+        if let time = quote?["createdAtTitle"]?.string { arguments["postedAt"] = .string(time) }
         return .compose(arguments)
     }
 }
 
 enum ContentQuoteContext {
-    /// A plain quotation excerpt only. Editing always loads original Markdown from Kotlin.
+    /// PostDetailScreen.excerpt: only top-level paragraphs/headings and text/link inlines.
+    /// No truncation: the chip truncates visually, never the Markdown sent to the site.
     static func text(_ value: JSONValue) -> String {
-        if let array = value.array { return array.map(text).filter { !$0.isEmpty }.joined(separator: "\n") }
-        switch value["type"]?.string {
-        case "p", "h": return (value["inlines"]?.array ?? []).map(text).joined()
-        case "t", "a": return value["text"]?.string ?? ""
-        case "code": return value["code"]?.string ?? ""
-        case "br": return "\n"
-        case "iimg", "img": return value["alt"]?.string ?? ""
-        case "qref": return [value["name"]?.string, value["floor"]?.string].compactMap { $0 }.joined(separator: " ")
-        default:
-            return ["children", "tabs", "items", "cells", "inlines"].compactMap { value[$0] }.map(text).filter { !$0.isEmpty }.joined(separator: "\n")
-        }
+        (value.array ?? []).compactMap { node -> String? in
+            guard ["p", "h"].contains(node["type"]?.string ?? "") else { return nil }
+            let text = (node["inlines"]?.array ?? []).compactMap { inline -> String? in
+                ["t", "a"].contains(inline["type"]?.string ?? "") ? inline["text"]?.string : nil
+            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }.joined(separator: "\n")
     }
 }
 
@@ -107,6 +118,10 @@ struct ContentReadingTarget: Equatable, Hashable {
             self.page = max(1, page ?? 1)
         }
     }
+    init(visibleFloor: String?, page: Int64) {
+        self.floor = visibleFloor
+        self.page = max(1, page)
+    }
     static func floorNumber(_ floor: String) -> Int64? {
         let trimmed = floor.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value = Int32((trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed).trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
@@ -114,6 +129,42 @@ struct ContentReadingTarget: Equatable, Hashable {
     }
     func clamped(to total: Int64) -> Self {
         page > max(1, total) ? Self(floor: nil, page: max(1, total)) : self
+    }
+}
+
+/// A jump within the loaded window is a scroll, not a repository replacement.
+struct ContentThreadJump: Equatable {
+    let target: ContentReadingTarget
+    let loadPage: Int64?
+    let extend: Bool
+    let bottom: Bool
+    init(target: ContentReadingTarget, thread: JSONValue, bottom: Bool = false) {
+        let first = thread["firstLoadedPage"]?.int ?? 1
+        let last = thread["lastLoadedPage"]?.int ?? 1
+        let total = max(1, thread["totalPages"]?.int ?? 1)
+        let comments = thread["comments"]?.array ?? []
+        let pages = thread["commentPages"]?.array ?? []
+        if let number = target.floor.flatMap(ContentReadingTarget.floorNumber),
+           let index = comments.firstIndex(where: { $0["floor"]?.string.flatMap(ContentReadingTarget.floorNumber) == number }),
+           pages.indices.contains(index), let page = pages[index].int {
+            self.target = .init(visibleFloor: comments[index]["floor"]?.string, page: page)
+        } else { self.target = target.clamped(to: total) }
+        let missingOpening = self.target.floor.flatMap(ContentReadingTarget.floorNumber) == 0 && (thread["body"] == nil || thread["body"] == .null)
+        loadPage = (thread == .null || missingOpening || self.target.page < first || self.target.page > last) ? self.target.page : nil
+        extend = self.target.page == first - 1 || self.target.page == last + 1 || missingOpening
+        self.bottom = bottom
+    }
+}
+
+struct ContentJumpEntry {
+    private(set) var text = ""
+    private(set) var floor = false
+    mutating func update(_ text: String) { self.text = String(text.filter { $0 >= "0" && $0 <= "9" }.prefix(6)) }
+    mutating func toggleUnit() { floor.toggle(); text = "" }
+    func target(total: Int64) -> ContentReadingTarget? {
+        guard let number = Int32(text) else { return nil }
+        return floor ? .init(floor: "#\(max(0, number))", page: nil).clamped(to: total)
+            : .init(floor: nil, page: max(1, Int64(number))).clamped(to: total)
     }
 }
 

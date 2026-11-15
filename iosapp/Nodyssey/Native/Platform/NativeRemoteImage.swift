@@ -124,7 +124,7 @@ struct NativeImageViewer: View {
         NavigationStack {
             Group {
                 if state.url == url, let image = state.image {
-                    NativeZoomImage(image: image)
+                    NativeZoomImage(image: image, onDismiss: { dismiss() })
                 } else if state.failure {
                     Button(state.deferredForWifi ? "Load using mobile data" : "Retry image") {
                         state.load(url, allowMetered: state.deferredForWifi)
@@ -236,11 +236,35 @@ private struct NativeImageDisplay: UIViewRepresentable {
     }
 }
 
+// Geometry/admission logic is platform-free so the actual UI policy can run on the Mac test host.
+enum NativeImageGesturePolicy {
+    static func isZoomed(_ scale: CGFloat, minimum: CGFloat) -> Bool { scale > minimum + 0.01 }
+
+    static func shouldDismiss(translationY: CGFloat, scale: CGFloat, minimum: CGFloat) -> Bool {
+        !isZoomed(scale, minimum: minimum) && abs(translationY) > 120
+    }
+
+    static func zoomRect(tap: CGPoint, viewport: CGSize, scale: CGFloat) -> CGRect {
+        let size = CGSize(width: viewport.width / scale, height: viewport.height / scale)
+        let origin = CGPoint(x: tap.x - size.width / CGFloat(2), y: tap.y - size.height / CGFloat(2))
+        return CGRect(origin: origin, size: size)
+    }
+
+    static func canBeginDismiss(scale: CGFloat, minimum: CGFloat, velocity: CGPoint,
+                                locationX: CGFloat, width: CGFloat, touches: Int) -> Bool {
+        !isZoomed(scale, minimum: minimum) && touches == 1 &&
+            abs(velocity.y) > abs(velocity.x) * 1.2 &&
+            locationX > 24 && locationX < width - 24
+    }
+}
+
 private struct NativeZoomImage: UIViewRepresentable {
     let image: UIImage
+    var onDismiss: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = ViewerScrollView()
         scroll.delegate = context.coordinator
         scroll.minimumZoomScale = 1
         scroll.maximumZoomScale = 6
@@ -259,16 +283,103 @@ private struct NativeZoomImage: UIViewRepresentable {
             imageView.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
             imageView.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
         ])
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+        let drag = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.drag(_:)))
+        drag.maximumNumberOfTouches = 1
+        drag.delegate = context.coordinator
+        scroll.addGestureRecognizer(drag)
+        scroll.dismissPan = drag
+        scroll.panGestureRecognizer.require(toFail: drag)
         return scroll
     }
     func updateUIView(_ scroll: UIScrollView, context: Context) {
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.reduceMotion = reduceMotion
         if context.coordinator.imageView.image !== image {
+            scroll.transform = .identity
             scroll.setZoomScale(1, animated: false)
             context.coordinator.imageView.image = image
         }
     }
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    // UIScrollView owns pinch/pan. SwiftUI's page TabView offers no per-page gesture arbitration
+    // on iOS 16; fail dependencies let its ancestor pager win only when our zoom pan fails.
+    // Never replace a system gesture delegate or disable a navigation edge-back recognizer.
+    final class ViewerScrollView: UIScrollView {
+        weak var dismissPan: UIPanGestureRecognizer?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            var ancestor = superview
+            while let view = ancestor {
+                if let pager = view as? UIScrollView {
+                    pager.panGestureRecognizer.require(toFail: panGestureRecognizer)
+                    if let dismissPan { pager.panGestureRecognizer.require(toFail: dismissPan) }
+                }
+                for edge in view.gestureRecognizers ?? [] where edge is UIScreenEdgePanGestureRecognizer {
+                    panGestureRecognizer.require(toFail: edge)
+                    dismissPan?.require(toFail: edge)
+                }
+                ancestor = view.superview
+            }
+        }
+        override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer === panGestureRecognizer,
+               !NativeImageGesturePolicy.isZoomed(zoomScale, minimum: minimumZoomScale) { return false }
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let imageView = UIImageView()
+        var onDismiss: () -> Void = {}
+        var reduceMotion = false
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let scroll = pan.view as? UIScrollView else { return false }
+            guard !scroll.isZooming else { return false }
+            return NativeImageGesturePolicy.canBeginDismiss(
+                scale: scroll.zoomScale, minimum: scroll.minimumZoomScale,
+                velocity: pan.velocity(in: scroll), locationX: pan.location(in: scroll).x - scroll.bounds.minX,
+                width: scroll.bounds.width, touches: pan.numberOfTouches)
+        }
+
+        @objc func doubleTap(_ tap: UITapGestureRecognizer) {
+            guard let scroll = tap.view as? UIScrollView, !scroll.isZooming else { return }
+            if NativeImageGesturePolicy.isZoomed(scroll.zoomScale, minimum: scroll.minimumZoomScale) {
+                scroll.setZoomScale(scroll.minimumZoomScale, animated: !reduceMotion)
+            } else {
+                // UIScrollView expects this rectangle in the zoomed view's coordinate system.
+                let rect = NativeImageGesturePolicy.zoomRect(tap: tap.location(in: imageView),
+                    viewport: scroll.bounds.size, scale: min(2.5, scroll.maximumZoomScale))
+                scroll.zoom(to: rect, animated: !reduceMotion)
+            }
+        }
+
+        @objc func drag(_ pan: UIPanGestureRecognizer) {
+            guard let scroll = pan.view as? UIScrollView else { return }
+            let distance = pan.translation(in: scroll.superview).y
+            switch pan.state {
+            case .began, .changed:
+                // Translation uses the stationary parent; transforming the recognizer's view
+                // must not feed its own movement back into the next translation sample.
+                if !reduceMotion { scroll.transform = CGAffineTransform(translationX: 0, y: distance) }
+            case .ended:
+                let shouldDismiss = NativeImageGesturePolicy.shouldDismiss(
+                    translationY: distance, scale: scroll.zoomScale, minimum: scroll.minimumZoomScale)
+                reset(scroll)
+                if shouldDismiss { onDismiss() }
+            case .cancelled, .failed:
+                reset(scroll)
+            default: break
+            }
+        }
+
+        private func reset(_ scroll: UIScrollView) {
+            if reduceMotion { scroll.transform = .identity }
+            else { UIView.animate(withDuration: 0.2) { scroll.transform = .identity } }
+        }
     }
 }

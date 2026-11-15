@@ -18,6 +18,7 @@ struct LibraryBookmarksScreen: View {
     @State private var estimate: Int64?
     @State private var failures: [Int64: NativeFailure] = [:]
     @State private var watchAttempt = 0
+    @State private var managingOffline = false
 
     private var rows: [JSONValue] { snapshot.value.array ?? [] }
     private var visible: [JSONValue] { LibraryRows.visible(rows, offline: offline.value, query: query, filter: filter, sort: sort) }
@@ -31,16 +32,12 @@ struct LibraryBookmarksScreen: View {
             if truncated { Text(libraryL("truncated")).font(.footnote) }
             Section {
                 Picker(libraryL("filter"), selection: $filter) {
-                    Text(libraryL("all")).tag("all")
-                    Text(libraryL("downloaded")).tag("downloaded")
-                    Text(libraryL("newReplies")).tag("new")
+                    Text("\(libraryL("all")) · \(rows.count)").tag("all")
+                    if available {
+                        Text("\(libraryL("downloaded")) · \(filterCount("downloaded"))").tag("downloaded")
+                        Text("\(libraryL("newReplies")) · \(filterCount("new"))").tag("new")
+                    }
                 }
-                Picker(libraryL("sort"), selection: $sort) {
-                    Text(libraryL("siteOrder")).tag("site")
-                    Text(libraryL("replies")).tag("replies")
-                    Text(libraryL("pendingFirst")).tag("pending")
-                }
-                Toggle(libraryL("select"), isOn: $selecting)
                 if selecting {
                     Text("\(libraryL("selected")): \(selection.selected.count)")
                     Button(libraryL("selectVisible")) { selection.selectVisible(visible.compactMap { $0["postId"]?.int }) }
@@ -71,7 +68,9 @@ struct LibraryBookmarksScreen: View {
                     }
                 }
             }
-            if visible.isEmpty && !snapshot.isLoading { NativeEmptyView(libraryL("empty")) }
+            if visible.isEmpty && !snapshot.isLoading && snapshot.failure == nil {
+                NativeEmptyView(libraryL(!query.isEmpty ? "emptySearch" : filter != "all" ? "emptyFilter" : "empty"))
+            }
             ForEach(visible.compactMap(LibraryIdentifiedRow.init)) { item in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -82,13 +81,14 @@ struct LibraryBookmarksScreen: View {
                             } label: { Image(systemName: selection.selected.contains(item.id) ? "checkmark.circle.fill" : "circle") }
                             .buttonStyle(.borderless).accessibilityLabel(libraryL("select"))
                         }
-                        LibraryPostRow(row: item.value)
+                        LibraryPostRow(row: item.value, select: selecting ? { toggle(item.id) } : nil)
                     }
                     if let state = LibraryRows.state(item.id, offline: offline.value) {
                         offlineState(state, id: item.id)
                     }
                     if let failure = failures[item.id] { NativeFailureView(failure: failure) }
                 }
+                .onLongPressGesture { selecting = true; toggle(item.id) }
                 .swipeActions {
                     Button(libraryL("delete"), role: .destructive) {
                         selection.selected = [item.id]; confirmDelete = true
@@ -96,19 +96,32 @@ struct LibraryBookmarksScreen: View {
                     if available { Button(libraryL("download")) { download([item.id]) }.tint(.blue) }
                 }
             }
-            offlineManagement
         }
         .navigationTitle(libraryL("bookmarks"))
         .searchable(text: $query, prompt: libraryL("search"))
         .refreshable { await refresh() }
-        .toolbar { Button(libraryL("refresh")) { action.run { await refresh() } }.disabled(action.busy) }
+        .toolbar {
+            ToolbarItemGroup {
+                Menu(libraryL("sort")) {
+                Picker(libraryL("sort"), selection: $sort) {
+                    Text(libraryL("siteOrder")).tag("site")
+                    Text(libraryL("replies")).tag("replies")
+                    Text(libraryL("pendingFirst")).tag("pending")
+                }
+                }
+                if !selecting {
+                    Button(libraryL("select")) { selecting = true }
+                } else {
+                    Button(libraryL("done")) { selecting = false; selection.selected.removeAll() }
+                }
+                if available {
+                    Button(libraryL("offlineManage")) { managingOffline = true }
+                }
+                Button(libraryL("refresh")) { action.run { await refresh() } }.disabled(action.busy)
+            }
+        }
         .confirmationDialog(libraryL("deleteConfirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(libraryL("delete"), role: .destructive) { changeCollection(selectedIDs, collected: false) }
-        }
-        .confirmationDialog(libraryL("clearOfflineConfirm"), isPresented: $confirmClear, titleVisibility: .visible) {
-            Button(libraryL("clear"), role: .destructive) {
-                action.run { offline.value = try await app.request("offline.clear") }
-            }
         }
         .task(id: "\(app.generation)-\(watchAttempt)") {
             selection = LibrarySelection(); failures = [:]; truncated = false
@@ -129,7 +142,28 @@ struct LibraryBookmarksScreen: View {
         .task(id: app.generation) { await offline.observe(app, "offline.observe") }
         .task(id: app.generation) { await capabilities.load(app, "settings.capabilities") }
         .onChange(of: selection.selected) { _ in estimate = nil }
+        .onChange(of: available) { value in if !value { filter = "all" } }
         .onDisappear { action.cancel() }
+        .sheet(isPresented: $managingOffline) {
+            NavigationStack {
+                List { LibraryActionStatus(action: action); offlineManagement }
+                    .navigationTitle(libraryL("offline"))
+                    .toolbar { Button(libraryL("done")) { managingOffline = false }.disabled(action.busy) }
+        .confirmationDialog(libraryL("clearOfflineConfirm"), isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(libraryL("clear"), role: .destructive) {
+                action.run { offline.value = try await app.request("offline.clear") }
+            }
+        }
+            }.interactiveDismissDisabled(action.busy)
+        }
+    }
+
+    private func toggle(_ id: Int64) {
+        if selection.selected.contains(id) { selection.selected.remove(id) }
+        else { selection.selected.insert(id) }
+    }
+    private func filterCount(_ value: String) -> Int {
+        LibraryRows.visible(rows, offline: offline.value, query: "", filter: value, sort: "site").count
     }
 
     @ViewBuilder private func offlineState(_ state: JSONValue, id: Int64) -> some View {
@@ -224,12 +258,10 @@ struct LibraryHistoryScreen: View {
     @State private var removing: Int64?
     @State private var clear = false
     @State private var attempt = 0
-    private var groups: [(Date, [JSONValue])] {
-        let rows = store.value.array ?? []
-        let grouped = Dictionary(grouping: rows) { row in
-            Calendar.current.startOfDay(for: Date(timeIntervalSince1970: Double(row["lastReadAtMillis"]?.int ?? 0) / 1000))
-        }
-        return grouped.keys.sorted(by: >).map { ($0, grouped[$0] ?? []) }
+    @State private var managing = false
+    private var groups: [(Int, [JSONValue])] {
+        let grouped = Dictionary(grouping: store.value.array ?? []) { LibraryRows.historyBucket($0) }
+        return grouped.keys.sorted().map { ($0, (grouped[$0] ?? []).sorted { ($0["lastReadAtMillis"]?.int ?? 0) > ($1["lastReadAtMillis"]?.int ?? 0) }) }
     }
     var body: some View {
         List {
@@ -244,14 +276,24 @@ struct LibraryHistoryScreen: View {
             }
             if store.value.array?.isEmpty == true { NativeEmptyView(libraryL("empty")) }
             ForEach(groups, id: \.0) { day, entries in
-                Section(day.formatted(date: .abbreviated, time: .omitted)) {
+                Section(libraryL(["today", "yesterday", "week", "earlier"][day])) {
                     ForEach(entries.compactMap(LibraryIdentifiedRow.init)) { item in
-                        LibraryPostRow(row: item.value).swipeActions {
+                        LibraryPostRow(row: item.value, showsReadTime: true).swipeActions {
                             Button(libraryL("delete"), role: .destructive) { removing = item.id }
                         }
                     }
                 }
             }
+        }
+        .navigationTitle(libraryL("history"))
+        .toolbar {
+            Menu(libraryL("manage")) {
+                Button(libraryL("retention")) { managing = true }
+                Button(libraryL("clearHistory"), role: .destructive) { clear = true }.disabled(action.busy)
+            }
+        }
+        .sheet(isPresented: $managing) {
+            NavigationStack { Form {
             Section(libraryL("retention")) {
                 LibraryStoreStatus(store: settings)
                 Picker(libraryL("historyLimit"), selection: Binding(get: { settings.value["readHistoryLimit"]?.int ?? 300 }, set: { value in
@@ -259,10 +301,12 @@ struct LibraryHistoryScreen: View {
                 })) {
                     ForEach(historyLimits, id: \.self) { value in Text(value == Int64(Int32.max) ? libraryL("forever") : String(value)).tag(value) }
                 }.disabled(action.busy || settings.value == .null)
-                Button(libraryL("clearHistory"), role: .destructive) { clear = true }.disabled(action.busy)
             }
+            LibraryActionStatus(action: action)
+            }.navigationTitle(libraryL("retention"))
+                .toolbar { Button(libraryL("done")) { managing = false }.disabled(action.busy) }
+            }.interactiveDismissDisabled(action.busy)
         }
-        .navigationTitle(libraryL("history"))
         .task(id: "\(app.generation)-\(attempt)") { undo.reset(); await store.observe(app, "history.list") }
         .task(id: app.generation) { await settings.load(app, "settings.get") }
         .refreshable { await libraryRead(store, app, "history.list") }
@@ -302,7 +346,7 @@ struct LibraryTrackedScreen: View {
             LibraryActionStatus(action: action)
             if store.value.array?.isEmpty == true { NativeEmptyView(libraryL("empty")) }
             ForEach((store.value.array ?? []).compactMap(LibraryIdentifiedRow.init)) { item in
-                LibraryPostRow(row: item.value).swipeActions {
+                LibraryPostRow(row: item.value, countKey: "lastKnownCount").swipeActions {
                     Button(libraryL("untrack"), role: .destructive) { removing = item.id }
                 }
             }

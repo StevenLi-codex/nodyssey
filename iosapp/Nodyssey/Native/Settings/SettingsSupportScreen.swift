@@ -5,6 +5,7 @@ struct SettingsSupportScreen: View {
     @EnvironmentObject private var app: NativeAppModel
     let route: String
     @StateObject private var store = NativeStore()
+    @StateObject private var metadata = NativeStore()
     @State private var revision = 0
     @State private var guide = false
 
@@ -31,6 +32,7 @@ struct SettingsSupportScreen: View {
         .navigationTitle(Text(LocalizedStringKey(title)))
         .toolbar { Button("action_refresh") { revision += 1 } }
         .task(id: "\(app.generation)-\(revision)") {
+            if route == "Privacy" { await metadata.load(app, "settings.metadata") }
             await store.load(app, route == "Privacy" ? "settings.privacy" : "settings.metadata")
         }
         .sheet(isPresented: $guide) { SettingsGuideScreen() }
@@ -57,6 +59,13 @@ struct SettingsSupportScreen: View {
     }
 
     @ViewBuilder private var privacy: some View {
+        Section {
+            SettingsStoreStatus(store: metadata) { revision += 1 }
+            if let raw = metadata.value["terms"]?.string, let url = URL(string: raw),
+               url.scheme == "https", url.user == nil, url.password == nil {
+                Link(destination: url) { Text("privacy_open_original") }
+            }
+        }
         if let title = store.value["title"]?.string {
             Section {
                 Text(verbatim: title).font(.headline)
@@ -151,6 +160,7 @@ private struct SettingsGuideScreen: View {
                 settingsText(bodies[page]).multilineTextAlignment(.center)
                 Text(verbatim: "\(page + 1) / \(titles.count)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if page > 0 { Button("action_back") { page -= 1 }.disabled(action.busy) }
                 Button(LocalizedStringKey(page == titles.count - 1 ? "onboarding_done" : "onboarding_next")) {
                     if page < titles.count - 1 { page += 1 } else { finish() }
                 }.buttonStyle(.borderedProminent).disabled(action.busy)

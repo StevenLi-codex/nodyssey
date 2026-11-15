@@ -32,15 +32,60 @@ import NodysseyNativeCore
 @MainActor @Test func profileReadFailureBeforePaymentCannotBeTreatedAsUnknownBalance() async throws {
     let payment = try LibraryPayment(recipient: "4", amount: "8", refId: "0", onetime: false)
     var writes = 0
-    do {
-        _ = try await LibraryOperations.pay(payment, confirmed: true) { op, _ in
-            if op == "profile.self" { throw NativeFailure(code: "NETWORK", message: "") }
-            if op == "assets.transfer" { writes += 1 }
-            return .null
-        }
-        Issue.record("Failed preflight must not spend")
-    } catch let error as NativeFailure { #expect(error.code == "NETWORK") }
+    let result = try await LibraryOperations.pay(payment, confirmed: true) { op, _ in
+        if op == "profile.self" { throw NativeFailure(code: "NETWORK", message: "") }
+        if op == "assets.transfer" { writes += 1 }
+        return .null
+    }
+    #expect(result.preflightFailure?.code == "NETWORK")
+    #expect(!result.writeAttempted)
     #expect(writes == 0)
+}
+
+@MainActor @Test func paymentRecoveryAllowsIdleCloseButBlocksTheFrozenIntent() throws {
+    let payment = try LibraryPayment(recipient: "4", amount: "8", refId: "0", onetime: false)
+    let recovery = LibraryPaymentRecovery()
+    recovery.markWriteAttempted(payment)
+
+    #expect(recovery.needsReadback)
+    #expect(recovery.canDismiss(isBusy: false))
+    #expect(!recovery.canPay(payment))
+
+    recovery.reconcile(payment, authoritativePaid: true)
+    #expect(!recovery.needsReadback)
+    #expect(!recovery.canPay(payment))
+}
+
+@MainActor @Test func missingReceiptCannotReleaseAnUncertainPayment() throws {
+    let payment = try LibraryPayment(recipient: "4", amount: "8", refId: "0", onetime: false)
+    let other = try LibraryPayment(recipient: "5", amount: "8", refId: "0", onetime: false)
+    let recovery = LibraryPaymentRecovery()
+    recovery.markWriteAttempted(payment)
+    recovery.reconcile(payment, authoritativePaid: false)
+
+    #expect(recovery.needsReadback)
+    #expect(!recovery.canPay(payment))
+    #expect(!recovery.canPay(other))
+    #expect(!recovery.canLeaveRoute(isBusy: false))
+    #expect(recovery.frozenPayment == payment)
+}
+
+@MainActor @Test func indeterminateWriteStaysFrozenWhenReadbackFails() async throws {
+    let payment = try LibraryPayment(recipient: "4", amount: "8", refId: "0", onetime: false)
+    var transferCalls = 0
+    let result = try await LibraryOperations.pay(payment, confirmed: true) { op, _ in
+        if op == "assets.transfer" {
+            transferCalls += 1
+            throw NativeFailure(code: "NETWORK", message: "")
+        }
+        if op == "assets.stardust" { throw NativeFailure(code: "NETWORK", message: "") }
+        if op == "profile.self" { return .object(["starCount": .integer(8)]) }
+        return .null
+    }
+    #expect(result.writeAttempted)
+    #expect(result.writeFailure?.code == "NETWORK")
+    #expect(result.refreshFailure?.code == "NETWORK")
+    #expect(transferCalls == 1)
 }
 
 @MainActor @Test func profileRefreshFailureRetainsAcknowledgementButNotStaleGrowth() async throws {

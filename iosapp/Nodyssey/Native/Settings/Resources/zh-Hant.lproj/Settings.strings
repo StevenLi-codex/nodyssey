@@ -47,3 +47,4 @@
 "native_settings_swift_dependencies" = "本原生設定介面未新增第三方 Swift 執行階段相依套件。以上沿用原專案相依目錄；完整版本與間接相依套件以原始碼鎖定檔為準。";
 "native_settings_guide_welcome" = "這是原生介面的快速導覽。你可以隨時跳過，關閉後回到剛才的位置。";
 "native_settings_guide_settings" = "外觀、語言與網路設定在設定中管理。不支援的平台能力會明確說明，而不是提供無效開關。";
+"native_settings_unsaved" = "尚未儲存的變更";

@@ -49,7 +49,13 @@ func libraryL(_ key: String) -> String {
 
 @MainActor func libraryRead(_ store: NativeStore, _ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async {
     // A read-back must NOT call NativeStore.load on an observing store: load cancels its subscription.
-    do { store.value = try await app.request(operation, arguments); store.failure = nil }
+    let generation = app.generation
+    do {
+        let value = try await app.request(operation, arguments)
+        try Task.checkCancellation()
+        guard generation == app.generation else { return }
+        store.value = value; store.failure = nil
+    }
     catch is CancellationError { }
     catch let failure as NativeFailure { store.failure = failure }
     catch { store.failure = NativeFailure(code: "INTERNAL", message: "") }
@@ -98,14 +104,14 @@ func libraryScalar(_ value: JSONValue?) -> String {
 struct LibraryPostRow: View {
     @EnvironmentObject private var app: NativeAppModel
     let row: JSONValue
+    var countKey = "commentCount"
+    var showsReadTime = false
+    var select: (() -> Void)? = nil
     var body: some View {
-        if let id = row["postId"]?.int {
+        if let id = row["postId"]?.int, id > 0 {
             Button {
-                var arguments: [String: JSONValue] = ["postId": .integer(id)]
-                if let position = row["readingPosition"]?.object {
-                    arguments.merge(position) { _, new in new }
-                }
-                if let floor = row["floor"], floor != .null { arguments["floor"] = floor }
+                if let select { select(); return }
+                guard let arguments = LibraryRows.threadArguments(row) else { return }
                 app.open("PostDetail", arguments)
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -113,8 +119,12 @@ struct LibraryPostRow: View {
                     HStack {
                         if let author = row["authorName"]?.string { Text(author) }
                         if let category = row["categoryTitle"]?.string { Text(category) }
-                        if let count = row["commentCount"]?.int { Label(String(count), systemImage: "bubble.right") }
+                        if !showsReadTime, let count = row[countKey]?.int, count >= 0 { Label(String(count), systemImage: "bubble.right") }
                     }.font(.caption).foregroundStyle(.secondary)
+                    if showsReadTime, let millis = row["lastReadAtMillis"]?.int {
+                        Text(Date(timeIntervalSince1970: Double(millis) / 1000).formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }.buttonStyle(.plain)
         }
@@ -133,11 +143,11 @@ struct LibraryPageControls: View {
             Button { change(max(1, page - 1)) } label: { Image(systemName: "chevron.left") }
                 .accessibilityLabel(libraryL("previous")).disabled(page <= 1 || busy)
             Text(total.map { "\(page) / \($0)" } ?? String(page)).monospacedDigit()
-            Button { change(page + 1) } label: { Image(systemName: "chevron.right") }
+            Button { if page < Int64(Int32.max) { change(page + 1) } } label: { Image(systemName: "chevron.right") }
                 .accessibilityLabel(libraryL("next")).disabled(!hasNext || busy)
             TextField(libraryL("page"), text: $jump).frame(maxWidth: 90)
             Button(libraryL("go")) {
-                if let n = Int64(jump), n > 0, total == nil || n <= total! { change(n) }
+                if let n = Int32(jump), n > 0, total == nil || Int64(n) <= total! { change(Int64(n)) }
             }.disabled(busy || Int64(jump).map { $0 <= 0 || (total != nil && $0 > total!) } != false)
         }
     }

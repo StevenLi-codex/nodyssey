@@ -33,8 +33,17 @@ struct SettingsProxyScreen: View {
                         Text("proxy_type_socks").tag("SOCKS")
                     }
                     TextField("proxy_host_label", text: $draft.host).autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never).keyboardType(.URL)
+                        #endif
                     TextField("proxy_port_label", text: $draft.port).autocorrectionDisabled()
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        #endif
                     TextField("proxy_username_label", text: $draft.username).autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
                     SecureField("proxy_password_label", text: Binding(get: { draft.password }, set: {
                         draft.password = $0; draft.passwordChanged = true
                     }))
@@ -55,6 +64,9 @@ struct SettingsProxyScreen: View {
                     }.disabled((try? draft.payload()) == nil)
                 }.disabled(action.busy)
                 Section {
+                    if draft != SettingsProxyDraft(snapshot: store.value) {
+                        settingsText("native_settings_unsaved").font(.footnote).foregroundStyle(.secondary)
+                    }
                     Button("proxy_test") {
                         result = .null
                         action.run(app, "proxy.test") { result = $0 }
@@ -124,6 +136,9 @@ struct SettingsDohScreen: View {
                         DisclosureGroup {
                             if row["preset"]?.string == nil {
                                 TextField("doh_url_label", text: field(index, "customUrl")).autocorrectionDisabled()
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never).keyboardType(.URL)
+                                    #endif
                             } else if let url = row["url"]?.string { Text(verbatim: url).textSelection(.enabled) }
                             TextField("doh_bootstrap_label", text: field(index, "bootstrapOverride")).autocorrectionDisabled()
                             if row["preset"]?.string != nil {
@@ -144,6 +159,7 @@ struct SettingsDohScreen: View {
                         edited = true
                     }
                     Button { restoreMissingPresets() } label: { settingsText("native_settings_restore_resolvers") }
+                    if edited { settingsText("native_settings_unsaved").font(.footnote).foregroundStyle(.secondary) }
                     Button("doh_save") { saveServers() }.disabled(enabled && selected.isEmpty)
                 }.disabled(action.busy)
                 Section {

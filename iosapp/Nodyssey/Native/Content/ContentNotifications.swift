@@ -21,30 +21,30 @@ struct ContentNotifications: View {
             } else {
                 VStack {
                     Picker(String(localized: "content.notifications", table: "Content"), selection: $selection) {
-                        Text(String(localized: "content.interactions", table: "Content")).tag("INTERACTIONS")
-                        Text(String(localized: "content.messages", table: "Content")).tag("MESSAGES")
+                        Text(groupLabel("interactions")).tag("INTERACTIONS")
+                        Text(groupLabel("messages")).tag("MESSAGES")
                     }.pickerStyle(.segmented).padding(.horizontal)
                     List {
                         ContentCommandStatus(command: command)
                         ContentStoreStatus(store: counts) { retry += 1 }
-                        if let count = counts.value.nativeInt(selection == "MESSAGES" ? "messages" : "interactions") {
-                            Label("\(count)", systemImage: "envelope.badge")
-                        }
                         if selection == "MESSAGES" {
                             ContentStoreStatus(store: messages) { retry += 1 }
-                            ForEach(ContentIdentityRow.rows(messages.value.array ?? [], key: "uid")) { row in
-                                Button { app.open("MessageThread", ["uid": .integer(row.id)]) } label: { conversation(row.value) }
-                            }
+                            ForEach(conversations(system: true)) { row in conversationButton(row) }
+                            if !conversations(system: true).isEmpty, !conversations(system: false).isEmpty {
+                                Section { ForEach(conversations(system: false)) { row in conversationButton(row) } }
+                                header: { Text("messages_section_all") }
+                            } else { ForEach(conversations(system: false)) { row in conversationButton(row) } }
                             if messages.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
                         } else {
                             ContentStoreStatus(store: interactions) { retry += 1 }
                             ForEach(notificationGroups) { group in
                                 Section {
                                     ForEach(group.rows) { row in
-                                        Button { openNotification(row.value) } label: { notification(row.value) }
+                                        Button { openNotification(row.value) } label: { ContentNotificationRow(value: row.value) }
+                                            .buttonStyle(.plain)
                                             .disabled(command.busy)
                                     }
-                                } header: { Text(group.title) }
+                                } header: { Text(LocalizedStringKey(group.id)) }
                             }
                             if interactions.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
                         }
@@ -55,8 +55,10 @@ struct ContentNotifications: View {
         .navigationTitle(Text(String(localized: "content.notifications", table: "Content")))
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button(String(localized: "content.readAll", table: "Content")) { confirmReadAll = true }.disabled(!app.isSignedIn || command.busy)
-                Button { compose = true } label: { Label(String(localized: "content.newMessage", table: "Content"), systemImage: "square.and.pencil") }.disabled(!app.isSignedIn)
+                Button(String(localized: "content.readAll", table: "Content")) { confirmReadAll = true }.disabled(!app.isSignedIn || command.busy || selectedUnread == 0)
+                if selection == "MESSAGES" {
+                    Button { compose = true } label: { Label(String(localized: "content.newMessage", table: "Content"), systemImage: "square.and.pencil") }.disabled(!app.isSignedIn)
+                }
             }
         }
         .confirmationDialog(String(localized: "content.readAll", table: "Content"), isPresented: $confirmReadAll) {
@@ -84,17 +86,27 @@ struct ContentNotifications: View {
             guard let id = value.nativeString("id") else { return nil }; return Row(id: id, value: value)
         }
     }
-    private struct NotificationGroup: Identifiable { var id: String { title }; let title: String; var rows: [Row] }
+    private var selectedUnread: Int64 { max(0, counts.value.nativeInt(selection == "MESSAGES" ? "messages" : "interactions") ?? 0) }
+    private func groupLabel(_ key: String) -> String {
+        let title = NSLocalizedString("content." + key, tableName: "Content", comment: "")
+        let count = max(0, counts.value.nativeInt(key) ?? 0)
+        return count > 0 ? "\(title) (\(count))" : title
+    }
+    private func conversations(system: Bool) -> [ContentIdentityRow] {
+        ContentIdentityRow.rows(messages.value.array ?? [], key: "uid").filter { ($0.value.nativeBool("isSystem") == true) == system }
+    }
+    private func conversationButton(_ row: ContentIdentityRow) -> some View {
+        Button { app.open("MessageThread", ["uid": .integer(row.id), "userName": .string(row.value.nativeString("userName") ?? "")]) }
+        label: { ContentConversationRow(value: row.value) }.buttonStyle(.plain)
+    }
+    private struct NotificationGroup: Identifiable { let id: String; var rows: [Row] }
     private var notificationGroups: [NotificationGroup] {
-        var groups: [NotificationGroup] = []
-        for row in notificationRows {
-            let title = row.value.nativeInt("createdAtMillis").map {
-                Date(timeIntervalSince1970: Double($0) / 1000).formatted(date: .abbreviated, time: .omitted)
-            } ?? row.value.nativeString("createdAtText") ?? ""
-            if let index = groups.firstIndex(where: { $0.title == title }) { groups[index].rows.append(row) }
-            else { groups.append(NotificationGroup(title: title, rows: [row])) }
+        let now = Date()
+        let grouped = Dictionary(grouping: notificationRows) { contentNotificationDay($0.value.nativeInt("createdAtMillis"), now: now) }
+        return ["today", "yesterday", "week", "earlier"].compactMap { day in
+            guard let rows = grouped[day] else { return nil }
+            return NotificationGroup(id: "history_section_" + day, rows: rows)
         }
-        return groups
     }
     private func openNotification(_ row: JSONValue) {
         command.run(app) {
@@ -111,8 +123,10 @@ struct ContentNotifications: View {
         }
     }
     private func readAll() {
+        guard selectedUnread > 0 else { return }
+        let group = selection
         command.run(app) {
-            if selection == "MESSAGES" { _ = try await app.request("messages.readAll") }
+            if group == "MESSAGES" { _ = try await app.request("messages.readAll") }
             else {
                 // Deliberately two independent acknowledgements, never MESSAGES or synthetic merged IDs.
                 _ = try await app.request("notifications.readAll", ["category": .string("REPLIES")])
@@ -128,36 +142,95 @@ struct ContentNotifications: View {
         } catch is CancellationError { }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
     }
-    private func notification(_ value: JSONValue) -> some View {
-        HStack(alignment: .top) {
-            ContentAvatar(value: value)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(value.nativeString("actorName") ?? "").font(.headline)
-                    if value.nativeBool("isReply") == true { Image(systemName: "arrowshape.turn.up.left") }
-                    if value.nativeBool("isMention") == true { Image(systemName: "at") }
-                    if value.nativeBool("isUnread") == true { Image(systemName: "circle.fill").font(.caption2).foregroundStyle(.tint) }
-                }
-                if let title = value.nativeString("threadTitle") { Text(title) }
-                HStack {
-                    if let floor = value.nativeString("floor") { Text(floor) }
-                    if let date = value.nativeString("createdAtText") { Text(date) }
-                }.font(.caption).foregroundStyle(.secondary)
-            }
-        }
+}
+
+/// Match Android's calendar buckets (future = today, unknown = earlier).
+func contentNotificationDay(_ millis: Int64?, now: Date = Date(), calendar: Calendar = .current) -> String {
+    guard let millis else { return "earlier" }
+    let day = calendar.startOfDay(for: Date(timeIntervalSince1970: Double(millis) / 1000))
+    let today = calendar.startOfDay(for: now)
+    let distance = calendar.dateComponents([.day], from: day, to: today).day ?? 7
+    switch distance {
+    case ...0: return "today"
+    case 1: return "yesterday"
+    case 2...6: return "week"
+    default: return "earlier"
     }
-    private func conversation(_ value: JSONValue) -> some View {
-        HStack {
-            ContentAvatar(value: value)
-            VStack(alignment: .leading) {
-                Text(value.nativeString("userName") ?? "").font(.headline)
-                Text(value.nativeArray("snippet").map { part in
-                    part.nativeString("text") ?? "[\(part.nativeString("kind") ?? "")]"
-                }.joined()).lineLimit(2)
-                if let date = value.nativeString("updatedAtText") { Text(date).font(.caption).foregroundStyle(.secondary) }
-            }
-            if let unread = value.nativeInt("unreadCount"), unread > 0 { Text("\(unread)").foregroundStyle(.tint) }
+}
+
+struct ContentNotificationRow: View {
+    let value: JSONValue
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ContentAvatar(value: value, size: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(sentence).font(.subheadline).lineLimit(nil)
+                    .foregroundStyle(value.nativeBool("isUnread") == true ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let date = value.nativeString("createdAtText") { Text(date).font(.caption).foregroundStyle(.secondary) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Circle().fill(Color.accentColor).frame(width: 6, height: 6)
+                .opacity(value.nativeBool("isUnread") == true ? 1 : 0).padding(.top, 7)
+                .accessibilityHidden(true)
+        }.frame(minHeight: 44).contentShape(Rectangle())
+    }
+    private var sentence: AttributedString {
+        let reply = value.nativeBool("isReply") == true
+        let mention = value.nativeBool("isMention") == true
+        let key = reply ? (mention ? "notification_sentence_reply_mention" : "notification_sentence_reply") : "notification_sentence_mention"
+        let template = NSLocalizedString(key, comment: "")
+        // Replace template tokens as runs, never search for user text after formatting.
+        var result = AttributedString()
+        var remaining = template[...]
+        while let range = remaining.range(of: "%[12]\\$@", options: .regularExpression) {
+            result += AttributedString(String(remaining[..<range.lowerBound]))
+            let actor = remaining[range] == "%1$@"
+            var part = AttributedString(actor ? (value.nativeString("actorName") ?? "") : (value.nativeString("threadTitle") ?? NSLocalizedString("notification_unknown_thread", comment: "")))
+            part.font = .subheadline.weight(.semibold)
+            if !actor, value.nativeBool("isUnread") == true { part.foregroundColor = .accentColor }
+            result += part
+            remaining = remaining[range.upperBound...]
         }
+        result += AttributedString(String(remaining))
+        return result
+    }
+}
+
+struct ContentConversationRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let value: JSONValue
+    var body: some View {
+        let unread = max(0, value.nativeInt("unreadCount") ?? 0)
+        HStack(alignment: .top, spacing: 10) {
+            if value.nativeBool("isSystem") == true {
+                Image(systemName: "megaphone.fill").foregroundStyle(.tint)
+                    .frame(width: 40, height: 40).background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityHidden(true)
+            } else { ContentAvatar(value: value) }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(value.nativeString("userName") ?? "").font(.subheadline.weight(unread > 0 ? .semibold : .medium))
+                    if value.nativeBool("isSystem") == true { Image(systemName: "pin.fill").font(.caption).accessibilityLabel(Text("messages_pinned")) }
+                    Spacer(minLength: 0)
+                    if let date = value.nativeString("updatedAtText") { Text(date).font(.caption).foregroundStyle(unread > 0 ? Color.accentColor : Color.secondary) }
+                }
+                HStack(alignment: .top) {
+                    Text(snippet).font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    Spacer(minLength: 0)
+                    if unread > 0 { Text("\(unread)").font(.caption.weight(.semibold)).foregroundStyle(.tint) }
+                }
+            }
+        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+    }
+    private var snippet: String {
+        let keys = ["IMAGE": "image", "STICKER": "sticker", "CODE": "code", "TABLE": "table", "VOTE": "vote", "PAYMENT": "payment"]
+        let body = value.nativeArray("snippet").map { part in
+            if part.nativeString("type") == "Text" { return part.nativeString("text") ?? "" }
+            guard let kind = part.nativeString("kind"), let suffix = keys[kind] else { return "" }
+            return NSLocalizedString("notification_preview_" + suffix, comment: "")
+        }.joined()
+        return (value.nativeBool("isSnippetMine") == true ? NSLocalizedString("messages_snippet_mine_prefix", comment: "") : "") + body
     }
 }
 
@@ -174,7 +247,7 @@ private struct ContentNewConversation: View {
             ForEach(ContentIdentityRow.rows(store.value.array ?? [], key: "uid")) { row in
                 Button {
                     dismiss()
-                    app.open("MessageThread", ["uid": .integer(row.id)])
+                    app.open("MessageThread", ["uid": .integer(row.id), "userName": .string(row.value.nativeString("name") ?? "")])
                 } label: { HStack { ContentAvatar(value: row.value); Text(row.value.nativeString("name") ?? "") } }
             }
             if store.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }

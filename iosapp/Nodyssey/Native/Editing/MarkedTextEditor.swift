@@ -4,6 +4,8 @@ import UIKit
 /// UIKit owns the input session. SwiftUI never assigns text or selection while marked.
 @MainActor final class NativeEditorTextView: UITextView, EditorInput {
     var onSnapshot: ((EditorBuffer) -> Void)?
+    var onWindow: (() -> Void)?
+    override func didMoveToWindow() { super.didMoveToWindow(); onWindow?() }
     private var applying = false
     func apply(_ buffer: EditorBuffer) {
         guard markedTextRange == nil, !applying else { return }
@@ -30,10 +32,26 @@ import UIKit
 @MainActor final class EditorFocus: ObservableObject {
     weak var title: NativeEditorTextView?
     weak var body: NativeEditorTextView?
+    private var initialFocus = EditorInitialFocus()
+    private var initialFocusArmed = false
     func handoff(_ action: () -> Void) {
+        if initialFocusArmed { initialFocus.cancel() }
         EditorHandoff.perform([title, body].compactMap { $0 }, action: action)
     }
+    func requestInitialFocus() {
+        initialFocusArmed = true
+        guard let body else { return }
+        func hasResponder(_ view: UIView) -> Bool {
+            (view !== body && view.isFirstResponder) || view.subviews.contains(where: hasResponder)
+        }
+        let occupied = body.window.map(hasResponder) ?? false
+        if initialFocus.consume(attached: body.window != nil, otherInputActive: occupied) {
+            // Never commit or replace marked text merely to focus the initial body.
+            if !body.isFirstResponder { body.becomeFirstResponder() }
+        }
+    }
     func refocus() { body?.becomeFirstResponder() }
+    func cancelInitialFocus() { initialFocus.cancel() }
 }
 
 struct MarkedTextEditor: UIViewRepresentable {
@@ -41,6 +59,7 @@ struct MarkedTextEditor: UIViewRepresentable {
     let focus: EditorFocus
     var isTitle = false
     var accessibilityLabel: String
+    var autofocus = false
 
     func makeUIView(context: Context) -> NativeEditorTextView {
         let view = NativeEditorTextView()
@@ -62,6 +81,10 @@ struct MarkedTextEditor: UIViewRepresentable {
     }
     private func attach(_ view: NativeEditorTextView, context: Context) {
         if isTitle { focus.title = view } else { focus.body = view }
+        if autofocus && !isTitle {
+            view.onWindow = { [weak focus] in focus?.requestInitialFocus() }
+            focus.requestInitialFocus()
+        }
         let coordinator = context.coordinator
         view.onSnapshot = { [weak coordinator] value in
             guard let coordinator, coordinator.parent.buffer != value else { return }
@@ -72,6 +95,7 @@ struct MarkedTextEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: MarkedTextEditor
         init(_ parent: MarkedTextEditor) { self.parent = parent }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.focus.cancelInitialFocus() }
         func textViewDidChange(_ textView: UITextView) { (textView as? NativeEditorTextView)?.snapshot() }
         func textViewDidChangeSelection(_ textView: UITextView) { (textView as? NativeEditorTextView)?.snapshot() }
         func textViewDidEndEditing(_ textView: UITextView) { (textView as? NativeEditorTextView)?.snapshot() }

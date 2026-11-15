@@ -24,7 +24,17 @@ struct NativeStickerManageScreen: View {
                 ForEach(groups) { group in
                     HStack {
                         Button { app.open("StickerGroup", ["key": .string(group.id)]) } label: {
-                            HStack { Text(MediaL.text(group.name)); Spacer(); Text("\(group.entries.count)").foregroundStyle(.secondary) }
+                            HStack(spacing: 12) {
+                                if let first = group.entries.first {
+                                    if let url = first.url {
+                                        NativeRemoteImage(url: url, aspectFit: true).frame(width: 44, height: 44).allowsHitTesting(false)
+                                    } else { Text(first.insertion).font(.title2).frame(width: 44, height: 44) }
+                                } else { Image(systemName: "face.smiling").frame(width: 44, height: 44).foregroundStyle(.secondary) }
+                                Text(MediaL.text(group.name))
+                                Spacer()
+                                Text("\(group.entries.count)").foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         Toggle(MediaL.text("hidden"), isOn: Binding(get: { group.hidden }, set: { hidden(group, $0) })).labelsHidden()
                             .accessibilityLabel(MediaL.text("hidden") + " " + MediaL.text(group.name))

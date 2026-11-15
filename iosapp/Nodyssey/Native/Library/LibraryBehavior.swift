@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import NodysseyNativeCore
 
 typealias LibraryRequest = @MainActor (String, [String: JSONValue]) async throws -> JSONValue
@@ -84,10 +85,72 @@ struct LibraryPayment: Equatable {
 
 struct LibraryPaymentOutcome {
     var acknowledged = false
+    /// A failure before the transfer request was dispatched. This is safe to retry.
+    var preflightFailure: NativeFailure?
+    /// True once the transfer request was handed to the transport. The result may
+    /// still be unknown even when `writeFailure` is set.
+    var writeAttempted = false
     var writeFailure: NativeFailure?
     var refreshFailure: NativeFailure?
     var ledger: JSONValue = .null
     var growth: JSONValue = .null
+}
+
+/// Route-owned payment recovery. Dismissing the sheet is safe while idle, but an
+/// attempted payment keeps its exact intent fenced until an authoritative receipt
+/// read says whether that intent was applied.
+@MainActor final class LibraryPaymentRecovery: ObservableObject {
+    @Published private(set) var frozenPayment: LibraryPayment?
+    @Published private(set) var needsReadback = false
+    @Published private(set) var paidPayment: LibraryPayment?
+    @Published private(set) var isPaying = false
+    private(set) var acknowledged = false
+
+    func markWriteAttempted(_ payment: LibraryPayment) {
+        frozenPayment = payment
+        needsReadback = true
+        paidPayment = nil
+        acknowledged = false
+    }
+
+    func recordAcknowledgement(_ payment: LibraryPayment) {
+        guard frozenPayment == payment else { return }
+        acknowledged = true
+    }
+
+    func reconcile(_ payment: LibraryPayment, authoritativePaid: Bool) {
+        // The caller may invoke this only after a complete, correlated receipt
+        // read. A refreshed balance alone is not reconciliation authority.
+        guard frozenPayment == payment, authoritativePaid else { return }
+        needsReadback = false
+        paidPayment = payment
+    }
+
+    func canDismiss(isBusy: Bool) -> Bool { !isBusy && !isPaying }
+
+    func canPay(_ payment: LibraryPayment) -> Bool {
+        !isPaying && !needsReadback && paidPayment != payment
+    }
+
+    func canLeaveRoute(isBusy: Bool) -> Bool { canDismiss(isBusy: isBusy) && !needsReadback }
+
+    func pay(_ payment: LibraryPayment, request: LibraryRequest) async throws -> LibraryPaymentOutcome {
+        guard canPay(payment) else { throw NativeFailure(code: "NOT_CONFIRMED", message: "") }
+        isPaying = true
+        defer { isPaying = false }
+        let result = try await LibraryOperations.pay(payment, confirmed: true, willDispatch: {
+            self.markWriteAttempted(payment)
+        }, request: request)
+        if result.acknowledged { recordAcknowledgement(payment) }
+        return result
+    }
+
+    func reset() {
+        frozenPayment = nil
+        needsReadback = false
+        paidPayment = nil
+        acknowledged = false
+    }
 }
 
 struct LibraryAttendanceOutcome {
@@ -146,18 +209,31 @@ extension LibraryOperations {
         return try await request("assets.growth", [:])
     }
 
-    @MainActor static func pay(_ payment: LibraryPayment, confirmed: Bool, request: LibraryRequest) async throws -> LibraryPaymentOutcome {
+    @MainActor static func pay(_ payment: LibraryPayment, confirmed: Bool, willDispatch: @MainActor () -> Void = {}, request: LibraryRequest) async throws -> LibraryPaymentOutcome {
         guard confirmed else { throw NativeFailure(code: "CONFIRMATION_REQUIRED", message: "") }
         // Recheck immediately before spending as another device may have spent since review.
         // An absent balance is unknown, not zero; a failed read is not an attempted write.
-        let profile = try await request("profile.self", ["refresh": .bool(true)])
-        try Task.checkCancellation()
+        var outcome = LibraryPaymentOutcome()
+        let profile: JSONValue
+        do {
+            profile = try await request("profile.self", ["refresh": .bool(true)])
+            try Task.checkCancellation()
+        } catch is CancellationError { throw CancellationError() }
+        catch let failure as NativeFailure {
+            if failure.code == "SESSION_CHANGED" { throw failure }
+            outcome.preflightFailure = failure
+            return outcome
+        } catch {
+            outcome.preflightFailure = NativeFailure(code: "INTERNAL", message: "")
+            return outcome
+        }
         guard payment.shortfall(balance: profile["starCount"]?.int) == nil else {
             throw NativeFailure(code: "INSUFFICIENT_BALANCE", message: "")
         }
-        var outcome = LibraryPaymentOutcome()
         var arguments = payment.arguments
         arguments["confirmed"] = .bool(true)
+        outcome.writeAttempted = true
+        willDispatch()
         do {
             _ = try await request("assets.transfer", arguments)
             outcome.acknowledged = true
@@ -196,6 +272,35 @@ struct LibraryReportSelection {
 }
 
 enum LibraryRows {
+    static func threadArguments(_ row: JSONValue) -> [String: JSONValue]? {
+        guard let id = row["postId"]?.int, id > 0 else { return nil }
+        var args: [String: JSONValue] = ["postId": .integer(id)]
+        if let page = row["readingPosition"]?["page"]?.int, page > 0, page <= Int64(Int32.max) {
+            args["page"] = .integer(page)
+        }
+        // Never merge arbitrary position keys over the actual post identity.
+        let floor = row["floor"] ?? row["readingPosition"]?["floor"]
+        if let text = floor?.string, !text.isEmpty { args["floor"] = .string(text) }
+        return args
+    }
+
+    static func historyBucket(_ row: JSONValue, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        guard let millis = row["lastReadAtMillis"]?.int else { return 3 }
+        let date = Date(timeIntervalSince1970: Double(millis) / 1000)
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 8
+        switch days { case ...0: return 0; case 1: return 1; case 2...6: return 2; default: return 3 }
+    }
+
+    // NodeSeekSite's published paths, on the active origin from site.get, not the pending selection.
+    static func communityURL(_ snapshot: JSONValue, path: String) -> String? {
+        guard ["/providers", "/friends", "/about", "/lucky", "/ruling", "/rss.xml"].contains(path),
+              let site = snapshot["sites"]?.array?.first(where: { $0["id"] == snapshot["current"] }),
+              let origin = site["origin"]?.string, let url = URLComponents(string: origin),
+              url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil, url.path.isEmpty else { return nil }
+        return origin + path
+    }
+
     static func state(_ id: Int64, offline: JSONValue) -> JSONValue? {
         offline["states"]?.array?.first { $0["postId"]?.int == id }
     }

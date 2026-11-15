@@ -17,7 +17,8 @@ struct AccountFollowScreen: View {
                 AccountStoreStatus(store: store) { Task { await store.load(app, operation) } }
                 let rows = AccountUserRow.rows(store.value, query: query)
                 if rows.isEmpty && !store.isLoading && store.failure == nil {
-                    Text(LocalizedStringKey(followers ? "follow_empty_followers_title" : "follow_empty_following_title"))
+                    if query.isEmpty { Text(LocalizedStringKey(followers ? "follow_empty_followers_title" : "follow_empty_following_title")) }
+                    else { Text("native.account.no_matches", tableName: "Account") }
                 }
                 ForEach(rows) { row in
                     Button { app.open("UserSpace", ["uid": .integer(row.id)]) } label: {
@@ -69,10 +70,14 @@ struct AccountSpaceScreen: View {
     @State private var note = ""
     @State private var pending: AccountPendingWrite?
     @State private var noteLoaded = false
+    @State private var readmeExpanded = false
     private var isSelf: Bool { own.value.nativeInt("uid") == uid && app.isSignedIn }
 
     var body: some View {
         VStack(spacing: 0) {
+            if profile.value != .null {
+                AccountProfileHeader(profile: profile.value).padding(.horizontal, 16)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 24) {
                     spaceTab("space_tab_general", value: "general")
@@ -86,7 +91,6 @@ struct AccountSpaceScreen: View {
                 List {
                     AccountStoreStatus(store: profile) { reload() }
                     if profile.value != .null {
-                        AccountProfileHeader(profile: profile.value)
                         HStack(spacing: 36) {
                             if let topics = profile.value.nativeInt("topicCount") { AccountProfileStat(title: "space_stat_topics", value: topics) }
                             if let comments = profile.value.nativeInt("commentCount") { AccountProfileStat(title: "space_stat_comments", value: comments) }
@@ -100,14 +104,20 @@ struct AccountSpaceScreen: View {
                             VStack(alignment: .leading, spacing: 8) { socialActions }
                           }
                         }
-                        Section {
+                        if !isSelf && app.isSignedIn { DisclosureGroup {
                             AccountStoreStatus(store: notes) { Task { await loadNotes() } }
                             TextField(String(localized: "native.account.note", table: "Account"), text: $note, axis: .vertical)
                             Button("account_action_save") { pending = AccountPendingWrite("notes.set", ["uid": .integer(uid), "note": .string(note)]) }
                                 .disabled(action.blocked || !noteLoaded)
-                        }
-                        if let readme = profile.value.nativeString("readme"), !readme.isEmpty {
-                            Section("space_readme") { AccountMarkdown(bodyText: readme) }
+                        } label: { Text("native.account.note", tableName: "Account") } }
+                        Section("space_readme") {
+                            if let readme = profile.value.nativeString("readme"), !readme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                if readme.components(separatedBy: .newlines).count > 8 {
+                                    DisclosureGroup(isExpanded: $readmeExpanded) { AccountMarkdown(bodyText: readme) } label: {
+                                        Text(LocalizedStringKey(readmeExpanded ? "space_readme_collapse" : "space_readme_expand"))
+                                    }
+                                } else { AccountMarkdown(bodyText: readme) }
+                            } else { Text("space_readme_empty").foregroundStyle(.secondary) }
                         }
                     }
                     AccountActionStatus(action: action)
@@ -120,15 +130,25 @@ struct AccountSpaceScreen: View {
         }
         .background(AccountSurface(canvas: true))
         .navigationTitle(profile.value.nativeString("name") ?? String(localized: "space_tab_general"))
+        .toolbar {
+            Menu {
+                if let origin = app.siteOrigin {
+                    Button("action_open_in_browser") {
+                        app.open("Web", ["url": .string(origin + "/space/" + String(uid)), "goal": .string("EXTERNAL"), "title": .string(profile.value.nativeString("name") ?? String(uid))])
+                    }
+                }
+            } label: { Image(systemName: "ellipsis").accessibilityLabel(Text("action_more")) }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: app.generation) {
             action.cancel(); pending = nil; note = ""; noteLoaded = false; tab = "general"
-            await own.load(app, "profile.self")
+            if app.isSignedIn { await own.load(app, "profile.self") }
+            else { own.invalidate() }
             if requestedCollections && isSelf { tab = "collections" }
             await profile.load(app, "profile.user", ["uid": .integer(uid)])
-            await loadNotes()
+            if app.isSignedIn && !isSelf { await loadNotes() }
         }
         .confirmationDialog("account_action_save", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             Button("action_done") {
@@ -201,7 +221,10 @@ struct AccountPostPage: View {
             if loading { ProgressView() }
             if let failure { NativeFailureView(failure: failure, retry: { refresh += 1 }) }
             let rows = visibleRows
-            if rows.isEmpty && !loading && failure == nil { Text(LocalizedStringKey(mode == "comments" ? "space_empty_comments" : mode == "collections" ? "space_empty_collections" : "space_empty_topics")) }
+            if rows.isEmpty && !loading && failure == nil {
+                if !query.isEmpty || !board.isEmpty { Text("native.account.no_matches", tableName: "Account") }
+                else { Text(LocalizedStringKey(mode == "comments" ? "space_empty_comments" : mode == "collections" ? "space_empty_collections" : "space_empty_topics")) }
+            }
             ForEach(rows) { row in
                 Button { open(row.value) } label: {
                     AccountSpacePostCard(value: row.value)
@@ -226,7 +249,7 @@ struct AccountPostPage: View {
         .task(id: "\(uid):\(mode):\(requested):\(refresh):\(app.generation)") { await load() }
         .refreshable { refresh += 1 }
         .onChange(of: app.generation) { _ in page.invalidate(); requested = 1; query = ""; board = "" }
-        .onDisappear { page.invalidate() }
+        .onDisappear { page.suspend() }
     }
     private var visibleRows: [AccountPostRow] {
         var seen = Set<String>()

@@ -51,13 +51,6 @@ import NodysseyNativeCore
         session.replyContext = ["replyToFloor": arguments["quotedFloor"] ?? .null,
                                 "replyToAuthor": arguments["replyToAuthor"] ?? .null,
                                 "replyToText": arguments["replyToText"] ?? .null]
-        if case .reply = mode {
-            let author = arguments["replyToAuthor"]?.string
-            let quote = arguments["replyToText"]?.string
-            let initial = (author.map { "@\($0) " } ?? "") + (quote.map { "\n" + $0.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n" } ?? "")
-            session.body = EditorBuffer(text: initial, selection: NSRange(location: initial.utf16.count, length: 0))
-            quotePrefix = initial.isEmpty ? nil : initial
-        }
         session.onChange = { [weak self] in self?.changed() }
     }
     private func changed() {
@@ -208,6 +201,13 @@ import NodysseyNativeCore
             if session.accepted, case .message = session.mode { quotePrefix = nil }
         } catch { if token == epoch { report(error) } }
     }
+    func consumeAcceptedReply(revision: UUID) async throws -> Bool {
+        guard session.accepted, session.revision == revision else { return false }
+        debounce?.cancel()
+        let cleared = try await session.consumeAcceptedReply(revision: revision)
+        if cleared { debounce?.cancel() }
+        return cleared
+    }
     func quote(_ text: String) {
         focus.handoff {
             var buffer = session.body
@@ -225,6 +225,33 @@ import NodysseyNativeCore
             if let quotePrefix { buffer.removePrefixIfUnchanged(quotePrefix) }
             quotePrefix = nil; session.replyContext = [:]
             session.changeBody(buffer); session.changed()
+        }
+    }
+    func clearReplyTarget() {
+        focus.handoff { session.replyContext = [:]; session.changed() }
+    }
+    func applyReply(arguments: [String: JSONValue], quoting: Bool) {
+        guard case .reply(let postID) = session.mode,
+              let floor = arguments["quotedFloor"]?.int, Int32(exactly: floor) != nil else { return }
+        focus.handoff {
+            let author = arguments["replyToAuthor"]?.string ?? ""
+            let excerpt = arguments["replyToText"]?.string ?? ""
+            if quoting {
+                let reference = "@\(author) [#\(floor)](/post-\(postID)-1#\(floor))"
+                let time = arguments["postedAt"]?.string.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+                let block = "> " + reference + (time.map { " 发布于" + $0 } ?? "") + "\n> " + excerpt.replacingOccurrences(of: "\n", with: "\n> ") + "\n\n"
+                var buffer = session.body
+                // appendBlock: keep quoted floors cumulative ordinary editable Markdown.
+                if !buffer.text.isEmpty && !buffer.text.hasSuffix("\n\n") {
+                    buffer.text += buffer.text.hasSuffix("\n") ? "\n" : "\n\n"
+                }
+                buffer.text += block
+                buffer.selection = NSRange(location: buffer.text.utf16.count, length: 0)
+                session.changeBody(buffer)
+            } else {
+                session.replyContext = ["replyToFloor": .integer(floor), "replyToAuthor": .string(author), "replyToText": .string(excerpt)]
+                session.changed()
+            }
         }
     }
     func insert(_ markdown: String) {
@@ -333,6 +360,96 @@ import NodysseyNativeCore
             for consumer in consumers { await consumer.value }
         }
         session.invalidate(); quotePrefix = nil; preview = nil; previewing = false; ready = false; failure = nil; acceptedResult = nil
+    }
+}
+
+/// A thread owns this object, not the transient sheet. Navigation registers its
+/// two-phase departure callbacks against the real thread destination identity.
+@MainActor final class EditorReplyLifetime: ObservableObject {
+    @Published private(set) var model: EditorViewModel?
+    @Published var visible = false
+    @Published var previewVisible = false
+    @Published private(set) var closing = false
+    @Published private(set) var initialFocusAllowed = false
+    private var initialLoad = true
+    private var epoch = UUID()
+    private var opening = false
+    private var closed = false
+    private var pendingReply: (arguments: [String: JSONValue], quoting: Bool)?
+
+    func open(postID: Int64, transport: any NativeTransport, generation: Int,
+              arguments: [String: JSONValue] = [:], quoting: Bool = false) async {
+        guard !closed, !opening, !closing else { return }
+        if pendingReply == nil || !arguments.isEmpty { pendingReply = (arguments, quoting) }
+        opening = true
+        defer { opening = false }
+        if model == nil { model = EditorViewModel(mode: .reply(postID: postID), transport: transport, arguments: [:]) }
+        guard let model, !model.isClosed else { return }
+        let token = epoch
+        visible = true
+        await model.appear(generation: generation)
+        if token == epoch, !model.ready { initialLoad = false }
+        guard token == epoch, !Task.isCancelled, model.ready else { return }
+        if model.session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let draft = model.session.pendingRestore { model.session.restore(draft) }
+        if let pendingReply {
+            self.pendingReply = nil
+            model.applyReply(arguments: pendingReply.arguments, quoting: pendingReply.quoting)
+        }
+        if initialLoad { initialFocusAllowed = true; initialLoad = false }
+    }
+    /// Returns only an acknowledged server outcome, including an unresolved null floor.
+    /// Local cleanup failure is displayed separately and never retries the publish.
+    func publish() async -> JSONValue? {
+        guard !closed, !closing, let model, model.ready, !model.session.busy,
+              model.session.pendingRestore == nil, model.attachments.isEmpty else { return nil }
+        model.focus.handoff {}
+        let token = epoch
+        let revision = model.session.revision
+        model.acceptedResult = nil
+        await model.submit()
+        guard token == epoch, let result = model.acceptedResult else { return nil }
+        do {
+            if try await model.consumeAcceptedReply(revision: revision) {
+                visible = false; previewVisible = false
+                model.previewing = false; model.preview = nil
+            }
+        } catch { model.report(error) }
+        guard token == epoch else { return nil }
+        return result
+    }
+    @discardableResult
+    func hide() async -> Bool {
+        guard await prepareDeparture() else { return false }
+        visible = false; previewVisible = false
+        model?.previewing = false; model?.preview = nil
+        return true
+    }
+    func prepareDeparture() async -> Bool {
+        guard !closed, !closing else { return false }
+        guard let model else { return true }
+        closing = true
+        let token = epoch
+        defer { closing = false }
+        model.focus.handoff {}
+        do {
+            try await model.prepareForDeparture()
+            return token == epoch && !closed && !Task.isCancelled
+        } catch {
+            guard token == epoch, !closed, !Task.isCancelled else { return false }
+            model.report(error); visible = true; return false
+        }
+    }
+    var isDeparturePreparationValid: Bool { !closed && (model == nil || model?.isDeparturePreparationValid == true) }
+    func terminateAfterPrepared() {
+        guard isDeparturePreparationValid else { return }
+        model?.terminateAfterPrepared()
+        closed = true; epoch = UUID(); visible = false; previewVisible = false
+    }
+    func invalidate() {
+        closed = true; epoch = UUID(); visible = false; previewVisible = false
+        pendingReply = nil
+        model?.invalidate()
     }
 }
 

@@ -112,7 +112,7 @@
 "library.selfPayment" = "不能向自己付款。";
 "library.alreadyPaid" = "此一次性付款已完成。";
 "library.pay" = "付款";
-"library.readbackRequired" = "再次付款前必须核对流水，请重新审核以刷新。不会自动重试付款。";
+"library.readbackRequired" = "付款结果需要核对。可以关闭表单并使用其他标签页，但确认结果前需保留此星尘页面。重新审核只刷新记录，不会重复付款；记录为空也不能证明付款失败。";
 "library.receipts" = "收款记录";
 "library.receiveCode" = "生成收款码";
 "library.description" = "说明";
@@ -188,3 +188,32 @@
 "library.receivedTotal" = "累计收到";
 "library.paidByMe" = "我已付款";
 "library.shortfall" = "余额不足，还差";
+
+/* Library directory and secondary presentation. */
+"library.done" = "完成";
+"library.manage" = "管理";
+"library.offlineManage" = "离线管理";
+"library.emptySearch" = "没有匹配的标题或作者";
+"library.emptyFilter" = "此筛选下暂无收藏";
+"library.today" = "今天";
+"library.yesterday" = "昨天";
+"library.week" = "最近七天";
+"library.earlier" = "更早";
+"library.browse" = "浏览";
+"library.play" = "参与";
+"library.watch" = "关注";
+"library.providers" = "合作商家";
+"library.friends" = "友站";
+"library.awardHint" = "社区精华帖子";
+"library.providersHint" = "官方商家列表 · 网页打开";
+"library.friendsHint" = "友情站点列表 · 网页打开";
+"library.rulingHint" = "公开的管理记录";
+"library.reportsHint" = "对比本地篮中的测评报告";
+"library.trackedHint" = "追踪帖子的回复";
+"library.aboutCommunityHint" = "社区信息和联系渠道";
+"library.locked" = "锁定";
+"library.unlocked" = "解除锁定";
+"library.awarded" = "加精";
+"library.unawarded" = "取消精华";
+"library.pinned" = "置顶";
+"library.unpinned" = "取消置顶";

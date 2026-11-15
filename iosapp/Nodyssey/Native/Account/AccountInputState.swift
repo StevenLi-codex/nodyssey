@@ -2,6 +2,31 @@ import Foundation
 import NodysseyNativeCore
 
 enum AccountInputState {
+    /// Presentation-only port of ui/account/PasswordStrength.kt; never a save gate.
+    /// Iterate UTF-16 units, like Kotlin Char (including surrogate symbol handling).
+    static func passwordStrength(_ password: String) -> String? {
+        guard !password.isEmpty else { return nil }
+        var lower = false, upper = false, digit = false, symbol = false
+        for unit in password.utf16 {
+            guard let scalar = Unicode.Scalar(unit) else { symbol = true; continue }
+            let category = scalar.properties.generalCategory
+            lower = lower || scalar.properties.isLowercase
+            upper = upper || scalar.properties.isUppercase
+            digit = digit || category == .decimalNumber
+            let letterOrDigit = [.uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber].contains(category)
+            let whitespace = [.spaceSeparator, .lineSeparator, .paragraphSeparator].contains(category)
+                || (9...13).contains(unit) || (28...31).contains(unit)
+            symbol = symbol || (!letterOrDigit && !whitespace)
+        }
+        let classes = [lower, upper, digit, symbol].filter { $0 }.count
+        let score = [8, 12, 16, 20].filter { password.utf16.count >= $0 }.count + classes - 1
+        switch score {
+        case 6...7: return "best"
+        case 4...5: return "strong"
+        case 2...3: return "fair"
+        default: return "weak"
+        }
+    }
     static func validPassword(current: String, new: String, confirmation: String) -> Bool {
         !current.isEmpty && new.utf16.count >= 8 && new == confirmation
     }
@@ -22,6 +47,8 @@ struct AccountPageState {
     private var ticket = UUID()
     private var requested: Int64 = 1
     mutating func begin(page: Int64) -> UUID { requested = page; ticket = UUID(); return ticket }
+    // Navigation away cancels in-flight publication, not the loaded page.
+    mutating func suspend() { ticket = UUID() }
     mutating func invalidate() { ticket = UUID(); items = []; page = 1; hasNext = false }
     @discardableResult mutating func accept(_ value: JSONValue, ticket id: UUID) throws -> Bool {
         guard id == ticket else { return false }

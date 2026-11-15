@@ -7,38 +7,37 @@ struct LibraryAssetsScreen: View {
     @StateObject private var attendance = NativeStore()
     @StateObject private var board = NativeStore()
     @StateObject private var action = LibraryAction()
-    @State private var mode = "FIXED_FIVE"
     @State private var confirm = false
     @State private var boardPage: Int64 = 1
+    @State private var showBoard = false
     var body: some View {
         List {
             LibraryStoreStatus(store: growth) { action.run { await growth.load(app, "assets.growth") } }
             LibraryActionStatus(action: action)
-            LibraryGrowth(value: growth.value)
+            LibraryGrowth(value: growth.value, balances: false)
             Section {
-                Button(libraryL("credit")) { app.open("Credit") }
-                Button(libraryL("stardust")) { app.open("Stardust") }
-                Button(libraryL("invite")) { app.open("Invite") }
+                Button { app.open("Credit") } label: { LibraryField(label: "chickenCount", value: growth.value["chickenCount"]) }
+                Button { app.open("Stardust") } label: { LibraryField(label: "starCount", value: growth.value["starCount"]) }
             }
             Section(libraryL("attendance")) {
                 LibraryStoreStatus(store: attendance)
                 LibraryField(label: "date", value: attendance.value["date"])
                 LibraryField(label: "signed", value: attendance.value["hasSignedIn"])
                 LibraryField(label: "gain", value: attendance.value["gain"])
-                Picker(libraryL("attendanceMode"), selection: $mode) {
-                    Text(libraryL("fixedFive")).tag("FIXED_FIVE")
-                    Text(libraryL("random")).tag("RANDOM")
-                }
                 Button(libraryL("sign")) {
                     if app.isSignedIn { confirm = true } else { app.showSignIn() }
                 }.disabled(action.busy || attendance.value == .null || attendance.value["hasSignedIn"]?.bool == true)
             }
+            Button(libraryL("attendanceBoard")) { showBoard = true }
+        }
+        .sheet(isPresented: $showBoard) {
+            NavigationStack { List {
             Section(libraryL("attendanceBoard")) {
                 LibraryStoreStatus(store: board) { action.run { await loadBoard() } }
                 ForEach(Array((board.value.array ?? []).enumerated()), id: \.offset) { _, row in
                     HStack {
-                        if let uid = row["uid"]?.int {
-                            Button(row["name"]?.string ?? String(uid)) { app.open("UserSpace", ["uid": .integer(uid)]) }
+                        if let uid = row["uid"]?.int, uid > 0 {
+                            Button(row["name"]?.string ?? String(uid)) { showBoard = false; app.open("UserSpace", ["uid": .integer(uid)]) }
                         } else { Text(row["name"]?.string ?? libraryL("unknown")) }
                         Spacer()
                         Text(libraryScalar(row["gain"]))
@@ -47,23 +46,30 @@ struct LibraryAssetsScreen: View {
                 }
                 LibraryPageControls(page: boardPage, total: nil, hasNext: !(board.value.array ?? []).isEmpty, busy: board.isLoading) { boardPage = $0 }
             }
+            }.navigationTitle(libraryL("attendanceBoard"))
+                .toolbar { Button(libraryL("done")) { showBoard = false } }
+                .task(id: "\(app.generation)-\(boardPage)") { await loadBoard() }
+            }
         }
         .navigationTitle(libraryL("assets"))
-        .task(id: app.generation) { await growth.load(app, "assets.growth") }
+        .task(id: app.generation) {
+            await growth.load(app, "assets.growth")
+            await libraryRead(attendance, app, "attendance.status")
+        }
         .task(id: app.generation) { await attendance.observe(app, "attendance.status") }
-        .task(id: "\(app.generation)-\(boardPage)") { await loadBoard() }
-        .refreshable { await growth.load(app, "assets.growth"); await libraryRead(attendance, app, "attendance.status"); await loadBoard() }
+        .refreshable { await growth.load(app, "assets.growth"); await libraryRead(attendance, app, "attendance.status"); if showBoard { await loadBoard() } }
         .confirmationDialog(libraryL("signConfirm"), isPresented: $confirm, titleVisibility: .visible) {
-            Button(libraryL("sign")) {
-                let selectedMode = mode
+            ForEach(["FIXED_FIVE", "RANDOM"], id: \.self) { selectedMode in
+            Button(libraryL(selectedMode == "FIXED_FIVE" ? "fixedFive" : "random")) {
                 action.run {
                     let result = try await LibraryOperations.signAttendance(mode: selectedMode, request: app.request)
                     if result.acknowledged { action.notice = result.result["message"]?.string ?? libraryL("acknowledged") }
                     action.failure = result.writeFailure ?? result.refreshFailure
                     if result.status != .null { attendance.value = result.status }
                     if result.growth != .null { growth.value = result.growth }
-                    await loadBoard()
+                    if showBoard { await loadBoard() }
                 }
+            }
             }
         }
         .onDisappear { action.cancel() }
@@ -73,10 +79,11 @@ struct LibraryAssetsScreen: View {
 
 struct LibraryGrowth: View {
     let value: JSONValue
+    var balances = true
     var body: some View {
         if value != .null {
             Section(libraryL("growth")) {
-                ForEach(["level", "chickenCount", "starCount"], id: \.self) { key in LibraryField(label: key, value: value[key]) }
+                ForEach(balances ? ["level", "chickenCount", "starCount"] : ["level"], id: \.self) { key in LibraryField(label: key, value: value[key]) }
                 if let floor = value["levelSpan"]?["floor"]?.int, let next = value["levelSpan"]?["next"]?.int,
                    let current = value["chickenCount"]?.int, next > floor {
                     ProgressView(value: min(1, max(0, Double(current - floor) / Double(next - floor))))
@@ -98,18 +105,13 @@ struct LibraryLedgerScreen: View {
     @State private var page: Int64 = 1
     @State private var before: Int64?
     @State private var cursors: [Int64?] = []
-    @State private var type = "all"
+    @State private var attempt = 0
     var body: some View {
         List {
-            LibraryStoreStatus(store: store)
-            LibraryStoreStatus(store: growth)
-            LibraryGrowth(value: growth.value)
-            if stardust {
-                Picker(libraryL("type"), selection: $type) {
-                    Text(libraryL("all")).tag("all")
-                    ForEach(types, id: \.self) { Text(libraryL("ledger." + $0)).tag($0) }
-                }
-            }
+            LibraryStoreStatus(store: store) { attempt += 1 }
+            LibraryStoreStatus(store: growth) { attempt += 1 }
+            LibraryField(label: stardust ? "starCount" : "chickenCount", value: growth.value[stardust ? "starCount" : "chickenCount"])
+            if !stardust { LibraryField(label: "level", value: growth.value["level"]) }
             if rows.isEmpty && !store.isLoading { NativeEmptyView(libraryL("empty")) }
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in LibraryLedgerRow(row: row, stardust: stardust) }
             if stardust {
@@ -125,12 +127,12 @@ struct LibraryLedgerScreen: View {
             }
         }
         .navigationTitle(libraryL(stardust ? "stardust" : "credit"))
-        .task(id: "\(app.generation)-\(page)-\(before.map(String.init) ?? "first")") { await load() }
-        .task(id: app.generation) { await growth.load(app, "assets.growth") }
+        .task(id: "\(app.generation)-\(page)-\(before.map(String.init) ?? "first")-\(attempt)") { await load() }
+        .task(id: "\(app.generation)-\(attempt)") { await growth.load(app, "assets.growth") }
         .refreshable { await load(); await growth.load(app, "assets.growth") }
     }
-    private var rows: [JSONValue] { (store.value["items"]?.array ?? []).filter { type == "all" || $0["type"]?.string == type } }
-    private var types: [String] { ["UPVOTE", "TRANSFER", "BUY_CODE", "SYSTEM", "ADMIN", "UNKNOWN"] }
+    // The endpoint has no type filter; page-local filtering would hide unloaded matches.
+    private var rows: [JSONValue] { store.value["items"]?.array ?? [] }
     private func load() async {
         var args: [String: JSONValue] = stardust ? [:] : ["page": .integer(page)]
         if let before { args["beforeId"] = .integer(before) }
@@ -142,15 +144,19 @@ struct LibraryLedgerRow: View {
     @EnvironmentObject private var app: NativeAppModel
     let row: JSONValue
     let stardust: Bool
+    private var signedChange: String {
+        guard let amount = row[stardust ? "diff" : "change"]?.int else { return libraryL("unknown") }
+        return amount > 0 ? "+\(amount)" : String(amount)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(stardust ? libraryL("ledger." + (row["type"]?.string ?? "OTHER")) : (row["reason"]?.string ?? libraryL("unknown")))
                 Spacer()
-                Text(libraryScalar(row[stardust ? "diff" : "change"])).monospacedDigit()
+                Text(signedChange).monospacedDigit()
             }
             LibraryField(label: "balanceAfter", value: row["balanceAfter"])
-            if let peer = row["peerUid"]?.int { Button("\(libraryL("member")) #\(peer)") { app.open("UserSpace", ["uid": .integer(peer)]) } }
+            if let peer = row["peerUid"]?.int, peer > 0 { Button("\(libraryL("member")) #\(peer)") { app.open("UserSpace", ["uid": .integer(peer)]) } }
             if let date = row["createdAtMillis"]?.int { Text(Date(timeIntervalSince1970: Double(date) / 1000), style: .date).font(.caption) }
             if let raw = row["rawType"]?.string { Text(raw).font(.caption) }
         }
@@ -159,6 +165,7 @@ struct LibraryLedgerRow: View {
 
 struct LibraryStardustScreen: View {
     @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.nativeDestinationID) private var destinationID
     let arguments: [String: JSONValue]
     @StateObject private var action = LibraryAction()
     @StateObject private var growth = NativeStore()
@@ -174,24 +181,71 @@ struct LibraryStardustScreen: View {
     @State private var receiptSummary: LibraryReceiptSummary?
     private var receipts: [JSONValue] { receiptSummary?.mine ?? [] }
     @State private var confirm = false
-    @State private var needsReadback = false
+    // Owned by the destination, never by the presented form.
+    @StateObject private var recovery = LibraryPaymentRecovery()
+    private var needsReadback: Bool { recovery.needsReadback }
+    @State private var initializedGeneration: Int?
+    @State private var departureToken: UUID?
     @State private var marker: String?
     @State private var ledger: JSONValue = .null
+    @State private var transferOpen = false
+    @State private var ledgerRevision = 0
     var body: some View {
+        LibraryLedgerScreen(stardust: true)
+            .id(ledgerRevision)
+            .safeAreaInset(edge: .bottom) {
+                if needsReadback {
+                    VStack {
+                        Text(libraryL("readbackRequired")).font(.footnote)
+                        Button(libraryL("reviewPayment")) { transferOpen = true }
+                    }.padding().background(.regularMaterial)
+                }
+            }
+            .toolbar { Button(libraryL("transfer")) { transferOpen = true } }
+            .sheet(isPresented: $transferOpen, onDismiss: { ledgerRevision += 1 }) {
+                NavigationStack {
+                    paymentForm
+                        .toolbar { Button(libraryL("done")) {
+                            guard recovery.canDismiss(isBusy: action.busy) else { return }
+                            transferOpen = false
+                        }.disabled(!recovery.canDismiss(isBusy: action.busy)) }
+                }
+                .interactiveDismissDisabled(!recovery.canDismiss(isBusy: action.busy))
+            }
+            .task(id: app.generation) {
+                if departureToken == nil, let destinationID {
+                    departureToken = app.registerDismissal(destinationID: destinationID, close: {
+                        recovery.canLeaveRoute(isBusy: action.busy)
+                    }, revoke: { action.cancel(); recovery.reset() }, validate: {
+                        recovery.canLeaveRoute(isBusy: action.busy)
+                    })
+                }
+                // A sheet close or temporary push must not erase an uncertain write.
+                guard initializedGeneration != app.generation else { return }
+                initializedGeneration = app.generation
+                reviewed = nil; receiptSummary = nil; ledger = .null; marker = nil; ownUID = nil; balance = nil; recovery.reset(); confirm = false
+                recipient = (arguments["memberId"]?.int ?? arguments["recipientUid"]?.int).map(String.init) ?? ""
+                amount = arguments["amount"]?.int.map(String.init) ?? ""
+                refId = arguments["refId"]?.int.map(String.init) ?? "0"
+                onetime = arguments["onetime"]?.bool ?? false
+                description = arguments["description"]?.string ?? ""
+                transferOpen = !arguments.isEmpty
+                await growth.load(app, "assets.growth")
+            }
+            .onDisappear { action.cancel() }
+    }
+    private var paymentForm: some View {
         Form {
             LibraryActionStatus(action: action)
             LibraryStoreStatus(store: growth)
-            LibraryGrowth(value: growth.value)
-            Section {
-                NavigationLink(libraryL("ledger")) { LibraryLedgerScreen(stardust: true) }
-            }
+            LibraryField(label: "starCount", value: growth.value["starCount"])
             Section(libraryL("transfer")) {
                 Group {
                     TextField(libraryL("recipient"), text: $recipient)
                     TextField(libraryL("amount"), text: $amount)
                     TextField(libraryL("reference"), text: $refId)
                     Toggle(libraryL("onetime"), isOn: $onetime)
-                }.disabled(arguments["memberId"] != nil || action.busy)
+                }.disabled(arguments["memberId"] != nil || action.busy || needsReadback)
                 if !description.isEmpty { Text(description).font(.footnote) }
                 Button(libraryL("reviewPayment")) { review() }.disabled(action.busy)
                 if let review = reviewed {
@@ -204,10 +258,10 @@ struct LibraryStardustScreen: View {
                         LibraryField(label: "shortfall", value: .integer(shortfall))
                     }
                     Button(libraryL("pay")) {
-                        guard review.shortfall(balance: balance) == nil else { return }
+                        guard review.shortfall(balance: balance) == nil, recovery.canPay(review) else { return }
                         confirm = true
                     }
-                        .disabled(action.busy || ownUID == nil || ownUID == review.recipient || (review.onetime && !receipts.isEmpty) || needsReadback || review.shortfall(balance: balance) != nil)
+                        .disabled(action.busy || ownUID == nil || ownUID == review.recipient || (review.onetime && !receipts.isEmpty) || !recovery.canPay(review) || review.shortfall(balance: balance) != nil)
                 }
                 if needsReadback { Text(libraryL("readbackRequired")).font(.footnote) }
             }
@@ -229,7 +283,7 @@ struct LibraryStardustScreen: View {
                 }
             }
             if arguments["memberId"] == nil {
-            Section(libraryL("receiveCode")) {
+            DisclosureGroup(libraryL("receiveCode")) {
                 TextField(libraryL("description"), text: $description)
                 Text(libraryL("receiveCodeHint")).font(.footnote)
                 Button(libraryL("generate")) {
@@ -244,15 +298,6 @@ struct LibraryStardustScreen: View {
             }
         }
         .navigationTitle(libraryL("stardust"))
-        .task(id: app.generation) {
-            reviewed = nil; receiptSummary = nil; ledger = .null; marker = nil; ownUID = nil; balance = nil; needsReadback = false; confirm = false
-            recipient = (arguments["memberId"]?.int ?? arguments["recipientUid"]?.int).map(String.init) ?? ""
-            amount = arguments["amount"]?.int.map(String.init) ?? ""
-            refId = arguments["refId"]?.int.map(String.init) ?? "0"
-            onetime = arguments["onetime"]?.bool ?? false
-            description = arguments["description"]?.string ?? ""
-            await growth.load(app, "assets.growth")
-        }
         .onChange(of: recipient) { _ in invalidateReview() }
         .onChange(of: amount) { _ in invalidateReview() }
         .onChange(of: refId) { _ in invalidateReview() }
@@ -260,19 +305,22 @@ struct LibraryStardustScreen: View {
         .confirmationDialog(libraryL("payConfirm"), isPresented: $confirm, titleVisibility: .visible) {
             if let payment = reviewed {
                 Button("\(libraryL("pay")) \(payment.amount) → \(receiverName ?? String(payment.recipient))") {
-                    guard payment.shortfall(balance: balance) == nil, !needsReadback else { return }
+                    guard payment.shortfall(balance: balance) == nil, recovery.canPay(payment) else { return }
                     action.run {
-                        needsReadback = true
-                        let result = try await LibraryOperations.pay(payment, confirmed: true, request: app.request)
+                        let result = try await recovery.pay(payment, request: app.request)
+                        if let failure = result.preflightFailure { throw failure }
                         reviewed = nil
                         ledger = result.ledger
                         if result.growth != .null { growth.value = result.growth; balance = result.growth["starCount"]?.int }
-                        needsReadback = result.refreshFailure != nil
+
                         action.notice = libraryL(result.acknowledged ? "acknowledged" : "uncertainPayment")
                         action.failure = result.writeFailure ?? result.refreshFailure
                         if let ownUID {
                             receiptSummary = nil
                             receiptSummary = try await LibraryOperations.receipts(for: payment, ownUID: ownUID, request: app.request)
+                            if result.refreshFailure == nil {
+                                recovery.reconcile(payment, authoritativePaid: recovery.acknowledged)
+                            }
                         }
                     }
                 }
@@ -288,7 +336,9 @@ struct LibraryStardustScreen: View {
     private func review() {
         guard app.isSignedIn else { app.showSignIn(); return }
         action.run {
-            let payment = try draftPayment()
+            let payment: LibraryPayment
+            if needsReadback, let frozen = recovery.frozenPayment { payment = frozen }
+            else { payment = try draftPayment() }
             invalidateReview()
             let selfProfile = try await app.request("profile.self", ["refresh": .bool(true)])
             guard let uid = selfProfile["uid"]?.int else { throw NativeFailure(code: "INVALID_DATA", message: "") }
@@ -299,7 +349,8 @@ struct LibraryStardustScreen: View {
                 ledger = try await app.request("assets.stardust")
                 growth.value = try await LibraryOperations.refreshedGrowth(request: app.request)
                 refreshedBalance = growth.value["starCount"]?.int
-                needsReadback = false
+                // Read success/empty receipts do not prove a timed-out transfer failed.
+                recovery.reconcile(payment, authoritativePaid: recovery.acknowledged || (payment.onetime && received.paidByMe))
             }
             // Do not confirm an old draft if the user edits while lookups are in flight.
             let current = try draftPayment()

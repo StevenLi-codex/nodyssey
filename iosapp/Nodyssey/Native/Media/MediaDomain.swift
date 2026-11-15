@@ -144,6 +144,34 @@ struct MediaSticker: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Browsing previews; only the editor picker inserts. Selection is an explicit browser mode.
+struct MediaStickerInteraction: Sendable {
+    enum Mode: Sendable { case browser, picker }
+    enum Effect: Equatable { case none, preview(MediaSticker), insert(String) }
+    let mode: Mode
+    private(set) var selecting = false
+    private(set) var selection: Set<String> = []
+
+    mutating func activate(_ sticker: MediaSticker) -> Effect {
+        if mode == .picker { return .insert(sticker.insertion) }
+        guard sticker.url != nil else { return .none }
+        if selecting {
+            if !selection.insert(sticker.id).inserted { selection.remove(sticker.id) }
+            return .none
+        }
+        return .preview(sticker)
+    }
+    mutating func beginSelection() { if mode == .browser { selecting = true } }
+    mutating func endSelection() { selecting = false; selection = [] }
+    mutating func selectAll(_ entries: [MediaSticker]) {
+        guard mode == .browser else { return }
+        selecting = true; selection = Set(entries.filter { $0.url != nil }.map(\.id))
+    }
+    mutating func reconcile(_ entries: [MediaSticker]) {
+        selection.formIntersection(Set(entries.filter { $0.url != nil }.map(\.id)))
+    }
+}
+
 struct MediaStickerGroup: Identifiable, Sendable {
     let id: String
     let name: String

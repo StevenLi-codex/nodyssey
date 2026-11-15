@@ -218,32 +218,45 @@ struct MediaHostGallery: View {
     @State private var confirmation: MediaHostService.Confirmation?
     @State private var confirmDelete = false
     @State private var viewer: MediaImagePresentation?
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var visibleImages: [MediaHostedImage] { images.filter { !gifOnly || $0.isGIF } }
     var body: some View {
-        List {
-            MediaFeedback(action: action)
-            Toggle(MediaL.text("gifOnly"), isOn: $gifOnly)
-            ForEach(images.filter { !gifOnly || $0.isGIF }) { image in
-                HStack {
-                    NativeRemoteImage(url: image.url, aspectFit: true).frame(width: 56, height: 56)
-                    VStack(alignment: .leading) { Text(image.name).lineLimit(2); Text(image.mimeType ?? "").font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    if onChoose != nil {
-                        Button { if !selection.insert(image.id).inserted { selection.remove(image.id) } } label: {
-                            Image(systemName: selection.contains(image.id) ? "checkmark.circle.fill" : "circle")
-                        }.accessibilityLabel(MediaL.text("select"))
-                    } else {
-                        Menu {
-                            Button(MediaL.text("view")) { viewer = .init(urls: images.map(\.url), index: images.firstIndex(where: { $0.id == image.id }) ?? 0) }
-                            ShareLink(item: image.url) { Text(MediaL.text("copyShare")) }
-                            Button(MediaL.text("delete"), role: .destructive) {
-                                do { confirmation = try service?.confirmation(for: image.id); confirmDelete = confirmation != nil }
-                                catch { action.failure = error as? NativeFailure }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                MediaFeedback(action: action)
+                Toggle(MediaL.text("gifOnly"), isOn: $gifOnly)
+                if onChoose != nil { Text(MediaL.text("selectionCount") + ": \(selection.count)").font(.headline) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 160 : 100), spacing: 12)], spacing: 16) {
+                    ForEach(visibleImages) { image in
+                        VStack(spacing: 6) {
+                            Button { open(image) } label: {
+                                Color.secondary.opacity(0.08).aspectRatio(1, contentMode: .fit)
+                                    .overlay { NativeRemoteImage(url: image.url, aspectFit: true).padding(4).allowsHitTesting(false) }
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }.buttonStyle(.plain).accessibilityLabel(MediaL.text("view") + ": " + image.name)
+                            Text(image.name).font(.caption).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                            if onChoose != nil {
+                                Button { if !selection.insert(image.id).inserted { selection.remove(image.id) } } label: {
+                                    Label(MediaL.text("select"), systemImage: selection.contains(image.id) ? "checkmark.circle.fill" : "circle")
+                                        .frame(minHeight: 44)
+                                }.accessibilityLabel(MediaL.text("select") + ": " + image.name)
+                                    .accessibilityAddTraits(selection.contains(image.id) ? .isSelected : [])
+                            } else {
+                                Menu {
+                                    Button(MediaL.text("view")) { open(image) }
+                                    ShareLink(item: image.url) { Text(MediaL.text("copyShare")) }
+                                    Button(MediaL.text("delete"), role: .destructive) {
+                                        do { confirmation = try service?.confirmation(for: image.id); confirmDelete = confirmation != nil }
+                                        catch { action.failure = error as? NativeFailure }
+                                    }
+                                } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
+                                .accessibilityLabel(image.name)
                             }
-                        } label: { Image(systemName: "ellipsis.circle") }
+                        }
                     }
-                }
-            }
-            if images.isEmpty && !action.busy && action.failure == nil { Text(MediaL.text("noImages")) }
+                }.disabled(action.busy)
+                if visibleImages.isEmpty && !action.busy && action.failure == nil { Text(MediaL.text(images.isEmpty ? "noImages" : "noMatchingImages")) }
+            }.padding()
         }
         .navigationTitle(MediaL.text("uploaded"))
         .toolbar {
@@ -266,6 +279,11 @@ struct MediaHostGallery: View {
                 action.run(app) { try await service.deleteConfirmed(confirmation); try Task.checkCancellation(); images = service.images }
             }
         }
+    }
+    private func open(_ image: MediaHostedImage) {
+        let visible = visibleImages
+        guard let index = visible.firstIndex(where: { $0.id == image.id }) else { return }
+        viewer = .init(urls: visible.map(\.url), index: index)
     }
     private func load() {
         guard let service else { return }

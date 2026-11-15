@@ -112,7 +112,7 @@
 "library.selfPayment" = "You cannot pay yourself.";
 "library.alreadyPaid" = "This one-time payment has already been received.";
 "library.pay" = "Pay";
-"library.readbackRequired" = "Read the ledger before another payment. Review again to refresh; payments are never retried automatically.";
+"library.readbackRequired" = "Payment needs reconciliation. You may close this form and use other tabs, but this Stardust page must stay open until the payment is confirmed. Review refreshes records without repeating payment; an empty record does not prove failure.";
 "library.receipts" = "Payment receipts";
 "library.receiveCode" = "Create receive marker";
 "library.description" = "Description";
@@ -188,3 +188,32 @@
 "library.receivedTotal" = "Total received";
 "library.paidByMe" = "Paid by me";
 "library.shortfall" = "Insufficient balance — shortfall";
+
+/* Library directory and secondary presentation. */
+"library.done" = "Done";
+"library.manage" = "Manage";
+"library.offlineManage" = "Manage offline files";
+"library.emptySearch" = "No matching titles or authors";
+"library.emptyFilter" = "No bookmarks match this filter";
+"library.today" = "Today";
+"library.yesterday" = "Yesterday";
+"library.week" = "Last seven days";
+"library.earlier" = "Earlier";
+"library.browse" = "Browse";
+"library.play" = "Participate";
+"library.watch" = "Watch";
+"library.providers" = "Partner shops";
+"library.friends" = "Sister sites";
+"library.awardHint" = "Recommended threads from the community";
+"library.providersHint" = "The official shop directory · opens on the web";
+"library.friendsHint" = "The friendly-sites directory · opens on the web";
+"library.rulingHint" = "Public moderation records";
+"library.reportsHint" = "Compare reports in your local basket";
+"library.trackedHint" = "Threads you follow for replies";
+"library.aboutCommunityHint" = "Community information and contact links";
+"library.locked" = "Locked";
+"library.unlocked" = "Unlocked";
+"library.awarded" = "Recommended";
+"library.unawarded" = "Recommendation removed";
+"library.pinned" = "Pinned";
+"library.unpinned" = "Unpinned";

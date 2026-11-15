@@ -166,6 +166,7 @@ struct AccountProfileScreen: View {
                     }
                     AccountProfileStatus(profile: profile)
                     AccountProfileBalances(profile: profile.value)
+                    AccountProfileAttendance()
                 }
                 Section("profile_section_content") {
                     AccountProfileDirectory(entries: [
@@ -178,21 +179,23 @@ struct AccountProfileScreen: View {
                     ])
                 }
                 Section("profile_section_community") {
-                    route("profile_attendance_title", "Assets")
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_award", "book", "Award"),
                         .init("profile_tile_lucky", "dice", "Lucky"),
                         .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
                         .init("profile_tile_invite", "ticket", "Invite"),
                         .init("profile_tools", "wrench.and.screwdriver", "CommunityTools"),
+                        .init("profile_tile_block", "hand.raised", "AccountBlockList", ["titles": .bool(false)]),
                         .init("profile_tile_about_community", "info.circle", "AboutCommunity")
                     ])
                 }
+                Section { AccountProfileWebShortcuts() }
                 Section("profile_section_settings") {
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_account", "person.crop.circle", "AccountSettings"),
                         .init("profile_tile_notifications", "bell", "NotificationSettings"),
-                        .init("profile_tile_theme", "paintpalette", "ThemeSettings")
+                        .init("profile_tile_theme", "paintpalette", "ThemeSettings"),
+                        .init("profile_tile_about", "info.circle", "AboutApp")
                     ])
                     Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
                         .accessibilityIdentifier("native.profile.settings")
@@ -209,6 +212,11 @@ struct AccountProfileScreen: View {
             if !app.isSignedIn { Section("profile_guest_section") {
                 route("profile_tile_history", "ReadHistory")
                 route("profile_tools", "CommunityTools")
+                route("profile_tile_award", "Award")
+                route("profile_tile_lucky", "Lucky")
+                route("profile_tile_ruling", "Ruling")
+                AccountProfileWebShortcuts()
+                route("profile_tile_about", "AboutApp")
                 route("profile_tile_about_community", "AboutCommunity")
                 Button { app.open("Settings") } label: { navigationLabel("settings_title", symbol: "gearshape") }
                     .accessibilityIdentifier("native.profile.settings")
@@ -258,6 +266,7 @@ struct AccountSettingsScreen: View {
             if app.isSignedIn {
                 AccountProfileHeader(profile: profile.value)
                 AccountStoreStatus(store: profile) { reload() }
+                Text("account_storage_legend").font(.footnote).foregroundStyle(.secondary)
                 row("account_profile_title", "AccountProfileFields")
                 row("account_security_title", "AccountSecurity")
                 row("account_contact_title", "AccountContact")
@@ -284,5 +293,9 @@ struct AccountSettingsScreen: View {
         .onDisappear { action.cancel() }
     }
     private func reload() { Task { await profile.load(app, "profile.self", ["refresh": .bool(true)]) } }
-    private func row(_ title: String, _ route: String) -> some View { Button(LocalizedStringKey(title)) { app.open(route) } }
+    private func row(_ title: String, _ route: String) -> some View {
+        Button { app.open(route) } label: {
+            HStack { Text(LocalizedStringKey(title)); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
 }

@@ -91,7 +91,7 @@ struct AccountProfileFieldsScreen: View {
             }
         }
         .sheet(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
-            NavigationStack { AccountMarkdown(bodyText: preview ?? "").padding().toolbar {
+            NavigationStack { ScrollView { AccountMarkdown(bodyText: preview ?? "").padding() }.toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("action_close") { preview = nil } }
             } }
         }
@@ -107,9 +107,11 @@ struct AccountMarkdown: View {
     @EnvironmentObject private var app: NativeAppModel
     let bodyText: String
     @State private var nodes: [NativeRichNode] = []
+    @State private var loading = true
     @State private var failure: NativeFailure?
     var body: some View {
         Group {
+            if loading { ProgressView("loading_indicator_label") }
             if let failure { NativeFailureView(failure: failure) }
             else { NativeRichTextView(nodes: nodes, actions: NativeRichTextActions(
                 onImage: { url, _ in app.open("ImageViewer", ["urls": .array([.string(url)]), "index": .integer(0)]) },
@@ -121,7 +123,8 @@ struct AccountMarkdown: View {
             )) }
         }
         .task(id: bodyText + String(app.generation)) {
-            nodes = []; failure = nil
+            nodes = []; failure = nil; loading = true
+            defer { if !Task.isCancelled { loading = false } }
             do {
                 let result = try await app.request("editor.preview", ["body": .string(bodyText)])
                 let parsed = try JSONDecoder().decode([NativeRichNode].self, from: result.nativeEncoded())
@@ -151,8 +154,10 @@ struct AccountSecurityScreen: View {
                     SecureField("account_password_new", text: $password).textContentType(.newPassword)
                     SecureField("account_password_confirm", text: $confirmationPassword).textContentType(.newPassword)
                     if !confirmationPassword.isEmpty && confirmationPassword != password { Text("account_password_mismatch").foregroundStyle(.red) }
-                    if !password.isEmpty {
-                        Text(LocalizedStringKey(password.utf16.count < 8 ? "account_password_strength_weak" : password.utf16.count < 12 ? "account_password_strength_fair" : "account_password_strength_strong"))
+                    if let strength = AccountInputState.passwordStrength(password) {
+                        Text(LocalizedStringKey("account_password_strength_" + strength))
+                        Text(LocalizedStringKey("account_password_strength_hint_" + (strength == "best" ? "done" : strength == "weak" ? "length" : "variety")))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Button("account_password_update") { confirmation = "password" }
                         .disabled(action.blocked || !AccountInputState.validPassword(current: current, new: password, confirmation: confirmationPassword))
@@ -222,7 +227,10 @@ struct AccountContactScreen: View {
                 Section("account_email_section") {
                     AccountStoreStatus(store: contact) { reload() }
                     if let email = contact.value.nativeString("email") { LabeledContent("account_email_current", value: email).textSelection(.enabled) }
-                    if contact.value.nativeBool("emailVerified") == true { Text("account_email_verified") }
+                    if let verified = contact.value.nativeBool("emailVerified") {
+                        if verified { Text("account_email_verified") }
+                        else { Text("native.account.email_unverified", tableName: "Account").foregroundStyle(.secondary) }
+                    }
                     Button("account_email_change") { browser = AccountBrowserChoice(url: "/setting#contact", goal: .manage) }
                 }
                 Section("account_telegram_section") {

@@ -39,7 +39,7 @@ import NodysseyNativeCore
     let nodes: JSONValue = .array([
         .object(["type": .string("p"), "inlines": .array([.object(["type": .string("t"), "text": .string("hello ")]), .object(["type": .string("a"), "text": .string("member"), "url": .string("/space/1")])])]),
         .object(["type": .string("fold"), "children": .array([.object(["type": .string("code"), "code": .string("print(1)")])])])])
-    #expect(ContentQuoteContext.text(nodes) == "hello member\nprint(1)")
+    #expect(ContentQuoteContext.text(nodes) == "hello member")
 }
 
 @Test func moneyReactionsRequireConfirmationAndCannotRepeat() {

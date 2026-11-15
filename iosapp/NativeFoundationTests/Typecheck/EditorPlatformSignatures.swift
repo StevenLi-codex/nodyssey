@@ -8,6 +8,8 @@ struct MarkedTextEditor: View {
     let focus: EditorFocus
     var isTitle = false
     var accessibilityLabel: String
+    var autofocus = false
     var body: some View { EmptyView() }
 }
 struct EditorPhotoPicker: View { let model: EditorViewModel; var body: some View { EmptyView() } }
+struct NativeStickerPicker: View { let onSelect: (String) -> Void; var body: some View { EmptyView() } }

@@ -3,7 +3,6 @@ import NodysseyNativeCore
 
 struct ContentPostList: View {
     @EnvironmentObject private var app: NativeAppModel
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var categories = NativeStore()
     @StateObject private var recent = NativeStore()
     @StateObject private var command = ContentCommand()
@@ -16,11 +15,19 @@ struct ContentPostList: View {
     @State private var positions = ContentFeedMemory()
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button { app.open("Search") } label: {
+                    Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }.buttonStyle(.plain)
+                ContentSortPicker(selection: sortSelection).pickerStyle(.menu)
+                    .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
+            }.padding(.horizontal, 16).background(ContentSurface())
             HStack(spacing: 0) {
                 ContentBoardTabs(categories: homeCategories, selection: $category)
                 Menu {
                     ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
-                        Button(slug) { category = slug }
+                        Button(boardTitle(slug)) { category = slug }
                     }
                     Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
                 } label: {
@@ -33,33 +40,43 @@ struct ContentPostList: View {
                 .menuIndicator(.hidden).fixedSize()
                 .background(ContentSurface())
             }.background(ContentSurface())
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    ContentSortPicker(selection: sortSelection).pickerStyle(.menu)
-                } else {
-                    ContentSortPicker(selection: sortSelection).pickerStyle(.segmented)
-                }
-            }
-            .frame(minHeight: 44)
-            .padding(.horizontal, 16).padding(.vertical, 4).background(ContentSurface())
-            .disabled(command.busy || app.settings == .null)
             Divider()
             if ContentPreferences(settings: app.settings).homePageBar {
                 ContentPageEntry(text: $pageText) { page = $0 }.padding(.horizontal)
             }
             ContentStoreStatus(store: categories) { retry += 1 }
             ContentCommandStatus(command: command)
+            if app.site.nativeBool("requiresRestart") == true {
+                Text("native_settings_site_pending", tableName: "Settings").font(.caption).foregroundStyle(.secondary)
+            }
             ContentPagedList(operation: "feed", arguments: arguments, restoreID: positions.position(board: category, sort: sort)?.postID, visible: { id, page in positions.record(board: category, sort: sort, postID: id, page: page) })
                 .id("\(category)|\(sort)|\(page)")
         }
         .background(ContentSurface(canvas: true))
-        .navigationTitle(Text(String(localized: "content.posts", table: "Content")))
+        .navigationTitle(app.siteName ?? String(localized: "content.posts", table: "Content"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { app.open("Search") } label: { Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass") }
+                Button { app.open("Profile") } label: { Label("tab_profile", systemImage: "person.crop.circle") }
+                Menu {
+                    ForEach(Array(app.site.nativeArray("sites").enumerated()), id: \.offset) { _, site in
+                        if let id = site.nativeString("id"), let name = site.nativeString("displayName") {
+                            Button {
+                                command.run(app) {
+                                    _ = try await app.request("site.select", ["site": .string(id)])
+                                    _ = try await app.request("site.get")
+                                }
+                            } label: {
+                                if id == app.site.nativeString("selected") { Label(name, systemImage: "checkmark") }
+                                else { Text(name) }
+                            }
+                        }
+                    }
+                    Text("native_settings_site_restart", tableName: "Settings")
+                } label: { Label("action_switch_site", systemImage: "globe") }
+                .disabled(command.busy)
                 Button {
                     if app.isSignedIn { app.open("PostComposer", category.isEmpty ? [:] : ["boardSlug": .string(category)]) }
                     else { app.showSignIn() }
@@ -77,9 +94,12 @@ struct ContentPostList: View {
             catch is CancellationError { }
             catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
         }
-        .sheet(isPresented: $manageBoards) { NavigationStack { ContentBoardManager(categories: categories.value) } }
+        .sheet(isPresented: $manageBoards) { NavigationStack { ContentBoardManager(categories: categories.value, selection: $category) } }
         .task(id: app.generation) { await refreshCategories() }
         .onDisappear { command.cancel(); page = positions.position(board: category, sort: sort)?.page ?? page }
+    }
+    private func boardTitle(_ slug: String) -> String {
+        (categories.value.array ?? []).first { $0.nativeString("slug") == slug }?.nativeString("title") ?? slug
     }
     private var sortSelection: Binding<String> {
         Binding(get: { sort }, set: { command.setFeedSort($0, app: app) })
@@ -157,10 +177,13 @@ struct ContentPagedList: View {
     @EnvironmentObject private var app: NativeAppModel
     let operation: String
     let arguments: [String: JSONValue]
+    var clearSearch: (() -> Void)? = nil
+    @State private var authorCard: ContentIdentityRow?
+    @State private var authorNavigation: AccountAuthorQuickCardNavigation?
     @State private var restoreID: Int64?
     let visible: (Int64, Int64?) -> Void
-    init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil, visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
-        self.operation = operation; self.arguments = arguments; self.visible = visible
+    init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil, clearSearch: (() -> Void)? = nil, visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
+        self.operation = operation; self.arguments = arguments; self.visible = visible; self.clearSearch = clearSearch
         _restoreID = State(initialValue: restoreID)
     }
     @StateObject private var store = NativeStore()
@@ -178,8 +201,16 @@ struct ContentPagedList: View {
                 case .failure(let error): NativeFailureView(failure: error as? NativeFailure ?? .init(code: "INVALID_DATA", message: "Invalid paging window"))
                 case .success(let window):
                     ForEach(window.rows) { row in
-                        Button { app.open("PostDetail", ["postId": .integer(row.id), "preview": row.value["summary"] ?? .null]) } label: { ContentPostRow(value: row.value) }
-                            .buttonStyle(.plain).id(row.id)
+                        Group {
+                            if operation == "search.feed" {
+                                Button { openPost(row.id, row.value) } label: {
+                                    ContentSearchPostRow(value: row.value, query: arguments["query"]?.string ?? "")
+                                }.buttonStyle(.plain)
+                            } else {
+                                ContentPostRow(value: row.value, openPost: { openPost(row.id, row.value) },
+                                               openAuthor: { authorCard = ContentIdentityRow(id: $0, value: .null) })
+                            }
+                        }.id(row.id)
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                             .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
                             .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)") {
@@ -192,6 +223,7 @@ struct ContentPagedList: View {
                     }
                     if window.rows.isEmpty, store.value != .null, store.value["refresh"]?.nativeString("status") == "NotLoading" {
                         NativeEmptyView(String(localized: "content.empty", table: "Content"))
+                        if let clearSearch { Button("search_clear_query", action: clearSearch).frame(minHeight: 44) }
                     }
                 }
                 loadState("append")
@@ -218,7 +250,21 @@ struct ContentPagedList: View {
             args["pagerId"] = .string(UUID().uuidString)
             await store.observe(app, operation, args)
         }
+        .sheet(item: $authorCard, onDismiss: {
+            guard let destination = authorNavigation else { return }
+            authorNavigation = nil
+            switch destination {
+            case .signIn: app.showSignIn()
+            case .route(let route, let arguments): app.open(route, arguments)
+            }
+        }) { row in
+            AccountAuthorQuickCard(uid: row.id, onNavigate: { authorNavigation = $0; authorCard = nil })
+        }
+        .onChange(of: app.generation) { _ in authorNavigation = nil; authorCard = nil }
         .onDisappear { command.cancel() }
+    }
+    private func openPost(_ id: Int64, _ value: JSONValue) {
+        app.open("PostDetail", ["postId": .integer(id), "preview": value["summary"] ?? .null])
     }
     @ViewBuilder private func loadState(_ name: String) -> some View {
         let state = store.value[name] ?? .null
@@ -258,7 +304,12 @@ struct ContentSearch: View {
                 Text(String(localized: "content.local", table: "Content")).tag("LOCAL")
             }.pickerStyle(.segmented).padding(.horizontal)
             if target == "POSTS" {
-                HStack { ContentCategoryPicker(categories: categories.value, selection: $category); ContentSortPicker(selection: $sort) }
+                DisclosureGroup {
+                    ContentCategoryPicker(categories: categories.value, selection: $category)
+                    ContentSortPicker(selection: $sort)
+                    Button("search_advanced_reset") { category = ""; sort = "POST_TIME" }.frame(minHeight: 44)
+                } label: { Label("search_advanced", systemImage: "line.3.horizontal.decrease") }
+                .padding(.horizontal)
             }
             ContentCommandStatus(command: historyCommand)
             if submitted.isEmpty {
@@ -274,7 +325,9 @@ struct ContentSearch: View {
                         } label: {
                             VStack(alignment: .leading) {
                                 Text(entry.nativeString("query") ?? "")
-                                if let board = entry.nativeString("categorySlug") { Text(board).font(.caption) }
+                                if let board = entry.nativeString("categorySlug") {
+                                    Text((categories.value.array ?? []).first { $0.nativeString("slug") == board }?.nativeString("title") ?? board).font(.caption)
+                                }
                             }
                         }.swipeActions {
                             Button(String(localized: "content.delete", table: "Content"), role: .destructive) {
@@ -287,7 +340,7 @@ struct ContentSearch: View {
                 }
             }
             else if target == "POSTS" {
-                ContentPagedList(operation: "search.feed", arguments: searchArguments)
+                ContentPagedList(operation: "search.feed", arguments: searchArguments, clearSearch: { query = ""; submitted = "" })
                     .id("\(submitted)|\(category)|\(sort)|\(retry)")
             } else {
                 List {
@@ -295,19 +348,16 @@ struct ContentSearch: View {
                         ContentStoreStatus(store: users) { retry += 1 }
                         ForEach(userRows) { row in
                             Button { app.open("UserSpace", ["uid": .integer(row.id)]) } label: {
-                                HStack { ContentAvatar(value: row.value); VStack(alignment: .leading) {
-                                    Text(row.value.nativeString("name") ?? "")
-                                    if let bio = row.value.nativeString("bio") { Text(bio).font(.caption) }
-                                } }
+                                ContentSearchUserRow(value: row.value, query: submitted)
                             }
                         }
-                        if users.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
+                        if users.value.array?.isEmpty == true { noResults }
                     } else {
                         ContentStoreStatus(store: local) { retry += 1 }
                         ForEach(localRows) { row in
-                            Button { app.open("PostDetail", ["postId": .integer(row.id), "preview": row.value["summary"] ?? .null]) } label: { ContentPostRow(value: row.value) }
+                            Button { app.open("PostDetail", ["postId": .integer(row.id), "preview": row.value["summary"] ?? .null]) } label: { ContentSearchPostRow(value: row.value, query: submitted) }
                         }
-                        if local.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
+                        if local.value.array?.isEmpty == true { noResults }
                     }
                 }
             }
@@ -338,6 +388,12 @@ struct ContentSearch: View {
             guard !submitted.isEmpty else { return }
             if target == "USERS" { await users.load(app, "search.users", ["query": .string(submitted)]) }
             if target == "LOCAL" { await local.observe(app, "search.local", ["query": .string(submitted)]) }
+        }
+    }
+    private var noResults: some View {
+        VStack(spacing: 8) {
+            NativeEmptyView(String(localized: "content.empty", table: "Content"))
+            Button("search_clear_query") { query = ""; submitted = "" }.frame(minHeight: 44)
         }
     }
     private var searchArguments: [String: JSONValue] {

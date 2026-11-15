@@ -85,7 +85,12 @@
 "removeSelected" = "移除所选";
 "removeBroken" = "移除已确认坏链";
 "collectSelected" = "收藏所选";
-"exportLinks" = "导出所选链接";
+"noStickers" = "此分组暂无表情。";
+"noMatchingImages" = "没有符合筛选条件的图片。";
+"selectionCount" = "已选择";
+"moveEarlier" = "前移";
+"moveLater" = "后移";
+"exportLinks" = "导出链接";
 "undoCollection" = "撤销本次新增表情";
 "removeConfirm" = "从我的表情中移除所选？不会删除远端文件。";
 "name" = "名称";

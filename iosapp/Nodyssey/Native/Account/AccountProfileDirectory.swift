@@ -36,6 +36,62 @@ struct AccountProfileDirectory: View {
     }
 }
 
+/// Paths are the existing NodeSeekSite.PROVIDERS_PATH / FRIENDS_PATH, resolved
+/// against the installed site's origin rather than a second browser/session graph.
+struct AccountProfileWebShortcuts: View {
+    @EnvironmentObject private var app: NativeAppModel
+    var body: some View {
+        if let origin = app.siteOrigin {
+            AccountProfileDirectory(entries: [
+                .init("profile_tile_providers", "building.2", "Web", ["url": .string(origin + "/providers"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_providers"))]),
+                .init("profile_tile_friends", "link", "Web", ["url": .string(origin + "/friends"), "goal": .string("EXTERNAL"), "title": .string(String(localized: "profile_tile_friends"))])
+            ])
+        }
+    }
+}
+
+struct AccountProfileAttendance: View {
+    @EnvironmentObject private var app: NativeAppModel
+    @StateObject private var status = NativeStore()
+    @StateObject private var action = AccountAction()
+    @State private var choosing = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AccountStoreStatus(store: status) { Task { await status.load(app, "attendance.status") } }
+            if let signed = status.value.nativeBool("hasSignedIn") {
+                if signed {
+                    Button("profile_attendance_done") { app.open("Assets") }
+                } else {
+                    Button("profile_attendance_title") { choosing = true }.disabled(action.blocked || status.isLoading)
+                    Text("profile_attendance_modes").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button("profile_attendance_board") { app.open("Assets") }
+            AccountActionStatus(action: action)
+        }
+        .task(id: app.generation) {
+            choosing = false; action.cancel(); status.invalidate()
+            if app.isSignedIn { await status.load(app, "attendance.status") }
+        }
+        .confirmationDialog("profile_attendance_title", isPresented: $choosing, titleVisibility: .visible) {
+            Button(String(localized: "native.account.attendance_fixed", table: "Account")) { sign("FIXED_FIVE") }
+            Button(String(localized: "native.account.attendance_random", table: "Account")) { sign("RANDOM") }
+            Button("action_cancel", role: .cancel) {}
+        } message: { Text("profile_attendance_modes") }
+        .onDisappear { choosing = false; action.cancel() }
+    }
+    private func sign(_ mode: String) {
+        guard app.isSignedIn, status.value.nativeBool("hasSignedIn") == false, !action.blocked else { return }
+        let generation = app.generation
+        action.perform(app, operation: "attendance.sign", arguments: ["mode": .string(mode), "confirmed": .bool(true)], read: {
+            let fresh = try await app.request("attendance.status")
+            try Task.checkCancellation()
+            guard generation == app.generation else { return }
+            status.value = fresh
+        })
+    }
+}
+
 struct AccountProfileBalances: View {
     @EnvironmentObject private var app: NativeAppModel
     let profile: JSONValue
@@ -49,6 +105,7 @@ struct AccountProfileBalances: View {
         Group {
             balance("profile_chicken", key: "chickenCount", route: "Credit")
             balance("profile_stars", key: "starCount", route: "Stardust")
+            balance("profile_level", key: "rank", route: "Assets")
         }
     }
     private func balance(_ title: LocalizedStringKey, key: String, route: String) -> some View {

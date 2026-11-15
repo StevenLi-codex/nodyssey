@@ -65,48 +65,68 @@ struct ContentAvatar: View {
 }
 
 struct ContentPostRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let value: JSONValue
+    var openPost: (() -> Void)? = nil
+    var openAuthor: ((Int64) -> Void)? = nil
     var body: some View {
         let summary = value["summary"] ?? value
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if summary.nativeBool("isPinned") == true {
-                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.tint)
-                        .accessibilityLabel(Text(String(localized: "content.pinned", table: "Content")))
+        VStack(alignment: .leading, spacing: 6) {
+            if summary.nativeBool("isPinned") == true {
+                postAction {
+                    HStack(spacing: 8) {
+                        Image(systemName: "pin.fill").foregroundStyle(.tint)
+                            .accessibilityLabel(Text(String(localized: "content.pinned", table: "Content")))
+                        Text(summary.nativeString("title") ?? "")
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").accessibilityHidden(true)
+                    }.font(.subheadline).frame(minHeight: 44)
                 }
-                Text(summary.nativeString("title") ?? "")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if summary.nativeBool("isLocked") == true {
-                    Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
-                        .accessibilityLabel(Text(String(localized: "content.locked", table: "Content")))
+            } else {
+                HStack(spacing: 6) {
+                    if let uid = summary.nativeInt("authorUid"), uid > 0, let openAuthor {
+                        Button { openAuthor(uid) } label: { author(summary).frame(minHeight: 44) }
+                            .buttonStyle(.plain)
+                            .accessibilityHint(Text("native.account.quick_card.title", tableName: "Account"))
+                    } else { author(summary) }
+                    board(summary)
+                    Spacer(minLength: 0)
+                    ContentPostBadges(summary: summary)
+                }.font(.caption).foregroundStyle(.secondary)
+                postAction {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(summary.nativeString("title") ?? "")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) { replies(summary); lastReply(summary); Spacer(minLength: 0); views(summary) }
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 10) { replies(summary); views(summary) }
+                                lastReply(summary)
+                            }
+                        }.font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { author(summary); board(summary); Spacer(minLength: 0) }
-                VStack(alignment: .leading, spacing: 4) { author(summary); board(summary) }
-            }
-            .font(.caption).foregroundStyle(.secondary)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { statistics(summary); Spacer(minLength: 0); lastReply(summary) }
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 12) { statistics(summary) }
-                    lastReply(summary)
-                }
-            }.font(.caption).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 16).padding(.vertical, summary.nativeBool("isPinned") == true ? 0 : 8)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .background(ContentSurface())
         .overlay(alignment: .bottom) { VStack(spacing: 0) { Divider() }.padding(.leading, 16) }
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+    }
+    @ViewBuilder private func postAction<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        if let openPost { Button(action: openPost, label: label).buttonStyle(.plain) }
+        else { label() }
     }
     private func author(_ summary: JSONValue) -> some View {
         HStack(spacing: 5) {
             ContentAvatar(value: summary, size: 20)
-            Text(summary.nativeString("authorName") ?? "")
+            Text(summary.nativeString("authorName") ?? "").fontWeight(.semibold)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         }
     }
     @ViewBuilder private func lastReply(_ summary: JSONValue) -> some View {
@@ -123,10 +143,101 @@ struct ContentPostRow: View {
             Text(category).fontWeight(.medium).foregroundStyle(.tint)
         }
     }
-    @ViewBuilder private func statistics(_ summary: JSONValue) -> some View {
+    @ViewBuilder private func replies(_ summary: JSONValue) -> some View {
         if let comments = summary.nativeInt("commentCount") { Label("\(comments)", systemImage: "bubble.right") }
         if let count = value.nativeInt("newCommentCount"), count > 0 { Text("+\(count)").foregroundStyle(.tint) }
+    }
+    @ViewBuilder private func views(_ summary: JSONValue) -> some View {
         if let views = summary.nativeInt("viewCount") { Label("\(views)", systemImage: "eye") }
+    }
+}
+
+struct ContentPostBadges: View {
+    let summary: JSONValue
+    var body: some View {
+        if summary.nativeBool("isPinned") == true {
+            Image(systemName: "pin.fill").foregroundStyle(.tint).accessibilityLabel(Text("post_badge_pinned"))
+        }
+        if summary.nativeBool("isAwarded") == true {
+            Image(systemName: "rosette").foregroundStyle(.tint).accessibilityLabel(Text("post_badge_awarded"))
+        }
+        if summary.nativeBool("isLocked") == true {
+            Image(systemName: "lock.fill").accessibilityLabel(Text(String(localized: "content.locked", table: "Content")))
+        }
+        if let level = summary.nativeInt("lockLevel"), level > 0 { Label("\(level)", systemImage: "lock.shield") }
+    }
+}
+
+/// Search is intentionally avatar-free and highlights the submitted literal, not the edit buffer.
+struct ContentSearchPostRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let value: JSONValue
+    let query: String
+    var body: some View {
+        let summary = value["summary"] ?? value
+        VStack(alignment: .leading, spacing: 6) {
+            Text(contentHighlighted(summary.nativeString("title") ?? "", query: query))
+                .font(.body.weight(.semibold))
+                .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { metadata(summary) }
+                VStack(alignment: .leading, spacing: 4) { metadata(summary) }
+            }.font(.caption).foregroundStyle(.secondary)
+        }.padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(ContentSurface()).contentShape(Rectangle())
+    }
+    @ViewBuilder private func metadata(_ summary: JSONValue) -> some View {
+        if let board = summary.nativeString("categoryTitle") { Text(board).foregroundStyle(.tint) }
+        Text(summary.nativeString("authorName") ?? "")
+        if let time = summary.nativeString("lastActiveText") { Text(time) }
+        ContentPostBadges(summary: summary)
+        if let count = summary.nativeInt("commentCount") { Label("\(count)", systemImage: "bubble.right") }
+        if let count = value.nativeInt("newCommentCount"), count > 0 { Text("+\(count)").foregroundStyle(.tint) }
+    }
+}
+
+func contentHighlighted(_ text: String, query: String) -> AttributedString {
+    var result = AttributedString(text)
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !needle.isEmpty else { return result }
+    var cursor = text.startIndex
+    while cursor < text.endIndex, let range = text.range(of: needle, options: .caseInsensitive, range: cursor..<text.endIndex) {
+        if let lower = AttributedString.Index(range.lowerBound, within: result),
+           let upper = AttributedString.Index(range.upperBound, within: result) {
+            result[lower..<upper].backgroundColor = Color.accentColor.opacity(0.18)
+        }
+        cursor = range.upperBound
+    }
+    return result
+}
+
+struct ContentSearchUserRow: View {
+    let value: JSONValue
+    let query: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ContentAvatar(value: value, size: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(contentHighlighted(value.nativeString("name") ?? "", query: query)).font(.subheadline.weight(.semibold))
+                    if let level = value.nativeInt("level") { Text(String(format: NSLocalizedString("credit_level", comment: "").replacingOccurrences(of: "%1$d", with: "%1$lld"), level)).font(.caption) }
+                }
+                Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).foregroundStyle(.primary)
+    }
+    private var details: String {
+        var parts: [String] = []
+        if let uid = value.nativeInt("uid") { parts.append("UID \(uid)") }
+        for (field, key) in [("topicCount", "search_user_topics"), ("commentCount", "search_user_comments")] {
+            if let count = value.nativeInt(field) { parts.append(String(format: NSLocalizedString(key, comment: "").replacingOccurrences(of: "%1$d", with: "%1$lld"), count)) }
+        }
+        if let bio = value.nativeString("bio"), !bio.isEmpty { parts.append(bio) }
+        else if let joined = value.nativeString("joinedText") { parts.append(String(format: NSLocalizedString("search_user_joined", comment: ""), joined)) }
+        return parts.joined(separator: " · ")
     }
 }
 

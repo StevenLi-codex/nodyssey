@@ -94,6 +94,14 @@ enum EditorMode: Equatable, Sendable {
         case .edit, .message: break // No shared persistent store for these modes.
         }
     }
+    /// ReplyComposerUiState.submissionBody: target is metadata, quotes are editable body text.
+    var submissionBody: String {
+        guard case .reply(let postID) = mode,
+              let floor = replyContext["replyToFloor"]?.int, Int32(exactly: floor) != nil else { return body.text }
+        let author = replyContext["replyToAuthor"]?.string ?? ""
+        let reference = "@\(author) [#\(floor)](/post-\(postID)-1#\(floor))"
+        return reference + (body.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(">") ? "\n\n" : " ") + body.text
+    }
     func submit() async throws -> JSONValue {
         guard !busy else { throw NativeFailure(code: "IN_FLIGHT", message: "Submission in progress") }
         guard !accepted else { throw NativeFailure(code: "ALREADY_ACCEPTED", message: "Submission already accepted") }
@@ -121,7 +129,7 @@ enum EditorMode: Equatable, Sendable {
         }
         let token = generation
         let sentRevision = revision
-        let submitted = body.text
+        let submitted = submissionBody
         busy = true; onChange?()
         defer { if token == generation { busy = false; onChange?() } }
         saveDraft()
@@ -134,6 +142,17 @@ enum EditorMode: Equatable, Sendable {
         // Never synthesize a message/floor ID; null is accepted with unresolved identity.
         if sentRevision == revision, case .message = mode { body = EditorBuffer() }
         return result
+    }
+    func consumeAcceptedReply(revision sent: UUID) async throws -> Bool {
+        guard case .reply = mode, accepted, sent == revision else { return false }
+        let token = generation
+        try await deleteDraft()
+        guard token == generation, !Task.isCancelled else { throw CancellationError() }
+        // A picker/IME may have delivered new input during the delete/readback.
+        guard sent == revision, accepted else { return false }
+        body = EditorBuffer(); replyContext = [:]; accepted = false
+        hasUserEdits = false; revision = UUID(); onChange?()
+        return true
     }
     func invalidate() {
         generation = UUID(); mutation.invalidate(); drafts.invalidate()
@@ -254,6 +273,17 @@ enum EditorMarkup {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
         let encoded = description.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
         return " nsapp://stardust-receive?member_id=\(member)&ref_id=\(reference)&description=\(encoded)&diff=\(amount)&onetime=\(onetime) "
+    }
+}
+
+/// One attempt per editor owner, not per SwiftUI update or picker presentation.
+struct EditorInitialFocus {
+    private var pending = true
+    mutating func cancel() { pending = false }
+    mutating func consume(attached: Bool, otherInputActive: Bool) -> Bool {
+        guard pending, attached else { return false }
+        pending = false
+        return !otherInputActive
     }
 }
 

@@ -8,6 +8,7 @@ struct EditorToolbar: View {
     @ObservedObject var model: EditorViewModel
     let onPanel: (EditorPanel) -> Void
     let onPhotos: () -> Void
+    var compact = false
     static let all = ["IMAGE", "HOSTED_IMAGE", "EMOJI", "MENTION", "BOLD", "LINK", "QUOTE", "CODE", "LIST", "HEADING", "STRIKETHROUGH", "ITALIC"]
     static func defaults(_ surface: String) -> [String] { surface == "MESSAGE" ? ["BOLD", "CODE", "LINK", "HOSTED_IMAGE", "EMOJI"] : all }
     private var actions: [String] {
@@ -17,14 +18,43 @@ struct EditorToolbar: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                ForEach(actions, id: \.self) { action in Button(EL(action)) { perform(action) } }
-                if model.session.mode.surface != "MESSAGE" {
-                    Button(EL("vote")) { onPanel(.vote) }
-                    Button(EL("receive")) { onPanel(.receive) }
+                ForEach(actions, id: \.self) { action in
+                    Button { perform(action) } label: {
+                        if compact { Image(systemName: symbol(action)).frame(minWidth: 44, minHeight: 44).accessibilityLabel(EL(action)) }
+                        else { Text(EL(action)) }
+                    }
                 }
-                Button { onPanel(.toolbar) } label: { Image(systemName: "slider.horizontal.3") }.accessibilityLabel(EL("toolbar"))
+                if compact {
+                    Menu {
+                        Button(EL("vote")) { onPanel(.vote) }
+                        Button(EL("receive")) { onPanel(.receive) }
+                        Button(EL("toolbar")) { onPanel(.toolbar) }
+                    } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
+                } else {
+                    if model.session.mode.surface != "MESSAGE" {
+                        Button(EL("vote")) { onPanel(.vote) }
+                        Button(EL("receive")) { onPanel(.receive) }
+                    }
+                    Button { onPanel(.toolbar) } label: { Image(systemName: "slider.horizontal.3") }.accessibilityLabel(EL("toolbar"))
+                }
             }.padding(10)
         }.disabled(model.session.busy || !model.ready)
+    }
+    private func symbol(_ action: String) -> String {
+        switch action {
+        case "IMAGE": return "photo"
+        case "HOSTED_IMAGE": return "photo.on.rectangle"
+        case "EMOJI": return "face.smiling"
+        case "MENTION": return "at"
+        case "BOLD": return "bold"
+        case "LINK": return "link"
+        case "QUOTE": return "text.quote"
+        case "CODE": return "chevron.left.forwardslash.chevron.right"
+        case "LIST": return "list.bullet"
+        case "HEADING": return "textformat.size"
+        case "STRIKETHROUGH": return "strikethrough"
+        default: return "italic"
+        }
     }
     private func perform(_ action: String) {
         switch action {
@@ -50,6 +80,7 @@ struct EditorPanelView: View {
     @Environment(\.dismiss) private var dismiss
     let panel: EditorPanel
     @ObservedObject var model: EditorViewModel
+    var embedded = false
     @StateObject private var store = NativeStore()
     @State private var text = ""
     @State private var url = ""
@@ -69,7 +100,7 @@ struct EditorPanelView: View {
     var body: some View {
         Group {
             switch panel {
-            case .stickers: stickerList
+            case .stickers: NativeStickerPicker(onSelect: insert)
             case .hosted: hostedList
             case .toolbar: toolbarList
             default: inputForm
@@ -80,7 +111,6 @@ struct EditorPanelView: View {
         .interactiveDismissDisabled(busy)
         .task(id: "\(app.generation):\(loadID)") {
             switch panel {
-            case .stickers: await store.load(app, "stickers.get")
             case .hosted: await store.load(app, "imageHost.images")
             case .receive: await store.load(app, "profile.self")
             case .toolbar:
@@ -167,45 +197,6 @@ struct EditorPanelView: View {
             insert(" nsapp://vote?id=\(id) ")
         } catch { model.report(error) }
     }
-    private var stickerList: some View {
-        List {
-            if let failure = store.failure { NativeFailureView(failure: failure, retry: { loadID += 1 }) }
-            if store.isLoading { ProgressView() }
-            ForEach(stickerGroups, id: \.key) { group in
-                Section(group.key == "mine" ? EL("mine") : group.key) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 64))]) {
-                        ForEach(Array(group.entries.enumerated()), id: \.offset) { _, entry in
-                            VStack {
-                                if let character = entry["character"]?.string { Button(character) { insert(character) } }
-                                else if let url = entry["url"]?.string {
-                                    NativeRemoteImage(url: url).frame(width: 48, height: 48)
-                                    Button(EL("insert")) {
-                                        insert(entry["shortcode"]?.string ?? "![\(escapeLabel(entry["name"]?.string ?? ""))](\(escapeURL(url)))")
-                                    }.accessibilityLabel(entry["name"]?.string ?? EL("insert"))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Button(EL("manageStickers")) { dismiss(); app.open("StickerManage") }
-        }
-    }
-    private var stickerGroups: [(key: String, entries: [JSONValue])] {
-        let value = store.value
-        let hidden = Set(value["groupLayout"]?["hidden"]?.array?.compactMap(\.string) ?? [])
-        var groups: [(key: String, entries: [JSONValue])] = [("mine", value["mine"]?.array ?? [])]
-        for subscription in value["subscriptions"]?.array ?? [] {
-            for folder in subscription["folders"]?.array ?? [] where folder["hidden"]?.bool != true {
-                if let key = folder["key"]?.string { groups.append((key, folder["entries"]?.array ?? [])) }
-            }
-        }
-        for group in value["siteGroups"]?.array ?? [] {
-            if let key = group["key"]?.string { groups.append((key, group["entries"]?.array ?? [])) }
-        }
-        let order = value["arrangedGroupKeys"]?.array?.compactMap(\.string) ?? groups.map(\.key)
-        return order.filter { !hidden.contains($0) }.compactMap { key in groups.first { $0.key == key } }
-    }
     private var hostedList: some View {
         List {
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { loadID += 1 }) }
@@ -250,7 +241,7 @@ struct EditorPanelView: View {
         .environment(\.editMode, .constant(.active))
         #endif
     }
-    private func insert(_ value: String) { model.insert(value); dismiss() }
+    private func insert(_ value: String) { model.insert(value); if !embedded { dismiss() } }
     private func escapeLabel(_ value: String) -> String { value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]").replacingOccurrences(of: "\n", with: " ") }
     private func escapeURL(_ value: String) -> String { value.replacingOccurrences(of: "(", with: "%28").replacingOccurrences(of: ")", with: "%29").replacingOccurrences(of: " ", with: "%20") }
 }

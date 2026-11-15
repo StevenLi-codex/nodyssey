@@ -3,12 +3,43 @@ import NodysseyNativeCore
 
 struct LibraryCommunityMenu: View {
     @EnvironmentObject private var app: NativeAppModel
+    @StateObject private var site = NativeStore()
+    @State private var attempt = 0
     var body: some View {
         List {
-            ForEach([("Award", "award"), ("Lucky", "lucky"), ("Invite", "invite"), ("Ruling", "ruling"), ("ReportCompare", "reports"), ("TrackedThreads", "tracked"), ("AboutCommunity", "aboutCommunity")], id: \.0) { route, label in
-                Button(libraryL(label)) { app.open(route) }
+            LibraryStoreStatus(store: site) { attempt += 1 }
+            Section(libraryL("browse")) {
+                entry("Award", "award")
+                webEntry("providers", path: "/providers")
+                webEntry("friends", path: "/friends")
             }
+            Section(libraryL("play")) {
+                entry("Lucky", "lucky")
+                entry("Invite", "invite")
+            }
+            Section(libraryL("watch")) {
+                entry("Ruling", "ruling")
+                entry("ReportCompare", "reports")
+                entry("TrackedThreads", "tracked")
+            }
+            Section { entry("AboutCommunity", "aboutCommunity") }
         }.navigationTitle(libraryL("tools"))
+            .task(id: "\(app.generation)-\(attempt)") { await site.load(app, "site.get") }
+    }
+    private func entry(_ route: String, _ key: String) -> some View {
+        Button { app.open(route) } label: { directoryLabel(key) }
+    }
+    private func webEntry(_ key: String, path: String) -> some View {
+        Button {
+            if let url = LibraryRows.communityURL(site.value, path: path) { app.openLink(url) }
+        } label: { directoryLabel(key) }
+        .disabled(LibraryRows.communityURL(site.value, path: path) == nil)
+    }
+    private func directoryLabel(_ key: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(libraryL(key)).foregroundStyle(.primary)
+            Text(libraryL(key + "Hint")).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -72,10 +103,10 @@ struct LibraryRulingRow: View {
         case "Title": return libraryScalar(value["title"])
         case "Move": return libraryScalar(value["boardSlug"])
         case "ReadRank": return libraryScalar(value["rank"])
-        case "Lock": return libraryScalar(value["locked"])
-        case "Award": return libraryScalar(value["award"])
+        case "Lock": return value["locked"]?.bool.map { libraryL($0 ? "locked" : "unlocked") } ?? libraryL("unknown")
+        case "Award": return value["award"]?.bool.map { libraryL($0 ? "awarded" : "unawarded") } ?? libraryL("unknown")
         case "Hide": return "\(libraryScalar(value["hidden"])) · \(libraryL("wholeUser")): \(libraryScalar(value["wholeUser"]))"
-        case "Pin": return libraryScalar(value["pinned"])
+        case "Pin": return value["pinned"]?.bool.map { libraryL($0 ? "pinned" : "unpinned") } ?? libraryL("unknown")
         case "Suspend": return value["days"] == .null ? libraryL("unsuspend") : "\(libraryScalar(value["days"])) \(libraryL("days"))"
         default: return libraryL("unknown")
         }
@@ -166,15 +197,19 @@ struct LibraryAboutScreen: View {
             Section(currentSite?["displayName"]?.string ?? libraryL("aboutCommunity")) {
                 LibraryStoreStatus(store: site)
                 Text(libraryL("communityIntro"))
-                if let origin = currentSite?["origin"]?.string { Button(origin) { app.openLink(origin) } }
+                if let url = LibraryRows.communityURL(site.value, path: "/about") {
+                    Button(libraryL("aboutCommunity")) { app.openLink(url) }
+                }
                 LibraryStoreStatus(store: stats) { attempt += 1 }
                 LibraryField(label: "memberCount", value: stats.value["memberCount"])
                 Button(libraryL("refresh")) { attempt += 1 }
             }
             Section("NodeSeek") {
                 Button(libraryL("privacy")) { app.open("Privacy") }
-                Text("https://www.nodeseek.com/rss.xml").textSelection(.enabled)
-                ShareLink(item: "https://www.nodeseek.com/rss.xml") { Text(libraryL("rss")) }
+                if let url = LibraryRows.communityURL(site.value, path: "/rss.xml") {
+                    Text(url).textSelection(.enabled)
+                    ShareLink(item: url) { Text(libraryL("rss")) }
+                }
                 ForEach(links, id: \.1) { label, url in
                     Button(libraryL(label)) {
                         if url.hasPrefix("mailto:"), let address = URL(string: url) { openURL(address) }

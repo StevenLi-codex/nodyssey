@@ -47,3 +47,4 @@
 "native_settings_swift_dependencies" = "本原生设置界面未新增第三方 Swift 运行时依赖。以上沿用原项目依赖目录；完整版本与传递依赖以源码锁文件为准。";
 "native_settings_guide_welcome" = "这是原生界面的快速导览。你可以随时跳过，关闭后回到刚才的位置。";
 "native_settings_guide_settings" = "外观、语言与网络配置在设置中管理。不支持的平台能力会明确说明，而不是提供无效开关。";
+"native_settings_unsaved" = "尚未保存的更改";

@@ -47,3 +47,4 @@
 "native_settings_swift_dependencies" = "These settings screens add no third-party Swift runtime dependencies. The catalogue above is retained from the original project; source lockfiles define full versions and transitive dependencies.";
 "native_settings_guide_welcome" = "A short guide to the native interface. Skip at any time; closing returns to where you were.";
 "native_settings_guide_settings" = "Manage appearance, language and networking in Settings. Unsupported platform features are explained instead of presenting inactive switches.";
+"native_settings_unsaved" = "Unsaved changes";

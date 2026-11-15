@@ -11,3 +11,17 @@
 "native.account.server_order" = "Server order";
 "native.account.page" = "Page";
 "native.account.joined" = "Joined %@";
+"native.account.quick_card.title" = "Author quick card";
+"native.account.quick_card.unavailable" = "Author profile unavailable. Reload to try again.";
+"native.account.quick_card.full_profile" = "View full profile";
+"native.account.quick_card.unknown" = "Not provided";
+"native.account.quick_card.registered" = "Registered";
+"native.account.quick_card.notes_unavailable" = "Notes unavailable";
+"native.account.quick_card.no_note" = "No note saved";
+"native.account.quick_card.credit" = "Native read-only feature inspired by NodeSeek Pro Max 1.2.6 · 用蚊香买榄菊 (GPL-3.0). No userscript runs; no safety score or identity verification.";
+"native.account.email_unverified" = "Unverified";
+"native.account.attendance_fixed" = "Fixed 5 drumsticks";
+"native.account.attendance_random" = "Random reward";
+"native.account.no_matches" = "No matching results on this page.";
+"native.account.empty_rules" = "No title rules.";
+"native.account.empty_blocked" = "No blocked users.";

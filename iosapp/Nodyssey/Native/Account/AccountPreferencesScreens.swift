@@ -17,6 +17,8 @@ struct AccountPreferencesScreen: View {
                         })).disabled(action.blocked)
                         Text("account_holiday_theme_hint").font(.caption)
                     }
+                }
+                if store.value["hiddenBoards"]?.array != nil {
                     Section("account_group_homepage") {
                         board("trade", "account_board_trade")
                         board("life", "account_board_life")
@@ -79,7 +81,11 @@ struct AccountBlockScreen: View {
                 Button("keywords_add_action") { pending = draft.add() }
                     .disabled(action.blocked || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 AccountStoreStatus(store: keywords) { reloadKeywords() }
-                ForEach((keywords.value.array ?? []).compactMap(\.string).filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }, id: \.self) { rule in
+                let rules = (keywords.value.array ?? []).compactMap(\.string).filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }
+                if rules.isEmpty && !keywords.isLoading && keywords.failure == nil {
+                    Text(query.isEmpty ? "native.account.empty_rules" : "native.account.no_matches", tableName: "Account")
+                }
+                ForEach(rules, id: \.self) { rule in
                     HStack {
                         Text(rule).textSelection(.enabled)
                         Spacer()
@@ -94,7 +100,11 @@ struct AccountBlockScreen: View {
                 Button("account_block_add_action") { pending = AccountPendingWrite("social.block", ["name": .string(name), "confirmed": .bool(true)]) }
                     .disabled(action.blocked || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 AccountStoreStatus(store: users) { Task { await users.load(app, "account.blockedUsers") } }
-                ForEach(AccountUserRow.rows(users.value, query: query)) { user in
+                let rows = AccountUserRow.rows(users.value, query: query)
+                if rows.isEmpty && !users.isLoading && users.failure == nil {
+                    Text(query.isEmpty ? "native.account.empty_blocked" : "native.account.no_matches", tableName: "Account")
+                }
+                ForEach(rows) { user in
                     HStack {
                         Button(user.name) { app.open("UserSpace", ["uid": .integer(user.id)]) }
                         Spacer()

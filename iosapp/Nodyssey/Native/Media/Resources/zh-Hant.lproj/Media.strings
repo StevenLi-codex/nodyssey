@@ -85,7 +85,12 @@
 "removeSelected" = "移除所選";
 "removeBroken" = "移除已確認失效連結";
 "collectSelected" = "收藏所選";
-"exportLinks" = "匯出所選連結";
+"noStickers" = "此群組尚無表情。";
+"noMatchingImages" = "沒有符合篩選條件的圖片。";
+"selectionCount" = "已選取";
+"moveEarlier" = "前移";
+"moveLater" = "後移";
+"exportLinks" = "匯出連結";
 "undoCollection" = "復原本次新增表情";
 "removeConfirm" = "從我的表情中移除所選？不會刪除遠端檔案。";
 "name" = "名稱";

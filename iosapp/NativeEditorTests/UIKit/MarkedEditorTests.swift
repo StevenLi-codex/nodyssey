@@ -25,5 +25,26 @@ import UIKit
         XCTAssertEqual(input.text, "拼音")
         XCTAssertNotNil(input.markedTextRange)
     }
+    func testInitialFocusPreservesCompositionAndDoesNotReturnAfterHandoff() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let input = NativeEditorTextView(frame: controller.view.bounds)
+        controller.view.addSubview(input)
+        let focus = EditorFocus()
+        focus.body = input
+        focus.requestInitialFocus()
+        XCTAssertTrue(input.isFirstResponder)
+        input.setMarkedText("拼音", selectedRange: NSRange(location: 2, length: 0))
+        focus.requestInitialFocus()
+        XCTAssertNotNil(input.markedTextRange)
+        XCTAssertEqual(input.text, "拼音")
+        focus.handoff {}
+        focus.requestInitialFocus()
+        XCTAssertFalse(input.isFirstResponder)
+        XCTAssertEqual(input.text, "拼音")
+    }
 }
 #endif

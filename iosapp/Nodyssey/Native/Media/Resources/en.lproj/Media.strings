@@ -85,7 +85,12 @@
 "removeSelected" = "Remove selected";
 "removeBroken" = "Remove confirmed broken links";
 "collectSelected" = "Collect selected";
-"exportLinks" = "Export selected links";
+"noStickers" = "No stickers in this group.";
+"noMatchingImages" = "No images match this filter.";
+"selectionCount" = "Selected";
+"moveEarlier" = "Move earlier";
+"moveLater" = "Move later";
+"exportLinks" = "Export links";
 "undoCollection" = "Undo newly added stickers";
 "removeConfirm" = "Remove these stickers from your collection? Remote files are not deleted.";
 "name" = "Name";

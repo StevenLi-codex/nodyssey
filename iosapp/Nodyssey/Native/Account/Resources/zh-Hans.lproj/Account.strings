@@ -11,3 +11,17 @@
 "native.account.server_order" = "服务器顺序";
 "native.account.page" = "页码";
 "native.account.joined" = "%@ 加入";
+"native.account.quick_card.title" = "作者资料卡";
+"native.account.quick_card.unavailable" = "作者资料暂不可用，请重新加载。";
+"native.account.quick_card.full_profile" = "查看完整资料";
+"native.account.quick_card.unknown" = "未提供";
+"native.account.quick_card.registered" = "注册日期";
+"native.account.quick_card.notes_unavailable" = "备注暂不可用";
+"native.account.quick_card.no_note" = "尚无备注";
+"native.account.quick_card.credit" = "原生只读功能灵感来自 NodeSeek Pro Max 1.2.6 · 用蚊香买榄菊（GPL-3.0）。未运行用户脚本；不提供安全评分或身份认证。";
+"native.account.email_unverified" = "未验证";
+"native.account.attendance_fixed" = "固定 5 个鸡腿";
+"native.account.attendance_random" = "随机奖励";
+"native.account.no_matches" = "本页没有匹配结果。";
+"native.account.empty_rules" = "暂无标题规则。";
+"native.account.empty_blocked" = "暂无屏蔽用户。";
