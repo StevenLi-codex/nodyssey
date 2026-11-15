@@ -4,9 +4,9 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import io.github.plaza.core.AppDispatchers
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import okio.Path.Companion.toPath
 import platform.Foundation.NSApplicationSupportDirectory
@@ -39,7 +39,7 @@ fun createPreferenceDataStore(
     name: String,
     keepOutOfBackup: Boolean = false,
     migrations: List<DataMigration<Preferences>> = emptyList(),
-    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + AppDispatchers().io),
     directory: String? = null,
 ): DataStore<Preferences> =
     PreferenceDataStoreFactory.createWithPath(
