@@ -76,6 +76,11 @@ object NativeBridge {
                 return@start
             }
             val graph = NodysseyApp.ensureContainer()
+            if (operation == "session.createPrivateWorkspace") {
+                val activated = NodysseyApp.createPrivateWorkspace(args.nativeBoolean("confirmed"), args.nativeText("identityEpoch"))
+                nativeDeliver(coroutineContext[Job]!!, activated.nativeWorkspaceBoundaryDto(), publish)
+                return@start
+            }
             if (operation == "session.sync") {
                 nativeSupersedeAuthentication()
                 graph.sessionRepository.sync()
@@ -87,11 +92,13 @@ object NativeBridge {
             }
             coroutineScope {
                 val context = NativeContext(graph, this)
-                suspend fun dispatch(): JsonElement = context.contentRequest(operation, args)
-                    ?: context.accountRequest(operation, args)
-                    ?: context.settingsRequest(operation, args)
-                    ?: context.supplementRequest(operation, args)
-                    ?: throw NativeFailure("UNKNOWN_OPERATION")
+                suspend fun dispatch(): JsonElement = graph.lifetime.use {
+                    context.contentRequest(operation, args)
+                        ?: context.accountRequest(operation, args)
+                        ?: context.settingsRequest(operation, args)
+                        ?: context.supplementRequest(operation, args)
+                        ?: throw NativeFailure("UNKNOWN_OPERATION")
+                }
                 if (!publicOperation(operation)) {
                     graph.privateBoundary.protect {
                         val data = dispatch()
@@ -106,16 +113,16 @@ object NativeBridge {
                 val data = when (operation) {
                     "session.sync" -> context.nativeSessionDto()
 
-                    "session.privateBoundary" -> graph.privateBoundary.state.value.nativeBoundaryDto()
+                    "session.privateBoundary" -> graph.nativeWorkspaceBoundaryDto()
 
                     "session.resetPrivateStores" -> {
                         graph.privateBoundary.reset(args.nativeBoolean("confirmed"), args.nativeText("identityEpoch"))
-                        graph.privateBoundary.state.value.nativeBoundaryDto()
+                        graph.nativeWorkspaceBoundaryDto()
                     }
 
                     in sessionControls -> graph.privateBoundary.sessionMutation(
                         allowEmptyRebind = { result: JsonElement ->
-                            operation in setOf("session.signIn", "session.verifyTwoFactor") &&
+                            graph.workspaceId == null && operation in setOf("session.signIn", "session.verifyTwoFactor") &&
                                 (result as? JsonObject)?.get("status") == JsonPrimitive("SIGNED")
                         },
                     ) { dispatch() }.let { result ->
@@ -128,7 +135,7 @@ object NativeBridge {
                             JsonObject(
                                 result + mapOf(
                                     "session" to session,
-                                    "privateBoundary" to boundary.nativeBoundaryDto(),
+                                    "privateBoundary" to graph.nativeWorkspaceBoundaryDto(),
                                     "privateDataStatus" to JsonPrimitive(if (boundary.requiresConfirmation) "CONFIRMATION_REQUIRED" else "READY"),
                                 ),
                             )
@@ -147,32 +154,44 @@ object NativeBridge {
     fun observe(operation: String, argumentsJson: String, completion: (String) -> Unit): NativeRequest =
         start(completion) {
             val args = nativeArguments(argumentsJson)
-            val graph = NodysseyApp.ensureContainer()
-            graph.privateBoundary.reconcile()
-            if (operation == "session.privateBoundary") {
-                graph.privateBoundary.state.collect { nativeDeliver(coroutineContext[Job]!!, it.nativeBoundaryDto(), completion) }
-                return@start
-            }
-            if (publicOperation(operation)) {
-                coroutineScope {
-                    val context = NativeContext(graph, this)
-                    val flow = context.accountObserve(operation, args) ?: context.settingsObserve(operation, args)
-                        ?: context.supplementObserve(operation) ?: throw NativeFailure("UNKNOWN_OPERATION")
-                    flow.collect { nativeDeliver(coroutineContext[Job]!!, it, completion) }
-                }
-                return@start
-            }
-            graph.privateBoundary.state.collectLatest { boundary ->
-                nativeDeliver(coroutineContext[Job]!!, JsonNull, completion)
-                if (boundary.phase != io.github.nodyssey.data.session.PrivateStorePhase.READY) return@collectLatest
-                coroutineScope {
-                    val context = NativeContext(graph, this)
-                    val flow = context.contentObserve(operation, args) ?: context.accountObserve(operation, args)
-                        ?: context.settingsObserve(operation, args) ?: context.supplementObserve(operation)
-                        ?: throw NativeFailure("UNKNOWN_OPERATION")
-                    graph.privateBoundary.protect {
-                        flow.collect { data -> graph.privateBoundary.protect { nativeDeliver(coroutineContext[Job]!!, data, completion) } }
+            NodysseyApp.ensureContainer()
+            NodysseyApp.workspaces.collectLatest { selected ->
+                val graph = selected ?: return@collectLatest
+                graph.privateBoundary.reconcile()
+                try {
+                    if (operation == "session.privateBoundary") {
+                        graph.privateBoundary.state.collect { nativeDeliver(currentCoroutineContext()[Job]!!, graph.nativeWorkspaceBoundaryDto(), completion) }
+                        return@collectLatest
                     }
+                    if (publicOperation(operation)) {
+                        coroutineScope {
+                            val context = NativeContext(graph, this)
+                            val flow = context.accountObserve(operation, args) ?: context.settingsObserve(operation, args)
+                                ?: context.supplementObserve(operation) ?: throw NativeFailure("UNKNOWN_OPERATION")
+                            graph.lifetime.use { flow.collect { nativeDeliver(currentCoroutineContext()[Job]!!, it, completion) } }
+                        }
+                        return@collectLatest
+                    }
+                    graph.privateBoundary.state.collectLatest { boundary ->
+                        nativeDeliver(currentCoroutineContext()[Job]!!, JsonNull, completion)
+                        if (boundary.phase != io.github.nodyssey.data.session.PrivateStorePhase.READY) return@collectLatest
+                        coroutineScope {
+                            val context = NativeContext(graph, this)
+                            val flow = context.contentObserve(operation, args) ?: context.accountObserve(operation, args)
+                                ?: context.settingsObserve(operation, args) ?: context.supplementObserve(operation)
+                                ?: throw NativeFailure("UNKNOWN_OPERATION")
+                            try {
+                                graph.privateBoundary.protect {
+                                    flow.collect { data -> graph.privateBoundary.protect { nativeDeliver(currentCoroutineContext()[Job]!!, data, completion) } }
+                                }
+                            } catch (_: io.github.nodyssey.data.session.PrivateWorkRevoked) {
+                                // Stay subscribed to the boundary; the next epoch restarts the repository flow.
+                            }
+                        }
+                    }
+                } catch (_: io.github.nodyssey.data.session.PrivateWorkRevoked) {
+                    // The router, not Swift, owns resubscription to a replacement graph.
+                    nativeDeliver(currentCoroutineContext()[Job]!!, JsonNull, completion)
                 }
             }
         }
@@ -203,6 +222,14 @@ internal fun io.github.nodyssey.data.session.PrivateBoundaryState.nativeBoundary
     put("requiresConfirmation", requiresConfirmation)
     put("recoveryEligible", recoveryEligible)
 }
+
+internal fun IosAppContainer.nativeWorkspaceBoundaryDto(): JsonObject = JsonObject(
+    privateBoundary.state.value.nativeBoundaryDto() + mapOf(
+        "canCreateWorkspace" to JsonPrimitive(privateBoundary.state.value.recoveryEligible && sessionRepository.peek().isSignedIn),
+        "workspaceBinding" to JsonPrimitive(if (workspaceId == null) "LEGACY" else "SESSION_PROOF"),
+        "preservedData" to JsonPrimitive(workspaceId != null),
+    ),
+)
 
 internal fun NativeContext.nativeSessionDto(): JsonObject = JsonObject(
     graph.sessionRepository.state.value.accountDto() +

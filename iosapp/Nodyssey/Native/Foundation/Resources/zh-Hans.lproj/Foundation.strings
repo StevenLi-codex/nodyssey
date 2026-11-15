@@ -16,4 +16,9 @@
 "native_foundation_boundary_confirm_title" = "删除本地私人数据？";
 "native_foundation_boundary_delete" = "删除本地数据";
 "native_foundation_boundary_cancel" = "取消";
+
+"native_foundation_workspace_review" = "使用新的空白空间继续…";
+"native_foundation_workspace_title" = "创建新的会话空间？";
+"native_foundation_workspace_create" = "创建空白空间";
+"native_foundation_workspace_detail" = "为本次登录会话创建新的空白私有空间。以前的本地数据仍保留在设备上，不会打开、合并或删除。新空间绑定的是本次会话，而非经过验证的账号 ID；以后登录可能需要另一个空间。此操作不会恢复旧数据的访问权限。";
 "native_foundation_boundary_impact" = "这将永久删除当前站点的本地草稿、离线下载和私人缓存，且无法撤销；不会删除服务器上的内容。取消会保留锁定的数据。只有接受丢失这些本地副本时才继续。";

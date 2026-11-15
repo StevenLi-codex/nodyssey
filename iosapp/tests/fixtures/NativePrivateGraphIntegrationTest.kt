@@ -41,19 +41,23 @@ class NativePrivateGraphIntegrationTest {
     }
     private inline fun <reified T> unused(): T = Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, _ -> error("Unexpected I/O: ${method.name}") } as T
 
-    private class Disk(val root: File, val jar: Jar) {
+    private class Disk(val root: File, val jar: Jar, val global: Disk? = null) {
+        init { root.mkdirs() }
+        val globalJob = SupervisorJob()
+        val globalScope = CoroutineScope(globalJob + Dispatchers.Default)
+        val children = mutableListOf<Disk>()
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.Default)
         fun store(name: String) = PreferenceDataStoreFactory.createWithPath(scope = scope, produceFile = { File(root, "$name.preferences_pb").path.toPath() })
         val post = store("post-composer")
         val comment = store("comment-composer")
-        val settingsStore = store("settings")
-        val settings = SettingsRepository(settingsStore)
+        val settingsStore = if (global == null) PreferenceDataStoreFactory.createWithPath(scope = globalScope, produceFile = { File(root, "settings.preferences_pb").path.toPath() }) else store("settings-private")
+        val settings = SettingsRepository(if (global == null) settingsStore else WorkspaceSettingsDataStore(global.settingsStore, settingsStore, kotlinx.coroutines.sync.Mutex()))
         val journal = store("private-store-provenance")
         val db = Room.databaseBuilder<NodeSeekDatabase>(File(root, "real.db").path).setDriver(BundledSQLiteDriver()).build()
         val files = GraphFiles(File(root, "offline-files"))
         val cookies = SessionCookies(NodeSeekSite.CONFIG, jar)
-        val session = SessionRepository(cookies, deferPublication = true)
+        val session: SessionRepository = global?.session ?: SessionRepository(cookies, deferPublication = true)
         val clock = AppClock.System
         val dispatchers = AppDispatchers()
         val transport = Proxy.newProxyInstance(HttpTransport::class.java.classLoader, arrayOf(HttpTransport::class.java)) { _, _, _ -> error("No live transport permitted") } as HttpTransport
@@ -104,12 +108,38 @@ class NativePrivateGraphIntegrationTest {
                 "profileRepository" to profile, "userNoteStore" to UserNoteStore(db.userNoteDao(), clock),
                 "trackedThreadStore" to TrackedThreadStore(db.trackedThreadDao(), clock),
             )
+            if (global != null) {
+                values["workspaceId"] = root.name
+                values["imageLoader"] = coil3.FixtureLoader()
+                values["signInRepository"] = global.graph.signInRepository
+                values["notificationRepository"] = global.graph.notificationRepository
+            }
             graph = IosAppContainer(values)
             values["postRepository"] = PrivatePostRepository(rawPosts, graph.privateBoundary)
             values["accountSignOut"] = AccountSignOut { session.signOut() }
-            NodysseyApp.fixture = graph
+            if (global == null) {
+                NodysseyApp.fixture = graph
+                NodysseyApp.creator = { confirmed, epoch -> startRouting(); router.create(confirmed, epoch) }
+            }
         }
-        suspend fun close() { job.cancelAndJoin(); db.close() }
+        private val routeStore by lazy { PreferenceDataStoreFactory.createWithPath(scope = globalScope, produceFile = { File(root, "routing.preferences_pb").path.toPath() }) }
+        val router by lazy {
+            PrivateWorkspaceRouter(
+                routeStore, session::privateOwnerProof, { session.peek().isSignedIn },
+                build = { id: String? -> if (id == null) graph else Disk(File(root, "workspaces/$id"), jar, this).also { children += it }.graph },
+                boundary = { it.privateBoundary },
+                close = { old ->
+                    old.lifetime.closeAndJoin()
+                    if (old === graph) job.cancelAndJoin() else children.single { it.graph === old }.let { it.job.cancelAndJoin(); it.db.close() }
+                },
+                bind = { NodysseyApp.fixture = it },
+            )
+        }
+        suspend fun startRouting() = router.start()
+        suspend fun close() {
+            children.forEach { it.close() }
+            job.cancelAndJoin(); globalJob.cancelAndJoin(); db.close()
+        }
         suspend fun seedRaw() {
             rawPostDraft.saveDraft(PostDraft(title = "owner-a-title", body = "owner-a-unsent"))
             rawCommentDraft.saveDraft(42, CommentDraft(body = "owner-a-comment"))
@@ -128,8 +158,17 @@ class NativePrivateGraphIntegrationTest {
             dao.upsertImages(listOf(OfflineImageEntity(42, url, name, 3)))
         }
         suspend fun assertRawPresent() {
-            assertEquals("owner-a-title", rawPostDraft.draft.first()?.title)
-            assertEquals("owner-a-comment", rawCommentDraft.draft(42).first()?.body)
+            // A retired graph's DataStore is deliberately closed. Inspect disk through a NEW,
+            // independently owned reader only after join, never relax production lifetime closure.
+            val readJob = SupervisorJob()
+            val readScope = CoroutineScope(readJob + Dispatchers.Default)
+            fun reopen(name: String) = PreferenceDataStoreFactory.createWithPath(scope = readScope, produceFile = { File(root, "$name.preferences_pb").path.toPath() })
+            try {
+                val posts = if (job.isActive) rawPostDraft else DefaultPostComposerRepository(reopen("post-composer"), transport, dispatchers, clock)
+                val comments = if (job.isActive) rawCommentDraft else DefaultCommentComposerRepository(reopen("comment-composer"), transport, dispatchers, clock)
+                assertEquals("owner-a-title", posts.draft.first()?.title)
+                assertEquals("owner-a-comment", comments.draft(42).first()?.body)
+            } finally { readJob.cancelAndJoin() }
             assertEquals("owner-a-offline", rawOffline.storedPage(42, 1)?.detail?.title)
             assertEquals(1, db.offlineDao().comments(42, 1).size)
             assertEquals(1, db.offlineDao().images(42).size)
@@ -308,7 +347,7 @@ class NativePrivateGraphIntegrationTest {
             denied("boards.recent.get")
             assertEquals(JsonPrimitive("CONFIRMATION_REQUIRED"), signed["privateDataStatus"],
                 "Successful authentication must explicitly distinguish locked private data from login failure")
-            assertEquals(d.graph.privateBoundary.state.value.nativeBoundaryDto(), signed["privateBoundary"])
+            assertEquals(d.graph.nativeWorkspaceBoundaryDto(), signed["privateBoundary"])
         } finally { d.close() }
     }
 
@@ -494,7 +533,10 @@ class NativePrivateGraphIntegrationTest {
             // preserve TRANSITIONING, not treat this as a fresh/empty install.
             val key = stringPreferencesKey("private-store-manifest-v1")
             d.journal.edit { prefs ->
-                val manifest = Json.parseToJsonElement(requireNotNull(prefs[key])).jsonObject
+                val manifest = prefs[key]?.let { Json.parseToJsonElement(it).jsonObject } ?: buildJsonObject {
+                    put("version", 1)
+                    put("stores", JsonArray(listOf("settings-history", "post-drafts", "comment-drafts", "room-private", "offline-files", "reports", "authenticated-images").map(::JsonPrimitive)))
+                }
                 prefs[key] = JsonObject(manifest + ("phase" to JsonPrimitive("TRANSITIONING"))).toString()
             }
             d.close()
@@ -699,7 +741,7 @@ class NativePrivateGraphIntegrationTest {
             d.close()
             d = Disk(root, jar)
             val reopened = success("session.privateBoundary").jsonObject
-            assertEquals(setOf("phase", "identityEpoch", "requiresConfirmation", "recoveryEligible"), reopened.keys)
+            assertEquals(setOf("phase", "identityEpoch", "requiresConfirmation", "recoveryEligible", "canCreateWorkspace", "workspaceBinding", "preservedData"), reopened.keys)
             assertEquals(JsonPrimitive(true), reopened["recoveryEligible"], "Interrupted, drained transition must expose explicit recovery")
             assertEquals(JsonPrimitive(true), reopened["requiresConfirmation"])
             assertEquals(PrivateStorePhase.TRANSITIONING, d.graph.privateBoundary.state.value.phase)
@@ -846,4 +888,193 @@ class NativePrivateGraphIntegrationTest {
             assertEquals(listOf("trade"), d.settings.settings.first().recentBoards)
         } finally { d.close() }
     }
+
+    @Test
+    fun existingPersistedUnknownCanContinueInNewWorkspaceWithoutAdoptingLegacy() = scenario { root, jar ->
+        var d = Disk(root, jar)
+        try {
+            d.journal.edit { prefs -> prefs[stringPreferencesKey("private-store-manifest-v1")] = buildJsonObject {
+                put("version", 1); put("phase", "UNKNOWN")
+                put("stores", JsonArray(listOf("settings-history", "post-drafts", "comment-drafts", "room-private", "offline-files", "reports", "authenticated-images").map(::JsonPrimitive)))
+            }.toString() }
+            d.seedRaw()
+            d.settings.recordRecentBoard("trade")
+            firstObservation("session.state")
+            assertEquals(PrivateStorePhase.UNKNOWN, d.graph.privateBoundary.state.value.phase)
+            assertTrue(d.session.state.value.isSignedIn)
+            d.close()
+            // This is a previously installed, persisted UNKNOWN with existing logged-in cookie,
+            // not a fresh empty inventory and not an isolated boundary-only simulation.
+            d = Disk(root, jar)
+            val shown = success("session.privateBoundary").jsonObject
+            assertEquals(JsonPrimitive("UNKNOWN"), shown["phase"])
+            assertTrue(d.session.state.value.isSignedIn)
+            assertNativeDenied(d)
+            d.assertRawPresent()
+            val epoch = shown.getValue("identityEpoch").jsonPrimitive.content
+            val activated = success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$epoch"}""").jsonObject
+            assertEquals(JsonPrimitive("READY"), activated["phase"])
+            assertNotEquals(epoch, activated.getValue("identityEpoch").jsonPrimitive.content)
+            assertEquals(JsonNull, success("draft.post.get"), "Old draft must not be adopted")
+            success("draft.post.save", """{"title":"new-workspace-title","body":"new-private-body","permission":0}""")
+            assertEquals(JsonPrimitive("new-workspace-title"), success("draft.post.get").jsonObject["title"])
+            d.assertRawPresent()
+            assertEquals(listOf("trade"), d.settings.settings.first().recentBoards)
+        } finally { d.close() }
+    }
+
+    @Test
+    fun nonemptyGuestHistoryAndRoomCanContinueAfterLoginInNewWorkspace() = scenario { root, jar ->
+        jar.header = ""
+        val d = Disk(root, jar)
+        try {
+            firstObservation("session.state")
+            success("boards.recent.record", """{"categorySlug":"trade"}""")
+            val body = PostContent(7, "#0", "public-author", 1, null, false, emptyList(), null, null, null, emptyList())
+            d.loadDetail = { id, page -> PostDetail(postId = id, title = "guest-thread", body = body, comments = emptyList(), page = page, totalPages = 1, hasNextPage = false) }
+            d.graph.postRepository.refreshThread(42, 1)
+            assertNotNull(d.rawPosts.thread(42).first())
+            val signed = success("session.signIn", """{"account":"fixture","password":"fixture","verificationToken":"fixture"}""").jsonObject
+            assertEquals(JsonPrimitive("SIGNED"), signed["status"])
+            assertTrue(d.session.state.value.isSignedIn)
+            val epoch = displayedEpoch()
+            val activated = success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$epoch"}""").jsonObject
+            assertEquals(JsonPrimitive("READY"), activated["phase"])
+            assertEquals(JsonNull, success("draft.post.get"))
+            assertNotNull(d.rawPosts.thread(42).first(), "Guest Room bytes remain in their old scope")
+            assertEquals(listOf("trade"), d.settings.settings.first().recentBoards)
+        } finally { d.close() }
+    }
+
+
+    @Test
+    fun workspaceNativeRestartPreservesExactProofAndRejectsDifferentAccount() = scenario { root, jar ->
+        var d = Disk(root, jar)
+        try {
+            d.seedRaw(); d.startRouting()
+            val before = root.walkTopDown().filter { it.isFile && (it.name.endsWith("preferences_pb") || it.parentFile.name == "offline-files") && it.name != "routing.preferences_pb" }.associate { it.relativeTo(root).path to it.readBytes().toList() }
+            val epoch = displayedEpoch()
+            success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$epoch"}""")
+            success("draft.post.save", """{"title":"new-owned","body":"body","permission":0}""")
+            success("boards.recent.record", """{"categorySlug":"owned"}""")
+            val id = NodysseyApp.fixture.workspaceId
+            before.forEach { (path, bytes) -> assertEquals(bytes, File(root,path).readBytes().toList(), path) }
+            d.close(); d = Disk(root, jar); d.startRouting()
+            assertEquals(id, NodysseyApp.fixture.workspaceId)
+            assertEquals(JsonPrimitive("new-owned"),success("draft.post.get").jsonObject["title"])
+            jar.header = "${NodeSeekSite.CONFIG.sessionCookieNames.first()}=other-account"
+            success("session.sync"); denied("draft.post.get")
+            val secondEpoch = displayedEpoch()
+            success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$secondEpoch"}""")
+            assertNotEquals(id,NodysseyApp.fixture.workspaceId)
+            assertEquals(JsonNull,success("draft.post.get"))
+            assertTrue(NodysseyApp.fixture.settingsRepository.settings.first().recentBoards.isEmpty())
+            before.forEach { (path, bytes) -> assertEquals(bytes, File(root,path).readBytes().toList(), path) }
+        } finally { d.close() }
+    }
+
+    @Test
+    fun workspaceActivationRejectsStaleAndBrowserAndJoinsLatePrivateWriter() = scenario { root, jar ->
+        val d = Disk(root, jar)
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var writer: Job? = null
+        try {
+            d.startRouting()
+            val oldEpoch = displayedEpoch()
+            d.graph.privateBoundary.beginExternalMutation()
+            assertFailsWith<PrivateStoreAccessDenied> { d.router.create(true,displayedEpoch()) }
+            d.graph.privateBoundary.finishExternalMutation()
+            assertFailsWith<PrivateStoreAccessDenied> { d.router.create(false,displayedEpoch()) }
+            assertFailsWith<PrivateStoreAccessDenied> { d.router.create(true,"stale") }
+            writer = CoroutineScope(currentCoroutineContext()).launch {
+                d.graph.privateBoundary.protect {
+                    try { awaitCancellation() } finally {
+                        withContext(NonCancellable) { entered.complete(Unit); release.await(); d.rawPostDraft.saveDraft(PostDraft(title="late-old")) }
+                    }
+                }
+            }
+            yield()
+            val activation = CoroutineScope(currentCoroutineContext()).async { d.router.create(true,displayedEpoch()) }
+            withTimeout(3000) { entered.await() }
+            assertFalse(activation.isCompleted)
+            assertSame(d.graph,NodysseyApp.fixture)
+            release.complete(Unit); writer.join()
+            val next = activation.await()
+            assertNull(next.postComposerRepository.draft.first())
+            assertNotEquals(oldEpoch,next.privateBoundary.state.value.identityEpoch)
+            val readJob = SupervisorJob()
+            try {
+                val store = PreferenceDataStoreFactory.createWithPath(scope=CoroutineScope(readJob+Dispatchers.Default),produceFile={File(root,"post-composer.preferences_pb").path.toPath()})
+                assertEquals("late-old",DefaultPostComposerRepository(store,d.transport,d.dispatchers,d.clock).draft.first()?.title)
+            } finally { readJob.cancelAndJoin() }
+        } finally { release.complete(Unit); writer?.cancelAndJoin(); d.close() }
+    }
+
+    @Test
+    fun workspaceObserversRebindWithoutNativeResubscription() = scenario { root, jar ->
+        val d = Disk(root, jar)
+        var request: NativeRequest? = null
+        val ended = CompletableDeferred<Unit>()
+        try {
+            d.seedRaw(); d.startRouting()
+            val initial = CompletableDeferred<Unit>()
+            val ready = CompletableDeferred<JsonObject>()
+            request = NativeBridge.observe("session.privateBoundary", "{}") { value ->
+                val envelope = Json.parseToJsonElement(value).jsonObject
+                if (envelope["ok"] == JsonPrimitive(true)) {
+                    val data = envelope["data"] as? JsonObject
+                    if (data?.get("phase") == JsonPrimitive("UNKNOWN")) initial.complete(Unit)
+                    if (data?.get("phase") == JsonPrimitive("READY")) ready.complete(data)
+                }
+            }
+            request.invokeOnCompletion { ended.complete(Unit) }
+            withTimeout(3000) { initial.await() }
+            val old = displayedEpoch()
+            success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$old"}""")
+            assertEquals(JsonPrimitive("SESSION_PROOF"), withTimeout(3000) { ready.await() }["workspaceBinding"])
+            assertFalse(ended.isCompleted)
+        } finally { request?.cancel(); if(request != null) withTimeout(3000) { ended.await() }; d.close() }
+    }
+
+    @Test
+    fun workspaceRejectsCookieDriftSinceDisplayedConfirmation() = scenario { root, jar ->
+        val d = Disk(root, jar)
+        try {
+            d.seedRaw(); d.startRouting()
+            val shown = displayedEpoch()
+            jar.header = "${NodeSeekSite.CONFIG.sessionCookieNames.first()}=changed-without-sync"
+            assertFailsWith<PrivateStoreAccessDenied> { d.router.create(true, shown) }
+            assertSame(d.graph, NodysseyApp.fixture)
+        } finally { d.close() }
+    }
+
+    @Test
+    fun workspacePreparingRestartStaysClosedButExplicitRetryPreservesCandidate() = scenario { root, jar ->
+        var d = Disk(root,jar)
+        try {
+            d.seedRaw(); d.startRouting()
+            val epoch=displayedEpoch()
+            success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$epoch"}""")
+            val active=NodysseyApp.fixture.workspaceId!!
+            success("draft.post.save", """{"title":"committed","body":"body","permission":0}""")
+            d.close()
+            val job=SupervisorJob()
+            try {
+                val store=PreferenceDataStoreFactory.createWithPath(scope=CoroutineScope(job+Dispatchers.Default),produceFile={File(root,"routing.preferences_pb").path.toPath()})
+                store.edit { prefs ->
+                    val key=stringPreferencesKey("private-workspace-router-v1")
+                    val record=Json.parseToJsonElement(prefs[key]!!).jsonObject
+                    prefs[key]=JsonObject(record+mapOf("phase" to JsonPrimitive("PREPARING"),"preparing" to JsonPrimitive("00000000-0000-0000-0000-000000000001"))).toString()
+                }
+            } finally { job.cancelAndJoin() }
+            d=Disk(root,jar); d.startRouting()
+            denied("draft.post.get")
+            val retry=displayedEpoch()
+            success("session.createPrivateWorkspace", """{"confirmed":true,"identityEpoch":"$retry"}""")
+            assertNotEquals(active,NodysseyApp.fixture.workspaceId)
+            assertEquals(JsonNull,success("draft.post.get"))
+            assertTrue(File(root,"workspaces/$active/post-composer.preferences_pb").exists())
+        } finally { d.close() }
+    }
+
 }

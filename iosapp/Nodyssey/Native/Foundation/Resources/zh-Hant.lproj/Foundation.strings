@@ -16,4 +16,9 @@
 "native_foundation_boundary_confirm_title" = "刪除本機私人資料？";
 "native_foundation_boundary_delete" = "刪除本機資料";
 "native_foundation_boundary_cancel" = "取消";
+
+"native_foundation_workspace_review" = "使用新的空白空間繼續…";
+"native_foundation_workspace_title" = "建立新的工作階段空間？";
+"native_foundation_workspace_create" = "建立空白空間";
+"native_foundation_workspace_detail" = "為本次登入工作階段建立新的空白私有空間。以前的本機資料仍保留在裝置上，不會開啟、合併或刪除。新空間綁定的是本次工作階段，而非經過驗證的帳號 ID；日後登入可能需要另一個空間。此操作不會恢復舊資料的存取權限。";
 "native_foundation_boundary_impact" = "這將永久刪除目前站點的本機草稿、離線下載和私人快取，且無法復原；不會刪除伺服器上的內容。取消會保留鎖定的資料。只有接受失去這些本機副本時才繼續。";

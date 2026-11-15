@@ -34,7 +34,34 @@ class PrivateSessionBoundary(
     private val participants: List<PrivateStoreParticipant>,
     private val beforePublication: suspend () -> Unit = {},
     private val publishSession: () -> Unit = {},
+    private val preserveUnowned: Boolean = false,
 ) {
+    private var retired = false
+    private var quarantined = false
+    private var epochOwner = owner()
+
+    /** Retire a captured graph without rewriting or clearing its provenance or data.
+     * Control is non-queueing: a displayed confirmation never waits behind auth/browser work.
+     * The replacement runs with admission closed and all actual lease jobs joined.
+     */
+    suspend fun <T> replaceWorkspace(confirmed: Boolean, expectedEpoch: String, replacement: suspend () -> T): T {
+        if (!control.tryLock()) throw PrivateStoreAccessDenied()
+        try {
+            if (external != null || !confirmed || expectedEpoch != state.value.identityEpoch) throw PrivateStoreAccessDenied()
+            if (epochOwner != owner()) {
+                invalidate(PrivateStorePhase.UNKNOWN) {}
+                publishSession()
+                throw PrivateStoreAccessDenied()
+            }
+            return whileControlled {
+                retired = true
+                invalidate(PrivateStorePhase.TRANSITIONING) {}
+                replacement()
+            }
+        } finally {
+            control.unlock()
+        }
+    }
     private val control = Mutex()
     private val barrier = SessionWorkBarrier()
     private val mutableState = MutableStateFlow(PrivateBoundaryState(PrivateStorePhase.UNKNOWN, newEpoch()))
@@ -45,6 +72,24 @@ class PrivateSessionBoundary(
     init {
         require(participants.map { it.id }.toSet() == provenance.inventory)
         require(participants.map { it.id }.distinct().size == participants.size)
+    }
+
+    /** Router fail-closed state; no writes to the quarantined graph's journal. */
+    suspend fun quarantine() = controlled {
+        quarantined = true
+        invalidate(PrivateStorePhase.UNKNOWN) {}
+        publishSession()
+    }
+
+    suspend fun reopenCommitted() = controlled {
+        val manifest = provenance.load()
+        if (manifest.phase != PrivateStorePhase.READY || manifest.owner != owner().encoded || manifest.completed != provenance.inventory) {
+            quarantined = true
+            invalidate(PrivateStorePhase.UNKNOWN) {}
+            publishSession()
+        } else {
+            reconcileLocked()
+        }
     }
 
     suspend fun reconcile() = controlled { reconcileLocked() }
@@ -74,7 +119,7 @@ class PrivateSessionBoundary(
     }
 
     private suspend fun reconcileLocked() {
-        if (external != null) return
+        if (retired || quarantined || external != null) return
         val candidate = owner()
         if (observed == candidate) {
             publishSession()
@@ -93,10 +138,10 @@ class PrivateSessionBoundary(
             participants.all { it.isEmpty() }
         if (manifest.phase == PrivateStorePhase.TRANSITIONING) {
             mutableState.value = state.value.copy(phase = PrivateStorePhase.TRANSITIONING)
-        } else if (!same && !fresh) {
+        } else if (!same && !fresh && !preserveUnowned) {
             provenance.unknown()
         }
-        beforePublication()
+        if (same || fresh || !preserveUnowned) beforePublication()
         if (same || fresh) {
             if (candidate != owner()) return
             if (fresh) {
@@ -131,8 +176,9 @@ class PrivateSessionBoundary(
         observed = null
         verified = null
         // A confirmation from before this writer started must not become usable after it drains.
+        epochOwner = owner()
         mutableState.value = PrivateBoundaryState(PrivateStorePhase.TRANSITIONING, newEpoch())
-        barrier.closeAndJoin { provenance.begin(owner(), mutation.token) }
+        barrier.closeAndJoin { if (mutation.proof != null || !preserveUnowned) provenance.begin(owner(), mutation.token) }
         // Inventory only after all old admitted writers have terminated. UNKNOWN/legacy or
         // interrupted journals never acquire an empty-store rebind capability through login.
         return mutation.copy(
@@ -143,7 +189,8 @@ class PrivateSessionBoundary(
 
     private suspend fun finishMutation(mutation: Mutation, allowEmptyRebind: Boolean = false) = withContext(NonCancellable) {
         val candidate = owner()
-        beforePublication()
+        epochOwner = candidate
+        if (mutation.proof != null || !preserveUnowned) beforePublication()
         val same = mutation.proof != null && mutation.proof == candidate && mutation.state.phase == PrivateStorePhase.READY
         val emptyRebind = !same && allowEmptyRebind && mutation.emptyAfterDrain && participants.all { it.isEmpty() }
         if ((same || emptyRebind) && candidate == owner()) {
@@ -159,7 +206,7 @@ class PrivateSessionBoundary(
             mutableState.value = ready
         } else {
             verified = null
-            provenance.unknown()
+            if (mutation.proof != null || !preserveUnowned) provenance.unknown()
             mutableState.value = PrivateBoundaryState(
                 PrivateStorePhase.UNKNOWN,
                 state.value.identityEpoch,
@@ -171,7 +218,7 @@ class PrivateSessionBoundary(
 
     /** Serializes success/refusal/ordinary error/cancellation, never silently authorizing deletion. */
     suspend fun <T> sessionMutation(allowEmptyRebind: (T) -> Boolean = { false }, block: suspend () -> T): T = controlled {
-        if (external != null) throw PrivateStoreAccessDenied()
+        if (retired || external != null) throw PrivateStoreAccessDenied()
         val mutation = beginMutation()
         var completed = false
         try {
@@ -183,7 +230,7 @@ class PrivateSessionBoundary(
 
     /** The browser owns its network lifetime; retain this admission closure through final drain. */
     suspend fun beginExternalMutation() = controlled {
-        if (external != null) throw PrivateStoreAccessDenied()
+        if (retired || external != null) throw PrivateStoreAccessDenied()
         external = beginMutation()
     }
 
@@ -203,7 +250,7 @@ class PrivateSessionBoundary(
         // Do not queue destructive intent behind an active writer or reset.
         if (!control.tryLock()) throw PrivateStoreAccessDenied()
         try {
-            if (external != null || !confirmed || expectedEpoch != state.value.identityEpoch) throw PrivateStoreAccessDenied()
+            if (retired || external != null || !confirmed || expectedEpoch != state.value.identityEpoch) throw PrivateStoreAccessDenied()
             whileControlled { resetLocked() }
         } finally {
             control.unlock()
@@ -232,6 +279,7 @@ class PrivateSessionBoundary(
     private suspend fun invalidate(phase: PrivateStorePhase, persist: suspend () -> Unit) {
         observed = null
         verified = null
+        epochOwner = owner()
         mutableState.value = PrivateBoundaryState(phase, newEpoch())
         barrier.closeAndJoin(persist)
     }
@@ -239,7 +287,7 @@ class PrivateSessionBoundary(
     /** Re-check the cookie authority even when a caller forgot session.sync(). */
     suspend fun <T> protect(block: suspend () -> T): T {
         val snapshot = state.value
-        if (snapshot.phase != PrivateStorePhase.READY || verified != owner()) throw PrivateStoreAccessDenied()
+        if (retired || snapshot.phase != PrivateStorePhase.READY || verified != owner()) throw PrivateStoreAccessDenied()
         return barrier.withLease(snapshot.identityEpoch) {
             block().also { if (verified != owner()) throw PrivateStoreAccessDenied() }
         }

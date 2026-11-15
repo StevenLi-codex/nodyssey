@@ -5,6 +5,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okio.Path.Companion.toPath
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSFileManager
@@ -36,15 +39,20 @@ fun createPreferenceDataStore(
     name: String,
     keepOutOfBackup: Boolean = false,
     migrations: List<DataMigration<Preferences>> = emptyList(),
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    directory: String? = null,
 ): DataStore<Preferences> =
     PreferenceDataStoreFactory.createWithPath(
+        scope = scope,
         migrations = migrations,
         produceFile = {
             // The extension is Android's own, appended by `preferencesDataStore` there and stated here
             // so the two platforms write a file of the same name as well as the same format.
             val fileName = "$name.preferences_pb"
-            val directory = applicationSupportDirectory()
-            val path = if (keepOutOfBackup) backupExcludedPath(directory, fileName) else "$directory/$fileName"
+            // Explicit roots are already owned/backup-excluded by their caller. Never migrate
+            // or move legacy files as a side effect of opening a workspace.
+            val parent = directory ?: applicationSupportDirectory()
+            val path = if (keepOutOfBackup && directory == null) backupExcludedPath(parent, fileName) else "$parent/$fileName"
             path.toPath()
         },
     )

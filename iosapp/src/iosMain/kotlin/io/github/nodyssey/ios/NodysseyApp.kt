@@ -1,7 +1,5 @@
 package io.github.nodyssey.ios
 
-import coil3.ImageLoader
-import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import io.github.nodyssey.core.NodeSeekSite
 import io.github.nodyssey.ios.native.supplementForeground
@@ -62,6 +60,14 @@ object NodysseyApp {
      * find a container. [ensureContainer] builds it for whichever gets here first.
      */
     private var container: IosAppContainer? = null
+    private var services: IosGlobalServices? = null
+    private var router: io.github.nodyssey.data.session.PrivateWorkspaceRouter<IosAppContainer>? = null
+    internal val workspaces = kotlinx.coroutines.flow.MutableStateFlow<IosAppContainer?>(null)
+
+    internal suspend fun createPrivateWorkspace(confirmed: Boolean, epoch: String): IosAppContainer {
+        ensureContainer()
+        return checkNotNull(router).create(confirmed, epoch)
+    }
     private var containerBuild: Deferred<IosAppContainer>? = null
 
     private var root: UIViewController? = null
@@ -127,26 +133,44 @@ object NodysseyApp {
     suspend fun ensureContainer(): IosAppContainer {
         container?.let { return it }
         val pending = containerBuild ?: scope.async { buildContainer() }.also { containerBuild = it }
-        return pending.await()
+        return try {
+            pending.await()
+        } catch (failure: Throwable) {
+            if (containerBuild === pending) containerBuild = null
+            throw failure
+        }
     }
 
+    @OptIn(coil3.annotation.DelicateCoilApi::class)
     private suspend fun buildContainer(): IosAppContainer {
-        // The `User-Agent` has to be the one WebKit sends, or a `cf_clearance` earned in the sign-in
-        // browser is rejected on the next API call, and WebKit will only say so asynchronously — so
-        // the graph is built after that answer rather than around a guess. See `resolveWebKitUserAgent`.
-        val graph =
-            IosAppContainer(
-                userAgent = resolveWebKitUserAgent(NodeSeekSite.CONFIG),
-                offlineScheduler = offlineScheduler,
-            )
-        // Set before the first composition asks for an image, and once: `setSafe` is a no-op if
-        // something already installed a loader, which is what makes a second call harmless.
-        SingletonImageLoader.setSafe { context -> imageLoader(context, graph) }
-        offlineScheduler.attach(graph.privateBoundary)
-        graph.privateBoundary.reconcile()
-        container = graph
-        containerBuild = null
-        return graph
+        val globals = services ?: IosGlobalServices(
+            userAgent = resolveWebKitUserAgent(NodeSeekSite.CONFIG),
+            offlineScheduler = offlineScheduler,
+        ).also { services = it }
+        globals.initializeCatalogues()
+        val routing = router ?: io.github.nodyssey.data.session.PrivateWorkspaceRouter(
+            journal = io.github.nodyssey.data.createPreferenceDataStore("routing", directory = privateWorkspaceDirectory(), scope = scope),
+            owner = globals.sessionRepository::privateOwnerProof,
+            signedIn = { globals.sessionRepository.peek().isSignedIn },
+            build = { id: String? ->
+                IosAppContainer(globals, id, id?.let(::privateWorkspaceDirectory)).also {
+                    it.lifetime.start()
+                    if (id == null && legacyPrivateFilesExist()) it.privateBoundary.quarantine()
+                }
+            },
+            boundary = { it.privateBoundary },
+            close = { it.close() },
+            bind = { graph ->
+                if (!graph.privateBoundary.state.value.requiresConfirmation) graph.privateBoundary.protect { graph.prepare() }
+                // Coil 3.6.3 setSafe cannot replace a loader. Old admitted requests are joined first.
+                if (!graph.privateBoundary.state.value.requiresConfirmation) SingletonImageLoader.setUnsafe(graph.imageLoader)
+                globals.active = graph
+                offlineScheduler.attach(graph.privateBoundary)
+                container = graph
+                workspaces.value = graph
+            },
+        ).also { router = it }
+        return routing.start().also { containerBuild = null }
     }
 
     private suspend fun buildController(): UIViewController {
@@ -168,7 +192,4 @@ object NodysseyApp {
         offlineScheduler.onLaunch()
         return controller
     }
-
-    private fun imageLoader(context: PlatformContext, container: IosAppContainer): ImageLoader =
-        nodysseyImageLoader(context, container.privateBoundary) { container.urlSession }
 }

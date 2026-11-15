@@ -22,9 +22,9 @@ import platform.Foundation.NSUserDomainMask
  * on the same SQLite version as the schemas were generated against.
  */
 @OptIn(ExperimentalForeignApi::class)
-fun createNodeSeekDatabase(): NodeSeekDatabase =
+fun createNodeSeekDatabase(path: String = nodeSeekDatabasePath()): NodeSeekDatabase =
     Room
-        .databaseBuilder<NodeSeekDatabase>(name = nodeSeekDatabasePath())
+        .databaseBuilder<NodeSeekDatabase>(name = path)
         .setDriver(BundledSQLiteDriver())
         .addMigrations(*NODESEEK_MIGRATIONS)
         // The same narrowing as the Android factory, and see the note there: only v1/v2 — the
@@ -35,7 +35,7 @@ fun createNodeSeekDatabase(): NodeSeekDatabase =
         .build()
 
 @OptIn(ExperimentalForeignApi::class)
-private fun nodeSeekDatabasePath(): String {
+fun nodeSeekDatabasePath(): String {
     val directory: NSURL? =
         NSFileManager.defaultManager.URLForDirectory(
             directory = NSApplicationSupportDirectory,

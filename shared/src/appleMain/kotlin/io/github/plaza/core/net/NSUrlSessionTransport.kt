@@ -8,8 +8,8 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import platform.Foundation.NSData
 import platform.Foundation.NSHTTPCookieStorage
 import platform.Foundation.NSHTTPURLResponse
@@ -159,8 +159,14 @@ fun appleUrlSession(
     timeoutSeconds: Double = 20.0,
     cookies: NSHTTPCookieStorage? = NSHTTPCookieStorage.sharedHTTPCookieStorage,
     proxy: ProxyRoute? = null,
+    disableResponseCache: Boolean = false,
 ): NSURLSession {
     val configuration = NSURLSessionConfiguration.defaultSessionConfiguration
+    if (disableResponseCache) {
+        // Preserve system-cache files, but never reuse/write them across private workspaces.
+        configuration.URLCache = null
+        configuration.requestCachePolicy = platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
+    }
     configuration.HTTPCookieStorage = cookies
     configuration.HTTPShouldSetCookies = cookies != null
     configuration.timeoutIntervalForRequest = timeoutSeconds

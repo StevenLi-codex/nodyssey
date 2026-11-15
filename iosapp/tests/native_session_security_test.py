@@ -116,17 +116,17 @@ platform_source += platform[platform.index('private fun IosAppContainer.platform
 platform_source += platform.split('// PLATFORM_FREE_BEGIN\n')[1]
 (out / 'PlatformCore.kt').write_text(platform_source)
 source = '\n'.join((main / f).read_text() for f in ['NativeAccount.kt', 'NativeBridge.kt']) + platform_source
-graph = (root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/IosAppContainer.kt').read_text()
+graph = (root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/IosAppContainer.kt').read_text() + (root / 'iosapp/src/iosMain/kotlin/io/github/nodyssey/ios/IosGlobalServices.kt').read_text()
 imports = {x.rsplit('.', 1)[-1]: x for x in re.findall(r'^import (.*)$', graph, re.M)}
 props = dict(re.findall(r'override val (\w+): ([\w<>?]+)', graph))
 props['privateBoundary'] = 'PrivateSessionBoundary'
-names = sorted((set(re.findall(r'graph\.(\w+)', source)) | {'userAgent', 'notificationRepository'}) - {'privateBoundary'})
+names = sorted((set(re.findall(r'graph\.(\w+)', source)) | {'userAgent', 'notificationRepository'}) - {'privateBoundary', 'lifetime', 'workspaceId', 'nativeWorkspaceBoundaryDto'})
 lines = ['package io.github.nodyssey.ios']
 lines += ['import ' + imports.get(props[n], props[n]) for n in names]
-lines += ['class IosAppContainer(val values: Map<String, Any>) {']
+lines += ['class IosAppContainer(val values: Map<String, Any>) {', 'val lifetime = io.github.nodyssey.data.session.PrivateWorkspaceLifetime().also { kotlinx.coroutines.runBlocking { it.start() } }', 'val workspaceId: String? get() = values["workspaceId"] as? String']
 lines += [f'val {n}: {props[n]} get() = values.getValue("{n}") as {props[n]}' for n in names]
 lines += ['val privateBoundary: io.github.nodyssey.data.session.PrivateSessionBoundary by lazy {\n    val memory = object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> {\n        private val value = kotlinx.coroutines.flow.MutableStateFlow(androidx.datastore.preferences.core.emptyPreferences())\n        override val data: kotlinx.coroutines.flow.Flow<androidx.datastore.preferences.core.Preferences> = value\n        override suspend fun updateData(transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences): androidx.datastore.preferences.core.Preferences {\n            value.value = transform(value.value)\n            return value.value\n        }\n    }\n    io.github.nodyssey.data.session.PrivateSessionBoundary(\n        io.github.nodyssey.data.session.PrivateStoreProvenance(memory, emptySet()),\n        sessionRepository::privateOwnerProof, emptyList(),\n        beforePublication = { notificationRepository.clearCounts() },\n        publishSession = { sessionRepository.publishReconciled(); Unit },\n    )\n}']
-lines += ['}', 'object NodysseyApp { lateinit var fixture: IosAppContainer; suspend fun ensureContainer() = fixture; fun nativeSiteMetadata(): kotlinx.serialization.json.JsonObject = error("Public bootstrap is exercised by --graph-integration only") }']
+lines += ['}', 'object NodysseyApp { val workspaces = kotlinx.coroutines.flow.MutableStateFlow<IosAppContainer?>(null); var fixture: IosAppContainer get() = checkNotNull(workspaces.value); set(value) { workspaces.value = value }; suspend fun createPrivateWorkspace(confirmed: Boolean, epoch: String): IosAppContainer = error("Workspace integration requires --graph-integration"); suspend fun ensureContainer() = fixture; fun nativeSiteMetadata(): kotlinx.serialization.json.JsonObject = error("Public bootstrap is exercised by --graph-integration only") }']
 (out / 'Graph.kt').write_text('\n'.join(lines))
 (out / 'UnusedDomains.kt').write_text('''package io.github.nodyssey.ios.native
 import kotlinx.serialization.json.*

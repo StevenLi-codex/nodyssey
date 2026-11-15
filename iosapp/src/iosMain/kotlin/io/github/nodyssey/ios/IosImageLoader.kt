@@ -1,15 +1,9 @@
 package io.github.nodyssey.ios
 
-import coil3.intercept.Interceptor
-import coil3.request.ImageResult
-import io.github.nodyssey.data.session.PrivateSessionBoundary
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.disk.DiskCache
+import coil3.intercept.Interceptor
 import coil3.network.NetworkClient
 import coil3.network.NetworkFetcher
 import coil3.network.NetworkHeaders
@@ -17,10 +11,16 @@ import coil3.network.NetworkRequest
 import coil3.network.NetworkResponse
 import coil3.network.NetworkResponseBody
 import coil3.network.cachecontrol.CacheControlCacheStrategy
+import coil3.request.ImageResult
 import io.github.nodyssey.core.NodeSeekSite
+import io.github.nodyssey.data.session.PrivateSessionBoundary
 import io.github.plaza.core.net.getBytes
 import io.github.plaza.core.toByteArray
 import io.github.plaza.designsys.image.LongLivedImageCacheStrategy
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import okio.Buffer
 import okio.Path.Companion.toPath
 import platform.Foundation.NSURLSession
@@ -42,6 +42,7 @@ import platform.Foundation.NSURLSession
 internal fun nodysseyImageLoader(
     context: PlatformContext,
     boundary: PrivateSessionBoundary,
+    cachePath: String? = null,
     session: () -> NSURLSession,
 ): ImageLoader =
     ImageLoader
@@ -87,7 +88,7 @@ internal fun nodysseyImageLoader(
                 // Caches, not Application Support: these are re-fetchable and the system is welcome
                 // to reclaim them. The offline library's own pictures are the ones that must not be —
                 // see `IosOfflineFileStore`.
-                .directory(requireNotNull(cachesDirectory().path).toPath() / "image_cache")
+                .directory(cachePath?.toPath() ?: (requireNotNull(cachesDirectory().path).toPath() / "image_cache"))
                 .build()
         }
         .build()

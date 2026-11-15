@@ -47,6 +47,18 @@ struct NativeRootView: View {
         } message: { _ in
             Text("native_foundation_boundary_impact", tableName: "Foundation")
         }
+        .alert(Text("native_foundation_workspace_title", tableName: "Foundation"),
+               isPresented: Binding(get: { app.privateWorkspaceConfirmation != nil }, set: { _ in }),
+               presenting: app.privateWorkspaceConfirmation) { confirmation in
+            Button { Task { await app.confirmPrivateWorkspace(confirmation) } } label: {
+                Text("native_foundation_workspace_create", tableName: "Foundation")
+            }
+            Button(role: .cancel) { app.cancelPrivateWorkspaceConfirmation() } label: {
+                Text("native_foundation_boundary_cancel", tableName: "Foundation")
+            }
+        } message: { _ in
+            Text("native_foundation_workspace_detail", tableName: "Foundation")
+        }
         .sheet(item: Binding(get: { app.sheet }, set: { value in
             if value == nil { Task { await app.dismissSheet() } }
         })) { destination in

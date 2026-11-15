@@ -15,7 +15,7 @@ struct NativePrivateBoundaryRecoveryView: View {
                     Text("native_foundation_boundary_signed_in_detail", tableName: "Foundation")
                 }
                 if (app.privateBoundary.nativeString("phase") == "TRANSITIONING" &&
-                    app.privateBoundary.nativeBool("recoveryEligible") != true) || app.privateResetRunning {
+                    app.privateBoundary.nativeBool("recoveryEligible") != true) || app.privateResetRunning || app.privateWorkspaceRunning {
                     ProgressView()
                     Text("native_foundation_boundary_transition", tableName: "Foundation")
                 }
@@ -27,13 +27,20 @@ struct NativePrivateBoundaryRecoveryView: View {
                     refreshing = true
                     Task { await app.refreshPrivateBoundary(); refreshing = false }
                 } label: { Text("native_foundation_boundary_refresh", tableName: "Foundation") }
-                .disabled(refreshing || app.privateResetRunning)
+                .disabled(refreshing || app.privateResetRunning || app.privateWorkspaceRunning)
                 .accessibilityIdentifier("native.boundary.refresh")
                 Button { app.open("Settings") } label: {
                     Text("native_foundation_boundary_settings", tableName: "Foundation")
                 }.accessibilityIdentifier("native.boundary.settings")
                 Button("action_sign_in") { app.showSignIn() }
+                    .disabled(app.privateWorkspaceRunning)
                     .accessibilityIdentifier("native.boundary.signin")
+                if app.canCreatePrivateWorkspace {
+                    Text("native_foundation_workspace_detail", tableName: "Foundation")
+                    Button { app.beginPrivateWorkspaceConfirmation() } label: {
+                        Text("native_foundation_workspace_review", tableName: "Foundation")
+                    }.accessibilityIdentifier("native.boundary.reviewWorkspace")
+                }
                 if app.canConfirmPrivateReset {
                     Button(role: .destructive) { app.beginPrivateResetConfirmation() } label: {
                         Text("native_foundation_boundary_review_reset", tableName: "Foundation")

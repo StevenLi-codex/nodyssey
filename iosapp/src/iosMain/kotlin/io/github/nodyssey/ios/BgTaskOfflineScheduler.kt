@@ -7,19 +7,19 @@ import io.github.nodyssey.data.offline.MaintenanceOutcome
 import io.github.nodyssey.data.offline.OfflineDownloads
 import io.github.nodyssey.data.offline.OfflineWorkScheduler
 import io.github.nodyssey.data.offline.runOfflineMaintenance
+import io.github.nodyssey.data.session.PrivateSessionBoundary
+import io.github.nodyssey.data.session.PrivateStoreAccessDenied
+import io.github.nodyssey.data.session.PrivateStorePhase
 import io.github.nodyssey.di.AppContainer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import io.github.nodyssey.data.session.PrivateSessionBoundary
-import io.github.nodyssey.data.session.PrivateStorePhase
-import io.github.nodyssey.data.session.PrivateStoreAccessDenied
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import platform.BackgroundTasks.BGProcessingTask
 import platform.BackgroundTasks.BGProcessingTaskRequest
 import platform.BackgroundTasks.BGTask
@@ -75,9 +75,11 @@ class BgTaskOfflineScheduler(
     private var boundary: PrivateSessionBoundary? = null
     private val restartGate = Mutex()
 
-    internal fun attach(boundary: PrivateSessionBoundary) { this.boundary = boundary }
+    internal fun attach(boundary: PrivateSessionBoundary) {
+        this.boundary = boundary
+    }
 
-    private fun launchPrivate(work: suspend () -> Unit): Job {
+    private fun launchPrivate(work: suspend (IosAppContainer) -> Unit): Job {
         val epoch = boundary?.state?.value?.identityEpoch
         return scope.launch {
             val graph = container() as? IosAppContainer ?: return@launch
@@ -85,7 +87,9 @@ class BgTaskOfflineScheduler(
             gate.reconcile()
             if (epoch != null && epoch != gate.state.value.identityEpoch) return@launch
             if (gate.state.value.phase != PrivateStorePhase.READY) return@launch
-            try { gate.protect { work() } } catch (_: PrivateStoreAccessDenied) { /* Closed; explicit foreground retry only. */ }
+            try {
+                gate.protect { work(graph) }
+            } catch (_: PrivateStoreAccessDenied) { /* Closed; explicit foreground retry only. */ }
         }
     }
 
@@ -112,8 +116,8 @@ class BgTaskOfflineScheduler(
      */
     fun onLaunch() {
         ensureMaintenance()
-        launchPrivate {
-            val library = container()?.offlineLibrary
+        launchPrivate { graph ->
+            val library = graph.offlineLibrary
             val downloads = library as? OfflineDownloads
             if (downloads != null && downloads.hasQueuedWork()) startDrain(library.settings.first().wifiOnly)
         }
@@ -130,8 +134,8 @@ class BgTaskOfflineScheduler(
                     foregroundDrain = null
                 }
                 if (foregroundDrain?.isActive != true) {
-                    foregroundDrain = launchPrivate {
-                        if (networkAllows(wifiOnly)) (container()?.offlineLibrary as? OfflineDownloads)?.drainQueue()
+                    foregroundDrain = launchPrivate { captured ->
+                        if (networkAllows(wifiOnly)) (captured.offlineLibrary as? OfflineDownloads)?.drainQueue()
                     }
                 }
             }
@@ -157,8 +161,8 @@ class BgTaskOfflineScheduler(
         // Chain the next run before working: a queue bigger than one window's budget then continues
         // rather than stalling until the app is next opened.
         submit(BGProcessingTaskRequest(DRAIN_TASK_ID).apply { requiresNetworkConnectivity = true })
-        runBackgroundTask(task) {
-            val library = container()?.offlineLibrary ?: return@runBackgroundTask true
+        runBackgroundTask(task) { graph ->
+            val library = graph.offlineLibrary
             val downloads = library as? OfflineDownloads ?: return@runBackgroundTask true
             // On cellular with 仅 Wi-Fi 下载 on: nothing to do now, and reporting success keeps the
             // system's opinion of this task healthy. The chained request above tries again later.
@@ -175,8 +179,7 @@ class BgTaskOfflineScheduler(
     private fun onMaintenanceTask(task: BGProcessingTask?) {
         task ?: return
         ensureMaintenance() // reschedule tomorrow's sweep
-        runBackgroundTask(task) {
-            val graph = container() ?: return@runBackgroundTask true
+        runBackgroundTask(task) { graph ->
             val library = graph.offlineLibrary
             val downloads = library as? OfflineDownloads ?: return@runBackgroundTask true
             runOfflineMaintenance(
@@ -198,10 +201,10 @@ class BgTaskOfflineScheduler(
      */
     private fun runBackgroundTask(
         task: BGTask,
-        work: suspend () -> Boolean,
+        work: suspend (IosAppContainer) -> Boolean,
     ) {
         var success = false
-        val job = launchPrivate { success = work() }
+        val job = launchPrivate { graph -> success = work(graph) }
         job.invokeOnCompletion { cause -> task.setTaskCompletedWithSuccess(cause == null && success) }
         task.expirationHandler = { job.cancel() }
     }

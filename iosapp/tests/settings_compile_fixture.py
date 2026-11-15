@@ -46,7 +46,7 @@ def boundary_sources(root, out):
     """Compile the actual guard and its journal/barrier, not a permissive shim."""
     common = root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session'
     sources = [common / name for name in [
-        'PrivateSessionBoundary.kt', 'SessionWorkBarrier.kt', 'PrivateStoreProvenance.kt',
+        'PrivateSessionBoundary.kt', 'SessionWorkBarrier.kt', 'PrivateStoreProvenance.kt', 'PrivateWorkspaceLifetime.kt',
     ]]
     (out / 'boundary-sources.json').write_text(json.dumps({
         str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources

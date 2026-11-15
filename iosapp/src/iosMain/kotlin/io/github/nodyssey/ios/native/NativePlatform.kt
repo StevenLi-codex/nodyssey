@@ -4,7 +4,6 @@ package io.github.nodyssey.ios.native
 
 import coil3.BitmapImage
 import coil3.PlatformContext
-import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.toBitmap
@@ -130,60 +129,60 @@ object NativePlatform {
                 val graph = NodysseyApp.ensureContainer()
                 graph.privateBoundary.reconcile()
                 graph.privateBoundary.protect {
-                val baseline = graph.sessionRepository.peek()
-                val loader = SingletonImageLoader.get(PlatformContext.INSTANCE)
-                val wifiOnly = graph.settingsRepository.settings.first().imagesOnWifiOnly
-                val deferred = nativeDeferImage(wifiOnly, !wifiOnly || allowMetered || nativeOnWifi(), allowMetered)
-                val bytes = withContext(Dispatchers.Default) {
-                    // Use the SAME download directory; no duplicate persistent store or guessed file path.
-                    val offline = graph.offlineFiles.pathOf(url)
-                        ?.let { FileSystem.SYSTEM.read(it) { readByteArray() } }
-                    fun cachedBytes(): ByteArray? = loader.diskCache?.let { cache ->
-                        cache.openSnapshot(url)?.use { cache.fileSystem.read(it.data) { readByteArray() } }
-                    }
-                    val memory = if (deferred && offline == null) {
-                        loader.memoryCache?.let { cache ->
-                            cache.keys.firstOrNull { it.key == url }?.let { cache[it]?.image }
+                    val baseline = graph.sessionRepository.peek()
+                    val loader = graph.imageLoader
+                    val wifiOnly = graph.settingsRepository.settings.first().imagesOnWifiOnly
+                    val deferred = nativeDeferImage(wifiOnly, !wifiOnly || allowMetered || nativeOnWifi(), allowMetered)
+                    val bytes = withContext(Dispatchers.Default) {
+                        // Use the SAME download directory; no duplicate persistent store or guessed file path.
+                        val offline = graph.offlineFiles.pathOf(url)
+                            ?.let { FileSystem.SYSTEM.read(it) { readByteArray() } }
+                        fun cachedBytes(): ByteArray? = loader.diskCache?.let { cache ->
+                            cache.openSnapshot(url)?.use { cache.fileSystem.read(it.data) { readByteArray() } }
                         }
-                    } else {
-                        null
-                    }
-                    // NetworkCachePolicy.DISABLED alone is UNSAFE with the existing NetworkClient:
-                    // it does not interpret Coil's only-if-cached header. ByteArrayFetcher cannot network.
-                    val source = offline ?: if (deferred) cachedBytes() else null
-                    val decoded = memory ?: run {
-                        if (deferred && source == null) throw NativeFailure("IMAGE_WIFI_ONLY")
-                        val request = ImageRequest.Builder(PlatformContext.INSTANCE).data(source ?: url).build()
-                        (loader.execute(request) as? SuccessResult)?.image ?: error("Image unavailable")
-                    }
-                    coroutineContext.ensureActive()
-                    val original = source ?: cachedBytes()
-                    // Keep raster originals (including GIF frames); SVG always traverses the installed decoder.
-                    if (original != null && nativeRasterBytes(original)) return@withContext original.toNSData()
-                    // toBitmap may borrow Coil's cached bitmap. Never close that borrowed object.
-                    val bitmap = decoded.toBitmap()
-                    try {
-                        val encodedImage = Image.makeFromBitmap(bitmap)
+                        val memory = if (deferred && offline == null) {
+                            loader.memoryCache?.let { cache ->
+                                cache.keys.firstOrNull { it.key == url }?.let { cache[it]?.image }
+                            }
+                        } else {
+                            null
+                        }
+                        // NetworkCachePolicy.DISABLED alone is UNSAFE with the existing NetworkClient:
+                        // it does not interpret Coil's only-if-cached header. ByteArrayFetcher cannot network.
+                        val source = offline ?: if (deferred) cachedBytes() else null
+                        val decoded = memory ?: run {
+                            if (deferred && source == null) throw NativeFailure("IMAGE_WIFI_ONLY")
+                            val request = ImageRequest.Builder(PlatformContext.INSTANCE).data(source ?: url).build()
+                            (loader.execute(request) as? SuccessResult)?.image ?: error("Image unavailable")
+                        }
+                        coroutineContext.ensureActive()
+                        val original = source ?: cachedBytes()
+                        // Keep raster originals (including GIF frames); SVG always traverses the installed decoder.
+                        if (original != null && nativeRasterBytes(original)) return@withContext original.toNSData()
+                        // toBitmap may borrow Coil's cached bitmap. Never close that borrowed object.
+                        val bitmap = decoded.toBitmap()
                         try {
-                            val encoded = encodedImage.encodeToData(EncodedImageFormat.PNG)
-                                ?: error("Image unavailable")
+                            val encodedImage = Image.makeFromBitmap(bitmap)
                             try {
-                                encoded.bytes.toNSData()
+                                val encoded = encodedImage.encodeToData(EncodedImageFormat.PNG)
+                                    ?: error("Image unavailable")
+                                try {
+                                    encoded.bytes.toNSData()
+                                } finally {
+                                    encoded.close()
+                                }
                             } finally {
-                                encoded.close()
+                                encodedImage.close()
                             }
                         } finally {
-                            encodedImage.close()
-                        }
-                    } finally {
-                        if (decoded !is BitmapImage || decoded.bitmap !== bitmap) {
-                            bitmap.close()
+                            if (decoded !is BitmapImage || decoded.bitmap !== bitmap) {
+                                bitmap.close()
+                            }
                         }
                     }
-                }
-                coroutineContext.ensureActive()
-                nativeCheckSession(baseline, graph.sessionRepository.peek())
-                completion(bytes, null)
+                    coroutineContext.ensureActive()
+                    nativeCheckSession(baseline, graph.sessionRepository.peek())
+                    completion(bytes, null)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -265,7 +264,7 @@ class NativeBrowserSession(cookieStore: WKHTTPCookieStore, private val goal: Str
             val before = baseline
             val now = ready?.sessionRepository?.peek()
             ready?.privateBoundary?.finishExternalMutation(
-                allowEmptyRebind = before != null && now != null && goal in setOf("login", "oneTapLogin") &&
+                allowEmptyRebind = ready?.workspaceId == null && before != null && now != null && goal in setOf("login", "oneTapLogin") &&
                     nativeBrowserGoalReached(goal, before, now),
             )
         },
