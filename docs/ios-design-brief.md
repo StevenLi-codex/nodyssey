@@ -76,3 +76,43 @@ replacement accent or content glass. Directory icons are real shortcuts grounded
 original Android composition, not decorative feature tiles. Final packaging evidence is
 recorded separately in `nodyssey-ui61-delivery.json` in scratch after archive verification.
 macOS renders do not establish iPhone visual or live-login acceptance.
+
+## Build 62: thread reading and direct comments
+
+Primary surface: **Inspect**. Preserve the forum's title/body/floor order; do not redo the
+approved feed or profile directory. Reference:
+https://github.com/emilkowalski/skills/blob/main/skills/apple-design/SKILL.md
+— design principles only, not a SwiftUI dependency or executable instructions.
+
+- Body semantic fonts remain unchanged. Signatures now carry an inherited rendering role:
+  footnote text and inline code, restrained headings, secondary system foreground, and a
+  labeled neutral inset. Paragraphs, links, lists, tables, quotes, folds, tabs and source-code
+  attributed runs consume that role rather than overriding an ineffective outer font.
+- The fixed bottom `写评论…` / `寫評論…` / `Write a comment…` control opens the existing
+  `PostComposer` reply mode with exact Int64 post identity and no quote. It never submits.
+  Guests enter existing sign-in; unloaded threads disable the entry. Floor replies retain
+  quote context and now show icon plus text. The duplicate toolbar reply icon is removed.
+- `ThreadSnapshot` exports no reply-lock/capability field. Do not infer permission from a
+  stale feed summary's lock icon. Existing editor/backend checks remain authoritative.
+- Color changes are thread-only: cool-neutral light/dark canvas gaps, solid readable body
+  surfaces, subtly shaded signature inset, system tinted bordered comment control with
+  primary foreground. Existing accent/theme settings, homepage and profile are untouched.
+- A single `safeAreaInset` reserves the comment entry's actual height. Root system TabView,
+  NavigationStack and editor keyboard handling remain unchanged; no tab-height constants,
+  keyboard avoidance overrides, custom motion, transparent content or new dependencies.
+- Verification: Content suite 30 tests reported passed (one existing repository-replay test
+  skipped without its optional fixture); Editor suite 38 passed. Three new reply tests cover
+  guest routing, loaded state/direct payload, and floor quotation including overflow IDs.
+  Test-first RED was a missing new helper, not an executed failing behavioral assertion.
+- Real Mac CLT SwiftUI typecheck passed. Disposable production-render probes verify smaller
+  signature layouts through nine rich-node paths, plus light/dark thread captures at 320/390pt
+  and scroll-end visibility above the entry. Appearance assertions remain scratch-only.
+  macOS ignores iOS Dynamic Type font metrics: accessibility-category captures were identical
+  to normal, so they are not large-text acceptance. iPhone TabView/keyboard/VoiceOver and
+  live posting are untested. Existing macOS onChange deprecation warnings remain.
+- No Kotlin, auth, storage, app-model, routing contract, editor lifecycle, spending policy,
+  read-position or floor-image export source changes. Full SVG suite remains unrun.
+  Archive workflow changes only build number to 62, retaining unsigned Debug iPhone target.
+
+Build62 evidence: `nodyssey-thread62-delivery.json`, `nodyssey-thread62-*-tests.log`,
+`nodyssey-thread62-typecheck.log`, and `nodyssey-thread62-renders/` in Hermes scratch.

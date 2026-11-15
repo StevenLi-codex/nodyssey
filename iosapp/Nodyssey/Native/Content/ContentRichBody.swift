@@ -7,6 +7,7 @@ struct ContentRichBody: View {
     let postID: Int64
     var threadTitle: String? = nil
     var floor: String? = nil
+    var role: NativeRichTextRole = .body
     var jump: (String) -> Void
     @State private var poll: ContentRichPoll?
     @State private var report: ContentRichReport?
@@ -28,6 +29,8 @@ struct ContentRichBody: View {
                 }
             }
         }
+        .modifier(NativeRichTextPresentation(role: role))
+        .environment(\.nativeRichTextRole, role)
         .sheet(item: $poll) { poll in NavigationStack { ScrollView { ContentPollView(voteID: poll.id).padding() }.toolbar { Button(String(localized: "content.close", table: "Content")) { self.poll = nil } } } }
         .sheet(item: $report) { report in NavigationStack { ContentReportView(code: report.code, postID: postID, sourceOverride: report.sourceOverride, threadTitle: threadTitle, floor: floor) } }
         .onChange(of: app.generation) { _ in poll = nil; report = nil }
@@ -72,6 +75,7 @@ private struct ContentRichReport: Identifiable { let id = UUID(); let code: Nati
 
 
 struct ContentReportView: View {
+    @Environment(\.nativeRichTextRole) private var role
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.dismiss) private var dismiss
     let code: NativeCode
@@ -127,9 +131,9 @@ struct ContentReportView: View {
         else {
             ContentStoreStatus(store: store) { retry += 1 }
             if store.value != .null {
-                Text(store.value.nativeString("title") ?? "").font(.title2)
+                Text(store.value.nativeString("title") ?? "").font(role == .signature ? .footnote.bold() : .title2)
                 ForEach(["target", "generatedAt", "scriptVersion"], id: \.self) { key in
-                    if let text = store.value.nativeString(key) { Text(text).font(.subheadline) }
+                    if let text = store.value.nativeString(key) { Text(text).font(role == .signature ? .footnote : .subheadline) }
                 }
                 let sections = store.value.nativeArray("sections")
                 ForEach(sections.indices, id: \.self) { index in

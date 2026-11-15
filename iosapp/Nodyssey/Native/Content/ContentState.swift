@@ -1,6 +1,23 @@
 import Foundation
 import NodysseyNativeCore
 
+/// Both direct comments and quoted replies use the existing editor route, never a send request.
+enum ContentReplyAction: Equatable {
+    case signIn
+    case unavailable
+    case compose([String: JSONValue])
+
+    static func resolve(postID: Int64, signedIn: Bool, loaded: Bool, quote: JSONValue?) -> Self {
+        guard signedIn else { return .signIn }
+        guard loaded else { return .unavailable }
+        var arguments: [String: JSONValue] = ["postId": .integer(postID), "reply": .bool(true)]
+        if let floor = quote?["floor"]?.string.flatMap(ContentReadingTarget.floorNumber) { arguments["quotedFloor"] = .integer(floor) }
+        if let author = quote?["authorName"]?.string { arguments["replyToAuthor"] = .string(author) }
+        if let nodes = quote?["nodes"] { arguments["replyToText"] = .string(ContentQuoteContext.text(nodes)) }
+        return .compose(arguments)
+    }
+}
+
 enum ContentQuoteContext {
     /// A plain quotation excerpt only. Editing always loads original Markdown from Kotlin.
     static func text(_ value: JSONValue) -> String {

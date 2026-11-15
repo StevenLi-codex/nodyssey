@@ -1,6 +1,20 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "content.writeComment": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Write a comment…" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "写评论…" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "寫評論…" } }
+      }
+    },
+    "content.signature": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Signature" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "个人签名" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "個人簽名" } }
+      }
+    },
     "content.adapted": {
       "localizations": {
         "en": {

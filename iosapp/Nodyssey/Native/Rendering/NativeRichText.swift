@@ -1,5 +1,43 @@
 import SwiftUI
 
+/// Inherited through recursive blocks and owner-rendered code slots. Semantic fonts
+/// preserve Dynamic Type (including the app's font-scale environment), unlike scaling a view.
+enum NativeRichTextRole {
+    case body, signature
+
+    var textFont: Font { self == .signature ? .footnote : .body }
+    var codeFont: Font { .system(self == .signature ? .footnote : .body, design: .monospaced) }
+    func headingFont(_ level: Int) -> Font {
+        if self == .signature { return .footnote.bold() }
+        switch level {
+        case 1: return .largeTitle.bold()
+        case 2: return .title.bold()
+        case 3: return .title2.bold()
+        case 4: return .title3.bold()
+        default: return .headline
+        }
+    }
+}
+
+private struct NativeRichTextRoleKey: EnvironmentKey {
+    static let defaultValue = NativeRichTextRole.body
+}
+
+struct NativeRichTextPresentation: ViewModifier {
+    let role: NativeRichTextRole
+    @ViewBuilder func body(content: Content) -> some View {
+        if role == .signature { content.font(.footnote).foregroundStyle(.secondary) }
+        else { content }
+    }
+}
+
+extension EnvironmentValues {
+    var nativeRichTextRole: NativeRichTextRole {
+        get { self[NativeRichTextRoleKey.self] }
+        set { self[NativeRichTextRoleKey.self] = newValue }
+    }
+}
+
 /// UI-only callbacks. Owners perform navigation, fetch live poll state, and confirm payments.
 /// A nil callback disables its action; the renderer never fabricates a successful mutation.
 struct NativeRichTextActions {
@@ -37,6 +75,7 @@ enum NativeCodeAction { case adaptedReport, source, compare }
 /// Native content for posts, replies, signatures, Readmes, messages, and previews.
 /// Decode [NativeRichNode] directly using JSONDecoder; no HTML/JavaScript is involved.
 struct NativeRichTextView: View {
+    @Environment(\.nativeRichTextRole) private var role
     let nodes: [NativeRichNode]
     var actions: NativeRichTextActions
 
@@ -52,10 +91,12 @@ struct NativeRichTextView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(NativeRichTextPresentation(role: role))
     }
 }
 
 private struct NativeRichBlock: View {
+    @Environment(\.nativeRichTextRole) private var role
     let node: NativeRichNode
     let actions: NativeRichTextActions
 
@@ -64,7 +105,7 @@ private struct NativeRichBlock: View {
         case .paragraph(let inlines):
             NativeInlineContent(inlines: inlines, actions: actions)
         case let .heading(level, inlines):
-            NativeInlineContent(inlines: inlines, actions: actions, font: headingFont(level))
+            NativeInlineContent(inlines: inlines, actions: actions, font: role.headingFont(level))
                 .accessibilityAddTraits(.isHeader)
         case let .image(url, alt):
             NativeRichImage(url: url, alt: alt, actions: actions)
@@ -80,7 +121,7 @@ private struct NativeRichBlock: View {
         case .stardust(let receive):
             VStack(alignment: .leading, spacing: 6) {
                 Label("Stardust request", systemImage: "sparkles")
-                Text("\(receive.amount) Stardust").font(.headline)
+                Text("\(receive.amount) Stardust").font(role == .signature ? .footnote.bold() : .headline)
                 if !receive.description.isEmpty { Text(receive.description).textSelection(.enabled) }
                 Text("Member #\(String(receive.memberId)) · Reference #\(String(receive.refId))")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -131,16 +172,6 @@ private struct NativeRichBlock: View {
                 }
             }
         case .divider: Divider()
-        }
-    }
-
-    private func headingFont(_ level: Int) -> Font {
-        switch level {
-        case 1: .largeTitle.bold()
-        case 2: .title.bold()
-        case 3: .title2.bold()
-        case 4: .title3.bold()
-        default: .headline
         }
     }
 }
@@ -230,9 +261,10 @@ private struct NativeRichImage: View {
 }
 
 private struct NativeInlineContent: View {
+    @Environment(\.nativeRichTextRole) private var role
     let inlines: [NativeInlineNode]
     let actions: NativeRichTextActions
-    var font: Font = .body
+    var font: Font? = nil
     var inTable = false
     @ScaledMetric(relativeTo: .body) private var stickerSize = 24.0
 
@@ -256,7 +288,7 @@ private struct NativeInlineContent: View {
                     .environment(\.openURL, OpenURLAction { url in activate(url) })
             }
         }
-        .font(font)
+        .font(font ?? role.textFont)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -297,7 +329,7 @@ private struct NativeInlineContent: View {
 
     private func styled(_ text: String, style: NativeInlineStyle) -> AttributedString {
         var value = AttributedString(text)
-        var chosen = style.code ? Font.system(.body, design: .monospaced) : font
+        var chosen = style.code ? role.codeFont : (font ?? role.textFont)
         if style.bold { chosen = chosen.bold() }
         if style.italic { chosen = chosen.italic() }
         value.font = chosen

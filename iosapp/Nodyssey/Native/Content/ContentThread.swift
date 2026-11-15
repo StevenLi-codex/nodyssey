@@ -62,7 +62,7 @@ struct ContentPostDetail: View {
                             floor(comment, page: page, opening: false)
                         }.id(label ?? row.id)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                        .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
+                        .listRowSeparator(.hidden).listRowBackground(ContentThreadCanvas())
                     }
                     if thread.value.nativeBool("hasNextPage") == true || lastPage < totalPages {
                         Button(String(localized: "content.next", table: "Content")) { load(page: lastPage + 1, extend: true) }.disabled(loadingPage || command.busy)
@@ -83,7 +83,7 @@ struct ContentPostDetail: View {
                 }
             }
             .listStyle(.plain).scrollContentBackground(.hidden)
-            .background(ContentSurface(canvas: true))
+            .background(ContentThreadCanvas())
             .onChange(of: thread.value) { value in
                 if value != .null { showPreview = false }
                 restoreScroll(proxy)
@@ -91,12 +91,14 @@ struct ContentPostDetail: View {
             .onChange(of: target) { _ in restoreScroll(proxy) }
         }
         .navigationTitle(Text(String(localized: "content.thread", table: "Content")))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            ContentDirectReplyBar(enabled: thread.value != .null) { reply(nil) }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { reply(nil) } label: { Label(String(localized: "content.reply", table: "Content"), systemImage: "arrowshape.turn.up.left") }
                 Button {
                     guard app.isSignedIn else { app.showSignIn(); return }
                     guard let collected = thread.value.nativeBool("collected") else { return }
@@ -202,9 +204,15 @@ struct ContentPostDetail: View {
                 ContentRichBody(value: value["nodes"] ?? .null, postID: postID, threadTitle: thread.value.nativeString("title"), floor: value.nativeString("floor") ?? (opening ? "#0" : nil), jump: { jump(ContentReadingTarget(floor: $0, page: nil)) })
                     .id("\(postID)|\(identity)|body")
                 if !value.nativeArray("signatureNodes").isEmpty {
-                    Divider()
-                    ContentRichBody(value: value["signatureNodes"] ?? .array([]), postID: postID, threadTitle: thread.value.nativeString("title"), floor: value.nativeString("floor") ?? (opening ? "#0" : nil), jump: { jump(ContentReadingTarget(floor: $0, page: nil)) })
-                        .font(.footnote).id("\(postID)|\(identity)|signature")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(String(localized: "content.signature", table: "Content"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        ContentRichBody(value: value["signatureNodes"] ?? .array([]), postID: postID, threadTitle: thread.value.nativeString("title"), floor: value.nativeString("floor") ?? (opening ? "#0" : nil), role: .signature, jump: { jump(ContentReadingTarget(floor: $0, page: nil)) })
+                            .id("\(postID)|\(identity)|signature")
+                    }
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .top) { VStack(spacing: 0) { Divider(); Spacer(minLength: 0) } }
                 }
             }
             Divider().opacity(0.45)
@@ -223,7 +231,7 @@ struct ContentPostDetail: View {
                 ).labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                 Button { reply(value) } label: {
                     Label(String(localized: "content.reply", table: "Content"), systemImage: "bubble.right")
-                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                        .labelStyle(.titleAndIcon).frame(minWidth: 44, minHeight: 44)
                 }
                 if value.nativeBool("isMine") == true, let id = value.nativeInt("commentId") {
                     Button {
@@ -243,9 +251,9 @@ struct ContentPostDetail: View {
         }
         .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 2)
         .frame(maxWidth: .infinity, alignment: .leading).background(ContentSurface())
-        .padding(.bottom, 8).background(ContentSurface(canvas: true))
+        .padding(.bottom, 8).background(ContentThreadCanvas())
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-        .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
+        .listRowSeparator(.hidden).listRowBackground(ContentThreadCanvas())
         .onAppear { visibleTarget = ContentReadingTarget(floor: value.nativeString("floor"), page: page) }
     }
     private func reactionButton(_ action: String, field: String, count: String, symbol: String, value: JSONValue, commentID: Int64, page: Int64, opening: Bool) -> some View {
@@ -287,12 +295,11 @@ struct ContentPostDetail: View {
         command.react(app, postID: postID, commentID: pending.commentID, action: pending.action, page: pending.page, opening: pending.opening)
     }
     private func reply(_ value: JSONValue?) {
-        guard app.isSignedIn else { app.showSignIn(); return }
-        var arguments = args; arguments["reply"] = .bool(true)
-        if let floor = value?.nativeString("floor").flatMap(ContentReadingTarget.floorNumber) { arguments["quotedFloor"] = .integer(floor) }
-        if let author = value?.nativeString("authorName") { arguments["replyToAuthor"] = .string(author) }
-        if let nodes = value?["nodes"] { arguments["replyToText"] = .string(ContentQuoteContext.text(nodes)) }
-        app.open("PostComposer", arguments)
+        switch ContentReplyAction.resolve(postID: postID, signedIn: app.isSignedIn, loaded: thread.value != .null, quote: value) {
+        case .signIn: app.showSignIn()
+        case .unavailable: break
+        case .compose(let arguments): app.open("PostComposer", arguments)
+        }
     }
     private func jump(_ target: ContentReadingTarget) {
         self.target = target
@@ -330,4 +337,36 @@ struct ContentPostDetail: View {
 
 private func contentFailure(_ error: Error) -> NativeFailure {
     error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.")
+}
+
+/// Subtle cool-neutral section gaps without replacing the reader's selected accent.
+private struct ContentThreadCanvas: View {
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        scheme == .dark
+            ? Color(red: 0.045, green: 0.055, blue: 0.065)
+            : Color(red: 0.925, green: 0.94, blue: 0.955)
+    }
+}
+
+/// An editor entry, not a text field or send button. The system owns keyboard/tab safe areas.
+struct ContentDirectReplyBar: View {
+    let enabled: Bool
+    var reply: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button(action: reply) {
+                Label(String(localized: "content.writeComment", table: "Content"), systemImage: "square.and.pencil")
+                    .font(.body).labelStyle(.titleAndIcon)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.bordered).foregroundStyle(.primary).disabled(!enabled)
+            .padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .background(ContentSurface())
+    }
 }

@@ -64,13 +64,14 @@ struct NativeCodeBlock: View {
 }
 
 private struct NativeAnsiText: View {
+    @Environment(\.nativeRichTextRole) private var role
     let code: NativeCode
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ScrollView(.horizontal) {
             Text(attributedCode)
-                .font(.system(.body, design: .monospaced))
+                .font(role.codeFont)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -79,11 +80,11 @@ private struct NativeAnsiText: View {
 
     private var attributedCode: AttributedString {
         var text = AttributedString(code.code)
-        text.font = .system(.body, design: .monospaced)
+        text.font = role.codeFont
         for span in code.spans {
             guard let range = span.attributedRange(in: text) else { continue }
             // Apply in wire order: overlapping spans have deterministic last-run precedence.
-            text[range].font = .system(.body, design: .monospaced).weight(span.bold ? .bold : .regular)
+            text[range].font = role.codeFont.weight(span.bold ? .bold : .regular)
             text[range].underlineStyle = span.underline ? .single : nil
             text[range].foregroundColor = palette(span.fg)
             text[range].backgroundColor = palette(span.bg)
