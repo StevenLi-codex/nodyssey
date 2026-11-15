@@ -11,6 +11,7 @@ struct NativeBrowser: View {
     var title: String = "Sign in"
     var goal: NativeBrowserGoal = .login
     var onFinished: () -> Void = {}
+    @EnvironmentObject private var app: NativeAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var closeRequested = false
     @State private var externalSignal = 0
@@ -19,7 +20,7 @@ struct NativeBrowser: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                NativeAuthenticationWebView(url: url, goal: goal, closeRequested: closeRequested, externalSignal: externalSignal,
+                NativeAuthenticationWebView(app: app, url: url, goal: goal, closeRequested: closeRequested, externalSignal: externalSignal,
                     onFailure: { failure = $0 }, onClosed: {
                         onFinished()
                         dismiss()
@@ -46,6 +47,7 @@ struct NativeBrowser: View {
 }
 
 private struct NativeAuthenticationWebView: UIViewControllerRepresentable {
+    let app: NativeAppModel
     let url: String
     let goal: NativeBrowserGoal
     let closeRequested: Bool
@@ -54,7 +56,10 @@ private struct NativeAuthenticationWebView: UIViewControllerRepresentable {
     let onClosed: () -> Void
 
     func makeUIViewController(context: Context) -> AuthenticationController {
-        AuthenticationController(url: url, goal: goal, onFailure: onFailure, onClosed: onClosed)
+        // Register synchronously, before viewDidLoad -> start -> boundary emission.
+        let token = goal == .login || goal == .oneTapLogin || goal == .challenge ? app.beginAuthenticationPresentation() : nil
+        return AuthenticationController(url: url, goal: goal, onFailure: onFailure, onClosed: onClosed,
+                                        onTeardown: { app.endAuthenticationPresentation(token) })
     }
     func updateUIViewController(_ controller: AuthenticationController, context: Context) {
         if closeRequested { controller.close(notify: true) }
@@ -71,6 +76,7 @@ private final class AuthenticationController: UIViewController, WKNavigationDele
     private let goal: NativeBrowserGoal
     private let onFailure: (String) -> Void
     private let onClosed: () -> Void
+    private let onTeardown: () -> Void
     private var session: NativeBrowserSession?
     private var mainWebView: WKWebView?
     private var popup: WKWebView?
@@ -81,11 +87,12 @@ private final class AuthenticationController: UIViewController, WKNavigationDele
     private let progress = UIActivityIndicatorView(style: .medium)
 
     init(url: String, goal: NativeBrowserGoal, onFailure: @escaping (String) -> Void,
-         onClosed: @escaping () -> Void) {
+         onClosed: @escaping () -> Void, onTeardown: @escaping () -> Void) {
         initialURL = url
         self.goal = goal
         self.onFailure = onFailure
         self.onClosed = onClosed
+        self.onTeardown = onTeardown
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("Use init(url:goal:onFailure:onClosed:)") }
@@ -181,7 +188,15 @@ private final class AuthenticationController: UIViewController, WKNavigationDele
             web.navigationDelegate = nil
             web.uiDelegate = nil
         }
-        session?.close { [self] error in
+        guard let session else {
+            onTeardown()
+            if notify { onClosed() }
+            return
+        }
+        session.close { [self] error in
+            // Restore/publish is part of close; retain the public presenter until
+            // final drain completes, including an unchanged-cookie cancellation.
+            onTeardown()
             if error != nil { onFailure("Cookies could not be synchronized. Please try again.") }
             if notify { onClosed() }
         }

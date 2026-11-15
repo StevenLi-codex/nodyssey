@@ -72,21 +72,60 @@ struct AccountRequireSignIn: View {
     }
 }
 
+struct AccountSurface: View {
+    @Environment(\.colorScheme) private var scheme
+    var canvas = false
+    var body: some View {
+        (scheme == .dark
+            ? (canvas ? Color(.sRGB, white: 0.035, opacity: 1) : Color(.sRGB, white: 0.085, opacity: 1))
+            : (canvas ? Color(.sRGB, white: 0.95, opacity: 1) : Color.white))
+    }
+}
+
 struct AccountProfileHeader: View {
     let profile: JSONValue
     var body: some View {
-        HStack {
-            if let url = profile.nativeString("avatarUrl") { NativeRemoteImage(url: url).frame(width: 52, height: 52).clipShape(Circle()) }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(profile.nativeString("name") ?? "").font(.title3.weight(.semibold))
-                if let uid = profile.nativeInt("uid") { Text("UID \(String(uid))").font(.caption).textSelection(.enabled) }
-                if let rank = profile.nativeInt("rank") { LabeledContent("profile_level", value: String(rank)) }
-                if let chicken = profile.nativeInt("chickenCount") { LabeledContent("profile_chicken", value: String(chicken)) }
-                if let stars = profile.nativeInt("starCount") { LabeledContent("profile_stars", value: String(stars)) }
-                if let date = profile.nativeString("createdAt") { Text(date).font(.caption) }
-                if let bio = profile.nativeString("bio"), !bio.isEmpty { Text(bio).textSelection(.enabled) }
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    Circle().fill(.secondary.opacity(0.10))
+                    if let url = profile.nativeString("avatarUrl"), !url.isEmpty { NativeRemoteImage(url: url) }
+                    else { Image(systemName: "person.fill").foregroundStyle(.secondary) }
+                }.frame(width: 64, height: 64).clipShape(Circle()).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(profile.nativeString("name") ?? "").font(.title3.weight(.bold))
+                    if let uid = profile.nativeInt("uid") {
+                        Text("UID \(String(uid))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    if let rank = profile.nativeInt("rank") {
+                        HStack(spacing: 4) { Text("profile_level"); Text(String(rank)) }
+                            .font(.caption.weight(.medium)).foregroundStyle(.tint)
+                    }
+                }
+                Spacer(minLength: 0)
             }
-        }
+            if let bio = profile.nativeString("bio"), !bio.isEmpty {
+                Text(bio).font(.subheadline).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            if let date = profile.nativeString("createdAt") { Text(date).font(.caption).foregroundStyle(.secondary) }
+            if profile.nativeInt("chickenCount") != nil || profile.nativeInt("starCount") != nil {
+                HStack(spacing: 28) {
+                    if let count = profile.nativeInt("chickenCount") { AccountProfileStat(title: "profile_chicken", value: count) }
+                    if let count = profile.nativeInt("starCount") { AccountProfileStat(title: "profile_stars", value: count) }
+                }
+            }
+        }.padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct AccountProfileStat: View {
+    let title: LocalizedStringKey
+    let value: Int64
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(String(value)).font(.headline).monospacedDigit().foregroundStyle(.primary)
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }.accessibilityElement(children: .combine)
     }
 }
 
@@ -108,33 +147,46 @@ struct AccountProfileScreen: View {
     var body: some View {
         List {
             if app.isSignedIn {
-                AccountProfileHeader(profile: profile.value)
+                if profile.value != .null { AccountProfileHeader(profile: profile.value) }
                 AccountProfileStatus(profile: profile)
                 if let uid = profile.value.nativeInt("uid") {
-                    Button("profile_space") { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) }
+                    Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
+                        navigationLabel("profile_space", symbol: "person.crop.circle")
+                    }
                 }
                 Section("profile_section_content") {
                     route("profile_tile_topics", "MyTopics")
                     route("profile_tile_comments", "MyComments")
                     route("profile_tile_collections", "Bookmarks")
-                    Button("profile_tile_following") { app.open("Follow", ["showFollowers": .bool(false)]) }
-                    Button("profile_tile_followers") { app.open("Follow", ["showFollowers": .bool(true)]) }
+                    Button { app.open("Follow", ["showFollowers": .bool(false)]) } label: { navigationLabel("profile_tile_following", symbol: "person.badge.plus") }
+                    Button { app.open("Follow", ["showFollowers": .bool(true)]) } label: { navigationLabel("profile_tile_followers", symbol: "person.2") }
+                }
+                Section {
                     route("profile_attendance_title", "Assets")
                     route("profile_chicken", "Credit")
                     route("profile_stars", "Stardust")
                     route("profile_tile_account", "AccountSettings")
                 }
             } else {
-                Text("profile_signed_out_body")
-                Button("action_sign_in") { app.showSignIn() }.accessibilityIdentifier("native.profile.signin")
+                VStack(alignment: .leading, spacing: 16) {
+                    Image(systemName: "person.crop.circle").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("profile_signed_out_body").font(.body)
+                    Button("action_sign_in") { app.showSignIn() }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .accessibilityIdentifier("native.profile.signin")
+                }.padding(.vertical, 20).frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("profile_guest_section") {
                 route("profile_tile_history", "ReadHistory")
                 route("profile_tools", "CommunityTools")
                 route("profile_tile_about_community", "AboutCommunity")
-                Button("profile_section_settings") { app.open("Settings") }.accessibilityIdentifier("native.profile.settings")
+                Button { app.open("Settings") } label: { navigationLabel("profile_section_settings", symbol: "gearshape") }
+                    .accessibilityIdentifier("native.profile.settings")
             }
         }
+        .listStyle(.plain).scrollContentBackground(.hidden)
+        .listRowSeparatorTint(.secondary.opacity(0.15))
+        .background(AccountSurface(canvas: true))
         .navigationTitle("profile_space")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -146,7 +198,18 @@ struct AccountProfileScreen: View {
         .refreshable { await profile.refresh() }
     }
     private func route(_ title: String, _ destination: String) -> some View {
-        Button(LocalizedStringKey(title)) { app.open(destination) }
+        let symbols = ["MyTopics": "text.bubble", "MyComments": "bubble.left.and.bubble.right", "Bookmarks": "bookmark",
+                       "Assets": "calendar", "Credit": "gift", "Stardust": "star", "AccountSettings": "person.crop.circle.badge.gearshape",
+                       "ReadHistory": "clock", "CommunityTools": "wrench.and.screwdriver", "AboutCommunity": "info.circle"]
+        return Button { app.open(destination) } label: { navigationLabel(title, symbol: symbols[destination] ?? "chevron.right") }
+    }
+    private func navigationLabel(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.body).frame(width: 24).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(title)).font(.body).foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }.frame(minHeight: 44).contentShape(Rectangle())
     }
 }
 

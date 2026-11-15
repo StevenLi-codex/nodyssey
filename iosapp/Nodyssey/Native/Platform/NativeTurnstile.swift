@@ -81,10 +81,13 @@ struct NativeTurnstile: UIViewRepresentable {
                 if allow { loaded = true }
                 decisionHandler(allow ? .allow : .cancel)
             } else if action.targetFrame != nil {
-                // This is the actual Turnstile frame, not an unrestricted subframe escape hatch.
-                decisionHandler(url.scheme == "https" && url.host == "challenges.cloudflare.com"
-                                && url.user == nil && url.password == nil && (url.port == nil || url.port == 443)
-                                ? .allow : .cancel)
+                // Cloudflare also creates local blank/srcdoc challenge frames. Admit only those
+                // exact subframe documents, never about: main-frame loads or new windows.
+                // https://developers.cloudflare.com/turnstile/get-started/mobile-implementation/
+                let localChallengeFrame = url.absoluteString == "about:blank" || url.absoluteString == "about:srcdoc"
+                let remoteChallengeFrame = url.scheme == "https" && url.host == "challenges.cloudflare.com"
+                    && url.user == nil && url.password == nil && (url.port == nil || url.port == 443)
+                decisionHandler(localChallengeFrame || remoteChallengeFrame ? .allow : .cancel)
             } else { decisionHandler(.cancel) } // no new window
         }
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {

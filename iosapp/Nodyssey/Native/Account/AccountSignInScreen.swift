@@ -58,7 +58,12 @@ struct AccountSignInScreen: View {
         .onAppear {
             platformRequest = NativePlatform.shared.ready { context, _ in oneTapAvailable = context?.oneTapSignInPath != nil }
         }
-        .onChange(of: app.generation) { _ in cancelAuth(); if app.isSignedIn { dismiss() } }
+        .onChange(of: app.generation) { _ in
+            // Browser startup rotates the private epoch before WebKit loads.
+            // It owns its cancellation/drain; don't cancel or dismiss its parent.
+            guard !app.ownsAuthenticationPresentation else { return }
+            cancelAuth(); if app.isSignedIn { dismiss() }
+        }
         .onDisappear { platformRequest?.cancel(); cancelAuth() }
     }
     private func submit() {

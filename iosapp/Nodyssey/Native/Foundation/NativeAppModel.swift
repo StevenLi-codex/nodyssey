@@ -18,7 +18,15 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
                   let epoch = session.nativeString("identityEpoch"), !epoch.isEmpty,
                   oldEpoch == epoch,
                   oldValue.nativeBool("isSignedIn") == session.nativeBool("isSignedIn") else {
-                invalidateSession()
+                // The browser's cookie mutation also rotates the session DTO epoch.
+                // Revoke private work, but don't tear down its public presenter on
+                // an epoch-only emission (either collector may arrive first).
+                let epochOnly = validEpoch(oldValue) != nil && validEpoch(session) != nil &&
+                    oldValue.nativeBool("isSignedIn") != nil &&
+                    oldValue.nativeBool("isSignedIn") == session.nativeBool("isSignedIn") &&
+                    session.nativeInt("generation") != nil &&
+                    oldValue.nativeInt("generation") == session.nativeInt("generation")
+                invalidateSession(preservingAuthentication: epochOnly)
                 return
             }
         }
@@ -57,7 +65,15 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
             if oldValue != .null,
                oldValue.nativeString("identityEpoch") != privateBoundary.nativeString("identityEpoch") ||
                (oldValue.nativeString("phase") == "READY" && privateBoundary.nativeString("phase") != "READY") {
-                invalidateSession()
+                let phase = privateBoundary.nativeString("phase")
+                let previousPhase = oldValue.nativeString("phase")
+                // Mutation epochs revoke every private owner, including stale
+                // editors, but authentication is the producer of this transition.
+                // Keep only a public auth root; UNKNOWN/malformed recovery still
+                // tears it down, as do signed-in changes in the session collector.
+                invalidateSession(preservingAuthentication:
+                    (phase == "TRANSITIONING" && privateBoundary.nativeBool("recoveryEligible") == false) ||
+                    (previousPhase == "TRANSITIONING" && oldValue.nativeBool("recoveryEligible") == false && phase == "READY"))
             }
         }
     }
@@ -72,6 +88,25 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     private var requests: [UUID: (changesSession: Bool, task: Task<JSONValue, Error>)] = [:]
     private var foregroundTask: Task<Void, Never>?
     private var foregroundRunning = false
+    private var authenticationPresentation: (token: UUID, destinationID: UUID)?
+    var ownsAuthenticationPresentation: Bool {
+        guard let authenticationPresentation else { return false }
+        return sheet?.id == authenticationPresentation.destinationID
+    }
+
+    /// Register before WebKit starts its intentional cookie mutation, never for
+    /// ordinary/account-management browsers. The token cannot retain private routes.
+    func beginAuthenticationPresentation() -> UUID? {
+        guard let sheet, sheet.route == "SignIn" || (sheet.route == "Web" &&
+            ["SIGN_IN", "ONE_TAP_SIGN_IN", "CHALLENGE"].contains(sheet.arguments["goal"]?.string ?? "")) else { return nil }
+        let token = UUID()
+        authenticationPresentation = (token, sheet.id)
+        return token
+    }
+
+    func endAuthenticationPresentation(_ token: UUID?) {
+        if let token, authenticationPresentation?.token == token { authenticationPresentation = nil }
+    }
 
     var activeSite: NativeSite? {
         site.nativeString("current").flatMap(NativeSite.init(rawValue:))
@@ -517,7 +552,14 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         stores.removeAll { $0.value == nil }
         if !stores.contains(where: { $0.value === store }) { stores.append(WeakNativeStore(store)) }
     }
-    private func invalidateSession() {
+    private func invalidateSession(preservingAuthentication: Bool = false) {
+        let authentication = preservingAuthentication ? sheet.flatMap { destination in
+            guard authenticationPresentation?.destinationID == destination.id else { return nil as NativeDestination? }
+            return destination.route == "SignIn" || (destination.route == "Web" &&
+                ["SIGN_IN", "ONE_TAP_SIGN_IN", "CHALLENGE"].contains(destination.arguments["goal"]?.string ?? ""))
+                ? destination : nil
+        } : nil
+        if authentication == nil { authenticationPresentation = nil }
         privateResetConfirmation = nil
         let owners = Array(departures.values)
         departures = [:]
@@ -525,6 +567,9 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         for request in requests.values where !request.changesSession { request.task.cancel() }
         for store in stores { store.value?.invalidate() }
         generation += 1
-        clearNavigation()
+        homePath = []; notificationsPath = []; profilePath = []; sheetPath = []
+        // Assign the same destination identity so a live nested WKWebView isn't
+        // dismantled and reseeded merely because private admission closed.
+        sheet = authentication
     }
 }

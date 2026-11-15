@@ -44,10 +44,10 @@ struct ContentPostDetail: View {
                     if let resume {
                         Button(String(localized: "content.resume", table: "Content")) { jump(resume.clamped(to: totalPages)) }
                     }
-                    Section {
-                        Text(thread.value.nativeString("title") ?? "").font(.title3.weight(.semibold)).textSelection(.enabled)
-                        if let body = thread.value["body"], body != .null { floor(body, page: 1, opening: true).id("#0") }
-                    }
+                    if let body = thread.value["body"], body != .null { floor(body, page: 1, opening: true).id("#0") }
+                    else { Text(thread.value.nativeString("title") ?? "").font(.headline).textSelection(.enabled) }
+                    Text(String(localized: "content.reply", table: "Content"))
+                        .font(.subheadline.weight(.semibold)).listRowSeparator(.hidden)
                     if firstPage > 1 {
                         Button(String(localized: "content.previous", table: "Content")) { load(page: firstPage - 1, extend: true) }.disabled(loadingPage || command.busy)
                     }
@@ -55,12 +55,14 @@ struct ContentPostDetail: View {
                         let comment = row.value
                         let page = row.page
                         let label = comment.nativeString("floor")
-                        Section {
+                        VStack(alignment: .leading, spacing: 0) {
                             if let firstNewFloor, label.flatMap(ContentReadingTarget.floorNumber) == firstNewFloor {
                                 Label(String(localized: "content.newReplies", table: "Content"), systemImage: "sparkles").foregroundStyle(.tint)
                             }
                             floor(comment, page: page, opening: false)
                         }.id(label ?? row.id)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                        .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
                     }
                     if thread.value.nativeBool("hasNextPage") == true || lastPage < totalPages {
                         Button(String(localized: "content.next", table: "Content")) { load(page: lastPage + 1, extend: true) }.disabled(loadingPage || command.busy)
@@ -80,6 +82,8 @@ struct ContentPostDetail: View {
                     Button(String(localized: "content.reload", table: "Content")) { loadRetry += 1 }
                 }
             }
+            .listStyle(.plain).scrollContentBackground(.hidden)
+            .background(ContentSurface(canvas: true))
             .onChange(of: thread.value) { value in
                 if value != .null { showPreview = false }
                 restoreScroll(proxy)
@@ -162,23 +166,36 @@ struct ContentPostDetail: View {
     }
     @ViewBuilder private func floor(_ value: JSONValue, page: Int64, opening: Bool) -> some View {
         let identity = value.nativeString("floor") ?? (opening ? "#0" : value.nativeInt("commentId").map(String.init) ?? "unknown")
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                ContentAvatar(value: value)
-                Button(value.nativeString("authorName") ?? "") {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Button {
                     if let uid = value.nativeInt("authorUid") { app.open("UserSpace", ["uid": .integer(uid)]) }
-                }.disabled(value.nativeInt("authorUid") == nil)
-                if value.nativeBool("isOriginalPoster") == true { Text(String(localized: "content.originalPoster", table: "Content")).font(.caption) }
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        ContentAvatar(value: value)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(value.nativeString("authorName") ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            if let time = value.nativeString("createdAtText") { Text(time).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }.frame(minHeight: 44, alignment: .topLeading).contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(value.nativeInt("authorUid") == nil)
                 Spacer()
-                if let label = value.nativeString("floor") { Text(label).foregroundStyle(.secondary) }
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let label = value.nativeString("floor") { Text(label).foregroundStyle(.secondary) }
+                    if value.nativeBool("isOriginalPoster") == true {
+                        Text(String(localized: "content.originalPoster", table: "Content")).foregroundStyle(.tint)
+                    }
+                }.font(.caption)
             }
+            if opening { Text(thread.value.nativeString("title") ?? "").font(.headline).textSelection(.enabled) }
             if !value.nativeArray("badges").isEmpty {
-                Text(value.nativeArray("badges").compactMap(\.string).joined(separator: " · ")).font(.caption)
+                Text(value.nativeArray("badges").compactMap(\.string).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
             }
-            HStack {
-                if let time = value.nativeString("createdAtText") { Text(time) }
-                if value.nativeBool("isEdited") == true { Text(String(localized: "content.edited", table: "Content")); Text(value.nativeString("editedAtText") ?? "") }
-            }.font(.caption).foregroundStyle(.secondary)
+            if value.nativeBool("isEdited") == true {
+                HStack {
+                    Text(String(localized: "content.edited", table: "Content")); Text(value.nativeString("editedAtText") ?? "")
+                }.font(.caption).foregroundStyle(.secondary)
+            }
             if value.nativeBool("isBlocked") == true && !expanded.contains(identity) {
                 Button(String(localized: "content.revealBlocked", table: "Content")) { expanded.insert(identity) }
             } else {
@@ -190,7 +207,9 @@ struct ContentPostDetail: View {
                         .font(.footnote).id("\(postID)|\(identity)|signature")
                 }
             }
-            HStack {
+            Divider().opacity(0.45)
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 16) {
                 ContentShareLink(
                     postID: postID,
                     page: page,
@@ -201,11 +220,17 @@ struct ContentPostDetail: View {
                         openingPost: opening,
                         revealedBlocked: expanded.contains(identity)
                     )
-                )
-                Button(String(localized: "content.reply", table: "Content")) { reply(value) }
+                ).labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                Button { reply(value) } label: {
+                    Label(String(localized: "content.reply", table: "Content"), systemImage: "bubble.right")
+                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                }
                 if value.nativeBool("isMine") == true, let id = value.nativeInt("commentId") {
-                    Button(String(localized: "content.edit", table: "Content")) {
+                    Button {
                         app.open("PostComposer", ["edit": .bool(true), "postId": .integer(postID), "commentId": .integer(id), "isOpeningPost": .bool(opening), "page": .integer(page)])
+                    } label: {
+                        Label(String(localized: "content.edit", table: "Content"), systemImage: "square.and.pencil")
+                            .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                     }
                 }
                 if let id = value.nativeInt("commentId") {
@@ -213,8 +238,14 @@ struct ContentPostDetail: View {
                     reactionButton("ChickenLeg", field: "liked", count: "likeCount", symbol: "gift", value: value, commentID: id, page: page, opening: opening)
                     reactionButton("Dislike", field: "disliked", count: "dislikeCount", symbol: "hand.thumbsdown", value: value, commentID: id, page: page, opening: opening)
                 }
+              }.font(.subheadline).foregroundStyle(.secondary)
             }.buttonStyle(.borderless).disabled(command.busy || loadingPage)
         }
+        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 2)
+        .frame(maxWidth: .infinity, alignment: .leading).background(ContentSurface())
+        .padding(.bottom, 8).background(ContentSurface(canvas: true))
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
         .onAppear { visibleTarget = ContentReadingTarget(floor: value.nativeString("floor"), page: page) }
     }
     private func reactionButton(_ action: String, field: String, count: String, symbol: String, value: JSONValue, commentID: Int64, page: Int64, opening: Bool) -> some View {
@@ -232,7 +263,11 @@ struct ContentPostDetail: View {
             }
         } label: {
             Label(value["reactions"]?.nativeInt(count).map(String.init) ?? "—", systemImage: spent ? symbol + ".fill" : symbol)
-        }.disabled(spent || command.reactionsBlocked).accessibilityLabel(Text(action == "Upvote" ? String(localized: "content.Upvote", table: "Content") : action == "ChickenLeg" ? String(localized: "content.ChickenLeg", table: "Content") : String(localized: "content.Dislike", table: "Content")))
+                .foregroundStyle(spent ? Color.primary : Color.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+        }.disabled(spent || command.reactionsBlocked)
+        .accessibilityValue(Text(value["reactions"]?.nativeInt(count).map(String.init) ?? "—"))
+        .accessibilityLabel(Text(action == "Upvote" ? String(localized: "content.Upvote", table: "Content") : action == "ChickenLeg" ? String(localized: "content.ChickenLeg", table: "Content") : String(localized: "content.Dislike", table: "Content")))
     }
     private var isTracked: Bool { (tracked.value.array ?? []).contains { $0.nativeInt("postId") == postID } }
     private func toggleTracking() {

@@ -9,6 +9,7 @@ struct NativeDestination { var route: String; var arguments: [String: JSONValue]
     var transport: any NativeTransport { fatalError() }
     var siteOrigin: String? { fatalError() }
     var isSignedIn: Bool { fatalError() }
+    var ownsAuthenticationPresentation: Bool { fatalError() }
     func request(_ operation: String, _ arguments: [String: JSONValue] = [:]) async throws -> JSONValue { fatalError() }
     func open(_ route: String, _ arguments: [String: JSONValue] = [:]) { fatalError() }
     func openLink(_ url: String) { fatalError() }

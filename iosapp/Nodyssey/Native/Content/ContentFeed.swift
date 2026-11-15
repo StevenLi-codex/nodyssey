@@ -15,17 +15,31 @@ struct ContentPostList: View {
     @State private var positions = ContentFeedMemory()
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                ContentCategoryPicker(categories: homeCategories, selection: $category)
-                ContentSortPicker(selection: Binding(get: { sort }, set: { command.setFeedSort($0, app: app) }))
-                    .disabled(command.busy || app.settings == .null)
+            HStack(spacing: 0) {
+                ContentBoardTabs(categories: homeCategories, selection: $category)
                 Menu {
                     ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
                         Button(slug) { category = slug }
                     }
                     Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
-                } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
-            }.padding(.horizontal)
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
+                        .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
+                }
+                #if os(macOS)
+                .menuStyle(.borderlessButton)
+                #endif
+                .menuIndicator(.hidden).fixedSize()
+                .background(ContentSurface())
+            }.background(ContentSurface())
+            HStack(spacing: 20) {
+                sortTab("content.lastReply", value: "LAST_REPLY")
+                sortTab("content.postTime", value: "POST_TIME")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16).background(ContentSurface())
+            .disabled(command.busy || app.settings == .null)
+            Divider()
             if ContentPreferences(settings: app.settings).homePageBar {
                 ContentPageEntry(text: $pageText) { page = $0 }.padding(.horizontal)
             }
@@ -34,6 +48,7 @@ struct ContentPostList: View {
             ContentPagedList(operation: "feed", arguments: arguments, restoreID: positions.position(board: category, sort: sort)?.postID, visible: { id, page in positions.record(board: category, sort: sort, postID: id, page: page) })
                 .id("\(category)|\(sort)|\(page)")
         }
+        .background(ContentSurface(canvas: true))
         .navigationTitle(Text(String(localized: "content.posts", table: "Content")))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -62,6 +77,19 @@ struct ContentPostList: View {
         .task(id: app.generation) { await refreshCategories() }
         .onDisappear { command.cancel(); page = positions.position(board: category, sort: sort)?.page ?? page }
     }
+    private func sortTab(_ key: String.LocalizationValue, value: String) -> some View {
+        Button { command.setFeedSort(value, app: app) } label: {
+            Text(String(localized: key, table: "Content"))
+                .font(.subheadline.weight(sort == value ? .semibold : .regular))
+                .foregroundStyle(sort == value ? Color.primary : Color.secondary)
+                .frame(minHeight: 44)
+                .overlay(alignment: .bottom) {
+                    if sort == value { Capsule().fill(.tint).frame(width: 22, height: 3) }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(sort == value ? [.isSelected] : [])
+    }
     private var homeCategories: JSONValue {
         let disabled = Set((app.settings.nativeArray("disabledHomeBoards") + app.settings.nativeArray("hiddenHomeBoards")).compactMap(\.string))
         let order = app.settings.nativeArray("homeBoardOrder").compactMap(\.string)
@@ -78,6 +106,32 @@ struct ContentPostList: View {
         catch is CancellationError { }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
     }
+}
+
+/// Board selection remains bound to the canonical feed/paging arguments.
+struct ContentBoardTabs: View {
+    let categories: JSONValue
+    @Binding var selection: String
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
+                tab(String(localized: "content.all", table: "Content"), slug: "")
+                ForEach((categories.array ?? []).compactMap { value -> Board? in
+                    guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
+                    return Board(id: slug, title: value.nativeString("title") ?? slug)
+                }) { board in tab(board.title, slug: board.id) }
+            }.padding(.horizontal, 16)
+        }
+    }
+    private func tab(_ title: String, slug: String) -> some View {
+        Button { selection = slug } label: {
+            Text(title).font(.subheadline.weight(selection == slug ? .semibold : .regular))
+                .foregroundStyle(selection == slug ? Color.primary : Color.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
+    }
+    private struct Board: Identifiable { let id: String; let title: String }
 }
 
 struct ContentCategoryPicker: View {
@@ -132,6 +186,8 @@ struct ContentPagedList: View {
                     ForEach(window.rows) { row in
                         Button { app.open("PostDetail", ["postId": .integer(row.id), "preview": row.value["summary"] ?? .null]) } label: { ContentPostRow(value: row.value) }
                             .buttonStyle(.plain).id(row.id)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                            .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
                             .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)") {
                                 visible(row.id, row.page)
                                 guard let arguments = window.accessArguments(for: row.id) else { return }
@@ -148,6 +204,8 @@ struct ContentPagedList: View {
                 loadState("refresh")
                 if let total = store.value.nativeInt("totalPages") { Text("\(total)").accessibilityLabel(Text(String(localized: "content.totalPages", table: "Content"))) }
             }
+            .listStyle(.plain).scrollContentBackground(.hidden)
+            .background(ContentSurface(canvas: true))
             .onChange(of: store.value) { _ in
                 if !restored, let restoreID, case .success(let window) = window, window.rows.contains(where: { $0.id == restoreID }) {
                     proxy.scrollTo(restoreID, anchor: .top); restored = true

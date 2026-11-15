@@ -72,30 +72,33 @@ struct AccountSpaceScreen: View {
     private var isSelf: Bool { own.value.nativeInt("uid") == uid && app.isSignedIn }
 
     var body: some View {
-        VStack {
-            Picker("space_tab_general", selection: $tab) {
-                Text("space_tab_general").tag("general")
-                Text("space_tab_topics").tag("topics")
-                Text("space_tab_comments").tag("comments")
-                if isSelf { Text("space_tab_collections").tag("collections") }
-            }.pickerStyle(.segmented).padding(.horizontal)
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 24) {
+                    spaceTab("space_tab_general", value: "general")
+                    spaceTab("space_tab_topics", value: "topics")
+                    spaceTab("space_tab_comments", value: "comments")
+                    if isSelf { spaceTab("space_tab_collections", value: "collections") }
+                }.padding(.horizontal, 16)
+            }.background(AccountSurface())
+            Divider()
             if tab == "general" {
                 List {
                     AccountStoreStatus(store: profile) { reload() }
                     if profile.value != .null {
                         AccountProfileHeader(profile: profile.value)
-                        if let topics = profile.value.nativeInt("topicCount") { LabeledContent("space_stat_topics", value: String(topics)) }
-                        if let comments = profile.value.nativeInt("commentCount") { LabeledContent("space_stat_comments", value: String(comments)) }
-                        if isSelf { Button("profile_edit") { app.open("AccountProfileFields") } }
-                        else {
-                            Button(LocalizedStringKey(profile.value.nativeBool("followed") == true ? "space_following" : "space_follow")) {
-                                guard app.isSignedIn else { app.showSignIn(); return }
-                                pending = AccountPendingWrite(profile.value.nativeBool("followed") == true ? "social.unfollow" : "social.follow", ["uid": .integer(uid)])
-                            }.disabled(action.blocked)
-                            Button("space_message") {
-                                guard app.isSignedIn else { app.showSignIn(); return }
-                                if let name = profile.value.nativeString("name") { app.open("MessageThread", ["uid": .integer(uid), "userName": .string(name)]) }
-                            }
+                        HStack(spacing: 36) {
+                            if let topics = profile.value.nativeInt("topicCount") { AccountProfileStat(title: "space_stat_topics", value: topics) }
+                            if let comments = profile.value.nativeInt("commentCount") { AccountProfileStat(title: "space_stat_comments", value: comments) }
+                        }.padding(.vertical, 8)
+                        if isSelf {
+                            Button("profile_edit") { app.open("AccountProfileFields") }
+                                .buttonStyle(.bordered).frame(minHeight: 44)
+                        } else {
+                          ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 12) { socialActions }
+                            VStack(alignment: .leading, spacing: 8) { socialActions }
+                          }
                         }
                         Section {
                             AccountStoreStatus(store: notes) { Task { await loadNotes() } }
@@ -108,11 +111,14 @@ struct AccountSpaceScreen: View {
                         }
                     }
                     AccountActionStatus(action: action)
-                }.refreshable { await profile.load(app, "profile.user", ["uid": .integer(uid)]) }
+                }
+                .listStyle(.plain).scrollContentBackground(.hidden).background(AccountSurface(canvas: true))
+                .refreshable { await profile.load(app, "profile.user", ["uid": .integer(uid)]) }
             } else {
                 AccountPostPage(uid: uid, mode: tab).id("\(uid):\(tab):\(app.generation)")
             }
         }
+        .background(AccountSurface(canvas: true))
         .navigationTitle(profile.value.nativeString("name") ?? String(localized: "space_tab_general"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -135,6 +141,28 @@ struct AccountSpaceScreen: View {
             }
         }
         .onDisappear { action.cancel() }
+    }
+    private func spaceTab(_ title: LocalizedStringKey, value: String) -> some View {
+        Button { tab = value } label: {
+            Text(title).font(.subheadline.weight(tab == value ? .semibold : .regular))
+                .foregroundStyle(tab == value ? Color.primary : Color.secondary)
+                .frame(minWidth: 44, minHeight: 48)
+                .overlay(alignment: .bottom) {
+                    if tab == value { Capsule().fill(.tint).frame(width: 22, height: 3) }
+                }
+        }.buttonStyle(.plain).accessibilityAddTraits(tab == value ? [.isSelected] : [])
+    }
+    private var socialActions: some View {
+        Group {
+            Button(LocalizedStringKey(profile.value.nativeBool("followed") == true ? "space_following" : "space_follow")) {
+                guard app.isSignedIn else { app.showSignIn(); return }
+                pending = AccountPendingWrite(profile.value.nativeBool("followed") == true ? "social.unfollow" : "social.follow", ["uid": .integer(uid)])
+            }.buttonStyle(.borderedProminent).disabled(action.blocked).frame(minHeight: 44)
+            Button("space_message") {
+                guard app.isSignedIn else { app.showSignIn(); return }
+                if let name = profile.value.nativeString("name") { app.open("MessageThread", ["uid": .integer(uid), "userName": .string(name)]) }
+            }.buttonStyle(.bordered).frame(minHeight: 44)
+        }
     }
     private func reload() { Task { await profile.load(app, "profile.user", ["uid": .integer(uid)]) } }
     private func applyNote() {
@@ -176,16 +204,10 @@ struct AccountPostPage: View {
             if rows.isEmpty && !loading && failure == nil { Text(LocalizedStringKey(mode == "comments" ? "space_empty_comments" : mode == "collections" ? "space_empty_collections" : "space_empty_topics")) }
             ForEach(rows) { row in
                 Button { open(row.value) } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(row.value.nativeString("title") ?? row.value.nativeString("postTitle") ?? "#\(String(row.value.nativeInt("postId")!))")
-                        if let excerpt = row.value.nativeString("excerpt") { Text(excerpt).font(.callout).foregroundStyle(.secondary) }
-                        HStack {
-                            if let board = row.value.nativeString("categoryTitle") { Text(board) }
-                            if let date = row.value.nativeString("createdAtText") { Text(date) }
-                            if let count = row.value.nativeInt("commentCount") { Label(String(count), systemImage: "bubble") }
-                        }.font(.caption)
-                    }
-                }
+                    AccountSpacePostCard(value: row.value)
+                }.buttonStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                .listRowSeparator(.hidden).listRowBackground(AccountSurface(canvas: true))
             }
             Section {
                 HStack {
@@ -199,6 +221,7 @@ struct AccountPostPage: View {
                 }
             }
         }
+        .listStyle(.plain).scrollContentBackground(.hidden).background(AccountSurface(canvas: true))
         .searchable(text: $query)
         .task(id: "\(uid):\(mode):\(requested):\(refresh):\(app.generation)") { await load() }
         .refreshable { refresh += 1 }
@@ -232,3 +255,33 @@ struct AccountPostPage: View {
 }
 
 struct AccountPostRow: Identifiable { let id: String; let value: JSONValue }
+
+struct AccountSpacePostCard: View {
+    let value: JSONValue
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let date = value.nativeString("createdAtText") { Text(date).font(.caption).foregroundStyle(.secondary) }
+            Text(value.nativeString("title") ?? value.nativeString("postTitle") ?? value.nativeInt("postId").map { "#\($0)" } ?? "")
+                .font(.body.weight(.medium)).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+            if let excerpt = value.nativeString("excerpt"), !excerpt.isEmpty {
+                Text(excerpt).font(.body).foregroundStyle(.secondary).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            }
+            Divider().opacity(0.45)
+            ViewThatFits(in: .horizontal) {
+                HStack { metadata }
+                VStack(alignment: .leading, spacing: 8) {
+                    if let board = value.nativeString("categoryTitle") { Text(board).foregroundStyle(.tint) }
+                    if let count = value.nativeInt("commentCount") { Label(String(count), systemImage: "bubble.right") }
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading).background(AccountSurface())
+        .padding(.bottom, 8).background(AccountSurface(canvas: true)).contentShape(Rectangle())
+    }
+    @ViewBuilder private var metadata: some View {
+        if let board = value.nativeString("categoryTitle") { Text(board).foregroundStyle(.tint) }
+        Spacer(minLength: 8)
+        if let count = value.nativeInt("commentCount") { Label(String(count), systemImage: "bubble.right") }
+    }
+}
