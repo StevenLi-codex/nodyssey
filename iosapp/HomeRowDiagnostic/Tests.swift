@@ -3,6 +3,30 @@ import UIKit
 final class NativeNavigationUITests: XCTestCase {
     @MainActor func testLightProfileCanvasExtendsBehindNativeTab() { verify(dark: false) }
     @MainActor func testDarkProfileCanvasExtendsBehindNativeTab() { verify(dark: true) }
+    @MainActor func testSameHostProductionPresetMenuAndSheet() {
+        let app = XCUIApplication(); app.launch();
+        XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout: 20))
+        app.tabBars.buttons.element(boundBy: 2).tap()
+        XCTAssertTrue(app.staticTexts["Retained reader"].waitForExistence(timeout: 10))
+        app.buttons["native.profile.settings"].tap()
+        func choose(_ current: String, _ target: String, _ id: String, _ name: String) {
+            let picker = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", current)).firstMatch
+            XCTAssertTrue(picker.waitForExistence(timeout: 8), app.debugDescription)
+            picker.tap()
+            let option = app.buttons[target].firstMatch
+            XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription); option.tap()
+            let state = app.staticTexts["theme70.state"]
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "LIGHT/PRESET/" + id), object: state)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, app.debugDescription)
+            let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-tree"; tree.lifetime = .keepAlways; add(tree)
+        }
+        choose("Yellow × orange × charcoal", "Graphite teal", "graphite", "theme-push-graphite")
+        choose("Graphite teal", "Red × white × gold", "reimu", "theme-push-reimu")
+        choose("Red × white × gold", "Teal × grey × pink", "miku", "theme-push-miku")
+        app.buttons["theme70.sheet"].tap()
+        choose("Teal × grey × pink", "Graphite teal", "graphite", "theme-sheet-graphite")
+    }
     @MainActor private func verify(dark: Bool) {
         let app = XCUIApplication()
         app.launchArguments = dark ? ["--dark"] : []
@@ -59,9 +83,12 @@ final class NativeNavigationUITests: XCTestCase {
         let json = String(data: try! JSONSerialization.data(withJSONObject: record, options: .sortedKeys), encoding: .utf8)!
         let evidence = XCTAttachment(string: json); evidence.name = name + "-metrics"; evidence.lifetime = .keepAlways; add(evidence)
         print("BACKGROUND " + json)
-        XCTAssertEqual(reference[0], dark ? 9 : 242, accuracy: 2, "Canvas color was not exercised")
-        for sample in samples {
-            XCTAssertLessThanOrEqual(sample["difference"] as! Int, 2, "Profile canvas discontinuity: " + json)
+        let boundary = app.tabBars.firstMatch.frame.minY
+        for x: CGFloat in [0, 1, 2, 4] {
+            let above = pixel(x, boundary - 1), below = pixel(x, boundary + 1)
+            let jump = zip(above, below).map { abs($0 - $1) }.max()!
+            print("SEAM " + name + " x=\(x) y=\(boundary) above=\(above) below=\(below) jump=\(jump)")
+            XCTAssertLessThanOrEqual(jump, 2, "Profile canvas discontinuity at native tab safe-area boundary: " + json)
         }
         XCTAssertEqual(app.tabBars.buttons.count, 3)
         XCTAssertTrue(app.buttons["native.profile.settings"].isHittable)

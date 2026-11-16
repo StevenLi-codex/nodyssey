@@ -11,7 +11,6 @@ import NodysseyNativeCore
     }
     var body: some Scene { WindowGroup {
         NativeRootView().environmentObject(app).environmentObject(fixture)
-            .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--dark") ? .dark : .light)
             .overlay(alignment: .topLeading) { RetentionGeometryProbe().frame(width: 1, height: 1).allowsHitTesting(false) }
             .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-profile") ? .accessibility2 : .large)
     } }
@@ -23,10 +22,23 @@ struct FixtureDestination: View { let name: String; var body: some View { Text("
 enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : nil } }
 enum NativeEditorScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
 enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { AnyView(FixtureDestination(name: destination.route)) } }
-enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
+enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? {
+    ["Settings", "ThemeSettings"].contains(destination.route) ? AnyView(FixtureThemeDestination()) : nil
+} }
+struct FixtureThemeDestination: View {
+    @EnvironmentObject private var app: NativeAppModel
+    var body: some View {
+        SettingsThemeScreen()
+            .overlay(alignment: .bottom) {
+                Text(["themeMode", "colorSource", "presetId"].map { app.settings[$0]?.string ?? "null" }.joined(separator: "/"))
+                    .accessibilityIdentifier("theme70.state").font(.caption2)
+            }
+            .background(ThemeTintProbe(settings: app.settings, checkpoint: 0, scope: "production-theme").frame(width: 0, height: 0))
+            .toolbar { Button("Theme sheet") { app.sheet = NativeDestination("ThemeSettings") }.accessibilityIdentifier("theme70.sheet") }
+    }
+}
 enum NativeMediaScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
 struct NativeExternalBrowser: View { let url: URL; var body: some View { EmptyView() } }
-struct NativeSettingsAppearance: ViewModifier { let settings: JSONValue; func body(content: Content) -> some View { content } }
 struct NativeRemoteImage: View { let url: String; var aspectFit = true; var body: some View { EmptyView() } }
 struct ContentPostDetail: View { let postID: Int64; let initialFloor: String?; let initialPage: Int64?; let preview: JSONValue?; var body: some View { FixtureDestination(name: "PostDetail") } }
 struct ContentBoardManager: View { let categories: JSONValue; @Binding var selection: String; var body: some View { EmptyView() } }
@@ -42,10 +54,21 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
     private var boundary: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var feeds: [AsyncThrowingStream<JSONValue, Error>.Continuation] = []
     var revoked = false
+    private var settings: JSONValue = .object(["onboardingSeen": .bool(true), "homePageBar": .bool(true),
+        "appLanguage": .string("ENGLISH"), "themeMode": .string(ProcessInfo.processInfo.arguments.contains("--dark") ? "DARK" : "LIGHT"),
+        "colorSource": .string("PRESET"), "presetId": .string("twins"), "paletteStyle": .string("SOFT"),
+        "seedColor": .integer(-13279122), "einkMode": .bool(false)])
     private var profile: JSONValue { .object(["uid": .integer(123), "name": .string("Retained reader"), "chickenCount": .integer(234), "starCount": .integer(12), "rank": .integer(5)]) }
     private var site: JSONValue { .object(["current": .string("DEEPFLOOD"), "selected": .string("DEEPFLOOD"), "requiresRestart": .bool(false), "sites": .array([.object(["id": .string("DEEPFLOOD"), "origin": .string("https://www.deepflood.com"), "displayName": .string("Fixture")])])]) }
     func request(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         switch operation {
+        case "settings.get": return settings
+        case "settings.set":
+            try await Task.sleep(nanoseconds: 120_000_000)
+            var fields = settings.object ?? [:]
+            if let key = arguments["key"]?.string, let value = arguments["value"] { fields[key] = value }
+            settings = .object(fields)
+            return settings
         case "site.get": return site
         case "profile.self": profileReads += 1; return profile
         case "attendance.status": return .object(["uid": .integer(123), "date": .string("2026-11-16"), "hasSignedIn": .bool(true), "gain": .integer(14)])
@@ -62,7 +85,7 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
             case "session.privateBoundary":
                 boundary = continuation
                 continuation.yield(.object(["identityEpoch": .string("A"), "phase": .string("READY"), "requiresConfirmation": .bool(false), "recoveryEligible": .bool(false)]))
-            case "settings.observe": continuation.yield(.object(["onboardingSeen": .bool(true), "homePageBar": .bool(true)]))
+            case "settings.observe": continuation.yield(settings)
             case "profile.self": continuation.yield(profile)
             case "categories", "boards.recent", "messages.list": continuation.yield(.array([]))
             case "notifications.counts": continuation.yield(.object(["interactions": .integer(40), "messages": .integer(0)]))

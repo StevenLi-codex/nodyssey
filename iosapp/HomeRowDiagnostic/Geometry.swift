@@ -26,7 +26,7 @@ struct RetentionGeometryProbe: UIViewRepresentable {
                 guard !view.isHidden, view.alpha > 0.01, view.convert(view.bounds, to: window).intersects(window.bounds) else { return [] }
                 return (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap(visit)
             }
-            guard let scroll = visit(window).filter({ $0.bounds.height > 300 && $0.contentSize.height > $0.bounds.height }).max(by: { $0.bounds.height < $1.bounds.height }) else {
+            guard let scroll = visit(window).filter({ $0.bounds.height > 300 }).max(by: { $0.bounds.height < $1.bounds.height }) else {
                 stableFrames = 0; accessibilityValue = "{}"; return
             }
             let rect = scroll.convert(scroll.bounds, to: window)
