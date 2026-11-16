@@ -77,7 +77,7 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "Software keyboard must really be open")
         let tutorial = app.buttons["Continue"]
         if tutorial.waitForExistence(timeout: 3) { tutorial.tap() }
-        XCTAssertTrue(app.keyboards.buttons["space"].waitForExistence(timeout: 10), "Normal software keyboard keys must be visible, not keyboard onboarding")
+        XCTAssertTrue(app.keyboards.keys["space"].waitForExistence(timeout: 10), "Normal software keyboard keys must be visible, not keyboard onboarding")
         field.typeText("short reply")
         sleep(2)
         let keyboard = app.keyboards.firstMatch.frame
@@ -92,7 +92,7 @@ final class NativeNavigationUITests: XCTestCase {
         app.buttons["expand"].tap()
         XCTAssertTrue(app.buttons["collapse"].waitForExistence(timeout: 5))
         field.typeText("\\nsecond line\\nthird line\\nfourth line")
-        XCTAssertTrue(app.keyboards.buttons["space"].exists)
+        XCTAssertTrue(app.keyboards.keys["space"].exists)
         XCTAssertTrue((field.value as? String)?.contains("fourth line") == true)
         app.buttons["collapse"].tap()
         sleep(2)
