@@ -258,7 +258,7 @@ struct ContentPagedList: View {
                             }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                             .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
-                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)") {
+                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)|\(store.isReplacingPagingWindow)") {
                                 // Row tasks are prefetch hints, never visibility observations.
                                 guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return }
                                 guard let arguments = window.accessArguments(for: row.id) else { return }
@@ -350,7 +350,7 @@ struct ContentPagedList: View {
           }
         }
         .refreshable {
-            guard let ticket = owner, owns(ticket) else { return }
+            guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return }
             jump.cancel()
             guard let id = store.value.nativeString("pagerId") else { retry += 1; return }
             do { _ = try await app.request("paging.refresh", ["pagerId": .string(id)]) }
@@ -389,7 +389,7 @@ struct ContentPagedList: View {
         .onDisappear { command.cancel(); store.cancel(); owner = nil; restored = false; jump.cancel(); pageSheet.cancel() }
     }
     private func goToPage(_ page: Int64, proxy: ScrollViewProxy) {
-        guard let ticket = owner, owns(ticket), !command.busy else { return }
+        guard let ticket = owner, owns(ticket), !command.busy, !store.isReplacingPagingWindow else { return }
         restored = true // Explicit travel wins over an old restoration anchor.
         do { perform(try jump.request(page, snapshot: store.value), ticket: ticket, proxy: proxy) }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INVALID_DATA", message: "Invalid paging window") }

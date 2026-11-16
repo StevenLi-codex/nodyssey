@@ -17,6 +17,7 @@ import NodysseyNativeCore
             }.font(.caption)
             NativeRootView()
         }.environmentObject(app).environmentObject(fixture)
+            .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-profile") ? .accessibility2 : .large)
     } }
 }
 // Real NativeRootView, NativeAppModel, NativeStore, NativeRequestState and root

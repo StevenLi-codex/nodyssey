@@ -1,7 +1,9 @@
 import XCTest
 final class NativeNavigationUITests: XCTestCase {
-    @MainActor private func launch() -> XCUIApplication {
-        let app = XCUIApplication(); app.launch()
+    @MainActor private func launch(large: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        if large { app.launchArguments = ["--large-profile"] }
+        app.launch()
         XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout: 20), app.debugDescription)
         return app
     }
@@ -28,17 +30,26 @@ final class NativeNavigationUITests: XCTestCase {
         print("RETENTION home anchor=" + title + " " + app.staticTexts["requests"].label)
     }
     @MainActor func testProfileTabAndRouteReturnAvoidsFreshNetworkFetch() {
-        let app = launch(); tab(app, 2)
+        let app = launch(large: true); tab(app, 2)
         XCTAssertTrue(app.staticTexts["Retained reader"].waitForExistence(timeout: 8))
         let before = app.staticTexts["requests"].label
         XCTAssertTrue(before.hasPrefix("p1 "), before)
         app.swipeUp()
+        app.swipeUp()
+        XCTAssertFalse(app.staticTexts["Retained reader"].isHittable, "Fixture must actually scroll the production profile")
+        let anchor = app.scrollViews.buttons.allElementsBoundByIndex.first { $0.isHittable && $0.frame.minY > 250 && $0.frame.maxY < app.frame.height - 180 }!
+        let anchorLabel = anchor.label
+        let anchorY = anchor.frame.minY
         let settings = app.buttons["native.profile.settings"]
         tab(app, 0); tab(app, 2)
+        XCTAssertTrue(app.buttons[anchorLabel].isHittable, "Profile tab return lost its visible directory anchor")
+        XCTAssertEqual(app.buttons[anchorLabel].frame.minY, anchorY, accuracy: 3, "Profile tab return changed scroll position")
         XCTAssertTrue(app.staticTexts["requests"].label.hasPrefix("p1 "))
         settings.tap(); back(app)
+        XCTAssertTrue(app.buttons[anchorLabel].isHittable, "Profile route return lost its visible directory anchor")
+        XCTAssertEqual(app.buttons[anchorLabel].frame.minY, anchorY, accuracy: 3, "Profile route return changed scroll position")
         XCTAssertTrue(app.staticTexts["requests"].label.hasPrefix("p1 "), app.staticTexts["requests"].label)
-        app.swipeDown()
+        app.swipeDown(); app.swipeDown(); app.swipeDown()
         XCTAssertTrue(app.staticTexts["Retained reader"].isHittable)
         print("RETENTION profile " + app.staticTexts["requests"].label)
     }
