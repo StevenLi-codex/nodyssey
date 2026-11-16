@@ -15,9 +15,12 @@ concurrency:
 
 jobs:
   archive:
-    runs-on: macos-26
+    # macos-26 arm64 had three pre-step hosted-capacity failures for this exact run.
+    # Keep Xcode 26.6/iPhoneOS 26.5 while using the published Intel capacity pool.
+    runs-on: macos-26-intel
     timeout-minutes: 60
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -Dorg.gradle.workers.max=2
     steps:
       - uses: actions/checkout@v7
