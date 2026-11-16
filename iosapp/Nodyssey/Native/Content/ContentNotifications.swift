@@ -68,11 +68,11 @@ struct ContentNotifications: View {
         .sheet(isPresented: $compose) { NavigationStack { ContentNewConversation() } }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { interactions.invalidate(); return }
-            await interactions.observe(app, "notifications.list")
+            await interactions.observeCached(app, "notifications.list")
         }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { messages.invalidate(); return }
-            await messages.observe(app, "messages.list")
+            await messages.observeCached(app, "messages.list")
         }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { counts.invalidate(); return }

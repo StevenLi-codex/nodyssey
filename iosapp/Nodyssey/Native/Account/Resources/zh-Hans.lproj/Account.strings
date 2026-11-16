@@ -23,6 +23,9 @@
 "native.account.email_unverified" = "未验证";
 "native.account.attendance_fixed" = "固定 5 个鸡腿";
 "native.account.attendance_random" = "随机奖励";
+"native.account.attendance_reward" = "已签到，获得 %@ 个鸡腿";
+"native.account.attendance_view_board" = "查看签到榜";
+"native.account.attendance_amount_unavailable" = "今日已签到（回执未提供奖励数量）";
 "native.account.no_matches" = "本页没有匹配结果。";
 "native.account.empty_rules" = "暂无标题规则。";
 "native.account.empty_blocked" = "暂无屏蔽用户。";

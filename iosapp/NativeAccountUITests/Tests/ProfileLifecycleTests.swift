@@ -67,6 +67,49 @@ import NodysseyNativeCore
     try? await Task.sleep(for: .milliseconds(10))
     #expect(profile.value["name"]?.string == "Synthetic reader")
     second.cancel(); await second.value
+    #expect(profile.value["uid"]?.int == 123)
+}
+
+@Test @MainActor func profileReturnRetainsSnapshotAndSkipsFreshNetworkRead() async {
+    let fixture = ProfileFixture()
+    let profile = AccountSelfProfileState()
+    let first = Task { await profile.run(using: fixture.transport, currentGeneration: { 1 }) }
+    await eventually { fixture.requests.count == 1 && fixture.observations.count == 1 }
+    fixture.observations[0](ProfileFixture.reader)
+    fixture.requests[0](ProfileFixture.reader)
+    await eventually { profile.value["uid"]?.int == 123 && !profile.isLoading }
+    first.cancel(); await first.value
+    #expect(profile.value["uid"]?.int == 123, "Tab departure must preserve last Room snapshot")
+    let second = Task { await profile.run(using: fixture.transport, currentGeneration: { 1 }) }
+    await eventually { fixture.observations.count == 2 }
+    #expect(profile.value["uid"]?.int == 123, "Reattachment must not erase loaded profile")
+    #expect(fixture.requests.count == 1, "Fresh tab return must not force another network fetch")
+    second.cancel(); await second.value
+}
+
+@Test @MainActor func profileStaleReturnKeepsRoomValueAndCoalescesRefresh() async {
+    let fixture = ProfileFixture()
+    var uptime: TimeInterval = 100
+    let profile = AccountSelfProfileState(now: { uptime })
+    let first = Task { await profile.run(using: fixture.transport, currentGeneration: { 1 }) }
+    await eventually { fixture.requests.count == 1 && fixture.observations.count == 1 }
+    fixture.observations[0](ProfileFixture.reader); fixture.requests[0](ProfileFixture.reader)
+    await eventually { !profile.isLoading && profile.value["uid"]?.int == 123 }
+    first.cancel(); await first.value
+    uptime = 161
+    let returned = Task { await profile.run(using: fixture.transport, currentGeneration: { 1 }) }
+    await eventually { fixture.requests.count == 2 && fixture.observations.count == 2 }
+    #expect(profile.value["uid"]?.int == 123)
+    await profile.refresh()
+    #expect(fixture.requests.count == 2)
+    fixture.requests[1](ProfileFixture.offline)
+    await eventually { profile.failure?.code == "NETWORK" }
+    #expect(profile.value["uid"]?.int == 123)
+    fixture.observations[1](ProfileFixture.changed)
+    await eventually { profile.value["name"]?.string == "Updated by Room" }
+    returned.cancel(); await returned.value
+    #expect(profile.value["name"]?.string == "Updated by Room")
+    profile.invalidate()
     #expect(profile.value == .null)
 }
 

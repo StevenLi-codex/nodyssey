@@ -16,6 +16,10 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
     @Published var value: JSONValue = .null
     @Published var failure: NativeFailure?
     @Published var isLoading = false
+    var isReplacingPagingWindow: Bool { false }
+    var isRefreshing: Bool { false }
+    func cancel() { fatalError("Signature fixture") }
+    func observeCached(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError("Signature fixture") }
     func load(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async { fatalError("Signature fixture") }
     func observe(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async { fatalError("Signature fixture") }
     func invalidate() { fatalError("Signature fixture") }

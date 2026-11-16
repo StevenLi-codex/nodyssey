@@ -6,6 +6,8 @@ import UIKit
 struct NativeDestination { var route: String; var arguments: [String: JSONValue] }
 @MainActor final class NativeAppModel: ObservableObject {
     @Published var generation = 0
+    @Published var session: JSONValue = .null
+    var activeSite: NativeSite? { fatalError() }
     var transport: any NativeTransport { fatalError() }
     var siteOrigin: String? { fatalError() }
     var siteName: String? { fatalError() }
@@ -15,11 +17,14 @@ struct NativeDestination { var route: String; var arguments: [String: JSONValue]
     func open(_ route: String, _ arguments: [String: JSONValue] = [:]) { fatalError() }
     func openLink(_ url: String) { fatalError() }
     func showSignIn() { fatalError() }
+    func registerRetainedOwner(_ owner: AnyObject, invalidate: @escaping () -> Void, mutation: ((String) -> Void)? = nil) { fatalError() }
 }
 @MainActor final class NativeStore: ObservableObject {
     @Published var value: JSONValue = .null
     @Published var failure: NativeFailure?
     @Published var isLoading = false
+    var isRefreshing: Bool { false }
+    func loadIfStale(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError() }
     func load(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async { fatalError() }
     func observe(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async { fatalError() }
     func invalidate() { fatalError() }

@@ -36,16 +36,13 @@ struct AccountProfileGroupSurface: View {
     }
 }
 
-/// Retain the List's section spacing/insets, but give each group a single material.
+/// Shared horizontal inset for every My-page group, including the attendance row.
 struct AccountProfileGroupRow: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AccountProfileGroupSurface())
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
     }
 }
 
@@ -154,40 +151,107 @@ struct AccountProfileAttendance: View {
     @StateObject private var status = NativeStore()
     @StateObject private var action = AccountAction()
     @State private var choosing = false
+    @State private var attendance = AccountAttendanceState()
+    @State private var attendanceGeneration: Int?
+    @State private var attendanceNow = Date()
+    @Environment(\.scenePhase) private var scenePhase
+    private var attendanceScope: AccountAttendanceState.Scope? {
+        guard let uid = status.value["uid"]?.int,
+              let epoch = app.session["identityEpoch"]?.string,
+              let site = app.activeSite?.rawValue else { return nil }
+        return .init(generation: app.generation, identityEpoch: epoch, site: site, uid: uid)
+    }
+    private var presentation: AccountAttendanceState.Presentation {
+        guard attendanceGeneration == app.generation else { return app.isSignedIn ? .unknown : .guest }
+        return attendance.presentation(status: status.value, isSignedIn: app.isSignedIn, scope: attendanceScope, now: attendanceNow)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AccountStoreStatus(store: status) { Task { await status.load(app, "attendance.status") } }
-            if let signed = status.value.nativeBool("hasSignedIn") {
-                if signed {
-                    Button("profile_attendance_done") { app.open("Assets") }
-                } else {
-                    Button("profile_attendance_title") { choosing = true }.disabled(action.blocked || status.isLoading)
-                    Text("profile_attendance_modes").font(.caption).foregroundStyle(.secondary)
+            if app.isSignedIn {
+                AccountStoreStatus(store: status) { Task { await status.load(app, "attendance.status") } }
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if case let .reward(gain) = presentation {
+                            Text(String(format: String(localized: "native.account.attendance_reward", table: "Account"), String(gain)))
+                                .font(.subheadline.weight(.semibold))
+                        } else if presentation.isDone {
+                            Text(String(localized: "native.account.attendance_amount_unavailable", table: "Account"))
+                                .font(.subheadline.weight(.semibold))
+                        } else if presentation == .unsigned {
+                            Button("profile_attendance_title") { choosing = true }.disabled(action.blocked || status.isLoading)
+                            Text("profile_attendance_modes").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("profile_attendance_checking").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { app.open("Assets") } label: {
+                        HStack(spacing: 4) {
+                            Text(String(localized: "native.account.attendance_view_board", table: "Account"))
+                            Image(systemName: "chevron.right").accessibilityHidden(true)
+                        }.font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, 8)
+                    }.buttonStyle(.plain).foregroundStyle(.tint)
                 }
+                AccountActionStatus(action: action)
             }
-            Button("profile_attendance_board") { app.open("Assets") }
-            AccountActionStatus(action: action)
         }
         .task(id: app.generation) {
-            choosing = false; action.cancel(); status.invalidate()
-            if app.isSignedIn { await status.load(app, "attendance.status") }
+            choosing = false
+            app.registerRetainedOwner(action, invalidate: { [weak action] in action?.cancel() })
+            if attendanceGeneration != app.generation {
+                action.cancel(); attendance.reset(); status.invalidate(); attendanceGeneration = app.generation
+            }
+            if app.isSignedIn { await status.loadIfStale(app, "attendance.status") }
         }
         .confirmationDialog("profile_attendance_title", isPresented: $choosing, titleVisibility: .visible) {
             Button(String(localized: "native.account.attendance_fixed", table: "Account")) { sign("FIXED_FIVE") }
             Button(String(localized: "native.account.attendance_random", table: "Account")) { sign("RANDOM") }
             Button("action_cancel", role: .cancel) {}
         } message: { Text("profile_attendance_modes") }
-        .onDisappear { choosing = false; action.cancel() }
+        // A pushed destination is not identity revocation. Keep the existing
+        // action alive, including its uncertain-write gate and read-only retry.
+        .onDisappear { choosing = false }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await checkAttendanceDay() } }
+        }
+        .task {
+            await checkAttendanceDay()
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
+                await checkAttendanceDay()
+            }
+        }
+    }
+    private func checkAttendanceDay() async {
+        let now = Date()
+        let changed = AccountAttendanceState.siteDay(now) != AccountAttendanceState.siteDay(attendanceNow)
+        attendanceNow = now
+        guard changed, app.isSignedIn, attendanceGeneration == app.generation else { return }
+        choosing = false
+        if action.canRefresh { action.refreshOnly() }
+        else if !action.blocked { await status.load(app, "attendance.status") }
     }
     private func sign(_ mode: String) {
-        guard app.isSignedIn, status.value.nativeBool("hasSignedIn") == false, !action.blocked else { return }
+        guard app.isSignedIn, presentation == .unsigned, !action.blocked,
+              let scope = attendanceScope,
+              let day = status.value["date"]?.string,
+              day == AccountAttendanceState.siteDay() else { return }
         let generation = app.generation
         action.perform(app, operation: "attendance.sign", arguments: ["mode": .string(mode), "confirmed": .bool(true)], read: {
-            let fresh = try await app.request("attendance.status")
+            // Load through the store's owner, not its public value: cancellation
+            // must not restore the pre-write internal snapshot over this readback.
+            await status.load(app, "attendance.status")
             try Task.checkCancellation()
-            guard generation == app.generation else { return }
-            status.value = fresh
-        })
+            guard generation == app.generation else { throw CancellationError() }
+            if let failure = status.failure { throw failure }
+            guard status.value["uid"]?.int == scope.uid,
+                  let date = status.value["date"]?.string, date >= day,
+                  status.value["hasSignedIn"]?.bool != nil else {
+                throw NativeFailure(code: "INVALID_RESPONSE", message: "")
+            }
+        }, received: { attendance.receive($0, scope: scope, day: day) })
     }
 }
 

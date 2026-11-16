@@ -60,6 +60,7 @@ struct AccountStoreStatus: View {
     var retry: () -> Void
     var body: some View {
         if store.isLoading { ProgressView() }
+        else if store.isRefreshing { ProgressView().controlSize(.small) }
         if let failure = store.failure { NativeFailureView(failure: failure, retry: retry) }
     }
 }
@@ -150,92 +151,91 @@ struct AccountProfileScreen: View {
     @EnvironmentObject private var app: NativeAppModel
     @StateObject private var profile = AccountSelfProfileState()
     var body: some View {
-        List {
-            if app.isSignedIn {
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let uid = profile.value.nativeInt("uid") {
-                            Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
-                                HStack {
-                                    AccountProfileIdentity(profile: profile.value)
-                                    if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
-                                    else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
-                                }
-                            }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
-                        } else if profile.value != .null {
-                            AccountProfileIdentity(profile: profile.value)
-                        }
-                        AccountProfileStatus(profile: profile)
-                        AccountProfileBalances(profile: profile.value)
-                    }.modifier(AccountProfileGroupRow())
-                }.listRowSeparator(.hidden)
-                Section { AccountProfileAttendance().modifier(AccountProfileGroupRow()) }
-                Section {
-                    AccountProfileDirectory(entries: [
-                        .init("profile_tile_topics", "text.bubble", "MyTopics"),
-                        .init("profile_tile_comments", "bubble.left.and.bubble.right", "MyComments"),
-                        .init("profile_tile_collections", "bookmark", "Bookmarks"),
-                        .init("profile_tile_history", "clock", "ReadHistory"),
-                        .init("profile_tile_following", "person.badge.plus", "Follow", ["showFollowers": .bool(false)]),
-                        .init("profile_tile_followers", "person.2", "Follow", ["showFollowers": .bool(true)])
-                    ]).modifier(AccountProfileGroupRow())
+        // Own the card gaps on iOS 16 too; grouped List inserts platform section
+        // margins and listSectionSpacing is only available starting with iOS 17.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if app.isSignedIn {
+                    Group {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if let uid = profile.value.nativeInt("uid") {
+                                Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
+                                    HStack {
+                                        AccountProfileIdentity(profile: profile.value)
+                                        if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
+                                        else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                                    }
+                                }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
+                            } else if profile.value != .null {
+                                AccountProfileIdentity(profile: profile.value)
+                            }
+                            AccountProfileStatus(profile: profile)
+                            AccountProfileBalances(profile: profile.value)
+                        }.modifier(AccountProfileGroupRow())
+                    }
+                    Group { AccountProfileAttendance().modifier(AccountProfileGroupRow()) }
+                    Group {
+                        AccountProfileDirectory(entries: [
+                            .init("profile_tile_topics", "text.bubble", "MyTopics"),
+                            .init("profile_tile_comments", "bubble.left.and.bubble.right", "MyComments"),
+                            .init("profile_tile_collections", "bookmark", "Bookmarks"),
+                            .init("profile_tile_history", "clock", "ReadHistory"),
+                            .init("profile_tile_following", "person.badge.plus", "Follow", ["showFollowers": .bool(false)]),
+                            .init("profile_tile_followers", "person.2", "Follow", ["showFollowers": .bool(true)])
+                        ]).modifier(AccountProfileGroupRow())
+                    }
+                    Group {
+                        AccountProfileDirectory(entries: [
+                            .init("profile_tile_award", "book", "Award"),
+                            .init("profile_tile_lucky", "dice", "Lucky"),
+                            .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
+                        ] + webEntries + [
+                            .init("profile_tile_block", "hand.raised", "AccountBlockList", ["titles": .bool(false)]),
+                            .init("profile_tile_invite", "ticket", "Invite"),
+                            .init("profile_tile_about_community", "info.circle", "AboutCommunity")
+                        ]).modifier(AccountProfileGroupRow())
+                    }
+                    Group {
+                        AccountProfileDirectory(entries: [
+                            .init("profile_tile_account", "person.crop.circle", "AccountSettings"),
+                            .init("profile_tile_notifications", "bell", "NotificationSettings"),
+                            .init("profile_tile_theme", "paintpalette", "ThemeSettings"),
+                            .init("profile_tile_about", "info.circle", "AboutApp")
+                        ]).modifier(AccountProfileGroupRow())
+                    }
+                } else {
+                    Group { AccountProfileWelcome().modifier(AccountProfileGroupRow()) }
+                    Group {
+                        VStack(alignment: .leading, spacing: 8) {
+                            AccountProfileBenefit(symbol: "square.and.pencil", title: "profile_guest_benefit_post", subtitle: "profile_guest_benefit_post_hint")
+                            AccountProfileBenefit(symbol: "envelope", title: "profile_guest_benefit_messages", subtitle: "profile_guest_benefit_messages_hint")
+                            AccountProfileBenefit(symbol: "calendar", title: "profile_guest_benefit_attendance", subtitle: "profile_guest_benefit_attendance_hint")
+                        }.modifier(AccountProfileGroupRow())
+                    }
+                    Group {
+                        VStack(spacing: 8) {
+                            Button("action_sign_in") { app.showSignIn() }
+                                .buttonStyle(.borderedProminent).controlSize(.large)
+                                .accessibilityIdentifier("native.profile.signin")
+                            Text("profile_sign_in_hint").font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .modifier(AccountProfileGroupRow())
+                    }
                 }
-                Section {
+                if !app.isSignedIn { VStack(alignment: .leading, spacing: 8) {
+                    Text("profile_guest_section").font(.caption).foregroundStyle(.secondary)
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_award", "book", "Award"),
-                        .init("profile_tile_lucky", "dice", "Lucky"),
                         .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
-                    ] + webEntries + [
-                        .init("profile_tile_block", "hand.raised", "AccountBlockList", ["titles": .bool(false)]),
-                        .init("profile_tile_invite", "ticket", "Invite"),
-                        .init("profile_tile_about_community", "info.circle", "AboutCommunity")
-                    ]).modifier(AccountProfileGroupRow())
-                }
-                Section {
-                    AccountProfileDirectory(entries: [
-                        .init("profile_tile_account", "person.crop.circle", "AccountSettings"),
-                        .init("profile_tile_notifications", "bell", "NotificationSettings"),
-                        .init("profile_tile_theme", "paintpalette", "ThemeSettings"),
-                        .init("profile_tile_about", "info.circle", "AboutApp")
-                    ]).modifier(AccountProfileGroupRow())
-                }
-            } else {
-                Section { AccountProfileWelcome().modifier(AccountProfileGroupRow()) }
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        AccountProfileBenefit(symbol: "square.and.pencil", title: "profile_guest_benefit_post", subtitle: "profile_guest_benefit_post_hint")
-                        AccountProfileBenefit(symbol: "envelope", title: "profile_guest_benefit_messages", subtitle: "profile_guest_benefit_messages_hint")
-                        AccountProfileBenefit(symbol: "calendar", title: "profile_guest_benefit_attendance", subtitle: "profile_guest_benefit_attendance_hint")
-                    }.modifier(AccountProfileGroupRow())
-                }.listRowSeparator(.hidden)
-                Section {
-                    VStack(spacing: 8) {
-                        Button("action_sign_in") { app.showSignIn() }
-                            .buttonStyle(.borderedProminent).controlSize(.large)
-                            .accessibilityIdentifier("native.profile.signin")
-                        Text("profile_sign_in_hint").font(.caption).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }.frame(maxWidth: .infinity).padding(.vertical, 8)
-                        .modifier(AccountProfileGroupRow())
-                }
+                        .init("profile_tile_lucky", "dice", "Lucky")
+                    ] + Array(webEntries.prefix(1)) + [
+                        .init("profile_tools", "wrench.and.screwdriver", "CommunityTools")
+                    ])
+                }.modifier(AccountProfileGroupRow()) }
             }
-            if !app.isSignedIn { Section("profile_guest_section") {
-                AccountProfileDirectory(entries: [
-                    .init("profile_tile_award", "book", "Award"),
-                    .init("profile_tile_ruling", "checkmark.shield", "Ruling"),
-                    .init("profile_tile_lucky", "dice", "Lucky")
-                ] + Array(webEntries.prefix(1)) + [
-                    .init("profile_tools", "wrench.and.screwdriver", "CommunityTools")
-                ]).modifier(AccountProfileGroupRow())
-            } }
+            .padding(.horizontal, 16).padding(.vertical, 12)
         }
-        #if os(iOS)
-        .listStyle(.insetGrouped)
-        #else
-        .listStyle(.inset)
-        #endif
-        .scrollContentBackground(.hidden)
-        .listRowSeparatorTint(.secondary.opacity(0.15))
         .background(AccountSurface(canvas: true))
         .navigationTitle("")
         .toolbar {
@@ -248,6 +248,8 @@ struct AccountProfileScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: app.generation) {
+            app.registerRetainedOwner(profile, invalidate: { [weak profile] in profile?.invalidate() },
+                                      mutation: { [weak profile] in profile?.markStale(after: $0) })
             if app.isSignedIn { await profile.run(using: app.transport, currentGeneration: { app.generation }) }
             else { profile.invalidate() }
         }

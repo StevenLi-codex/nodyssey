@@ -61,7 +61,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.26" CURRENT_PROJECT_VERSION="68" \
+            MARKETING_VERSION="1.2.27" CURRENT_PROJECT_VERSION="69" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |
@@ -74,19 +74,88 @@ jobs:
           subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
           subprocess.run(['xcrun', 'vtool', '-show-build', str(executable)], check=True)
           assert info['CFBundleIdentifier'] == 'io.github.nodyssey', info['CFBundleIdentifier']
-          assert info['CFBundleShortVersionString'] == '1.2.26'
-          assert info['CFBundleVersion'] == '68'
+          assert info['CFBundleShortVersionString'] == '1.2.27'
+          assert info['CFBundleVersion'] == '69'
           assert info['MinimumOSVersion'] == '16.0'
           assert info['CFBundleSupportedPlatforms'] == ['iPhoneOS']
           payload = root / 'Payload'
-          payload.mkdir(exist_ok=True)
+          if payload.exists():
+              shutil.rmtree(payload)
+          payload.mkdir()
           shutil.copytree(source, payload / 'Nodyssey.app', symlinks=True)
-          ipa = root / 'Nodyssey-1.2.26-build68-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.27-build69-unsigned.ipa'
           subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(payload), str(ipa)], check=True)
+
+          def macho_info(data):
+              # Return all (cputype, platform) pairs from thin/fat Mach-O files.
+              import struct
+              if len(data) < 4:
+                  return []
+              magic = struct.unpack_from('>I', data, 0)[0]
+              little = magic in (0xfeedface, 0xfeedfacf, 0xcafebabe, 0xcafebabf)
+              if magic in (0xcafebabe, 0xcafebabf):
+                  endian = '>'
+                  is64fat = magic == 0xcafebabf
+                  n = struct.unpack_from(endian + 'I', data, 4)[0]
+                  out = []
+                  off = 8
+                  for _ in range(n):
+                      cputype, cpusub, offset, size, align = struct.unpack_from(endian + 'IIIII', data, off)
+                      out += macho_info(data[offset:offset + size])
+                      off += 20
+                  return out
+              if magic == 0xbebafeca:
+                  endian = '<'
+                  n = struct.unpack_from(endian + 'I', data, 4)[0]
+                  out = []
+                  off = 8
+                  for _ in range(n):
+                      cputype, cpusub, offset, size, align = struct.unpack_from(endian + 'IIIII', data, off)
+                      out += macho_info(data[offset:offset + size])
+                      off += 20
+                  return out
+              if magic not in (0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe):
+                  return []
+              endian = '<' if magic in (0xfeedface, 0xfeedfacf) else '>'
+              is64 = magic in (0xfeedfacf, 0xcffaedfe)
+              header = 32 if is64 else 28
+              cputype, cpusub, filetype, ncmds, sizeofcmds, flags = struct.unpack_from(endian + 'IIIIII', data, 4)
+              cursor = header
+              platforms = []
+              for _ in range(ncmds):
+                  cmd, cmdsize = struct.unpack_from(endian + 'II', data, cursor)
+                  if cmd == 0x32 and cmdsize >= 24:
+                      platform = struct.unpack_from(endian + 'I', data, cursor + 8)[0]
+                      platforms.append(platform)
+                  cursor += cmdsize
+              return [(cputype, p) for p in platforms]
+
+          members = []
           with zipfile.ZipFile(ipa) as z:
-              assert 'Payload/Nodyssey.app/Info.plist' in z.namelist()
               assert z.testzip() is None
-          manifest = dict(ipa_filename=ipa.name, ipa_path=ipa.name, commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), configuration='Debug', tests_run=False, signed=False, storage_namespace='io.github.nodyssey.single-local-v1', acceptance='Internal archive only; device login, scrolling, overlay installation and full original-page parity unverified')
+              names = z.namelist()
+              assert 'Payload/Nodyssey.app/Info.plist' in names
+              assert all(not n.startswith(('/', '\\')) and '..' not in pathlib.PurePosixPath(n).parts for n in names)
+              assert not any(n.endswith('embedded.mobileprovision') for n in names)
+              assert not any('/_CodeSignature/' in n or n.endswith('/_CodeSignature') for n in names)
+              assert not any('/Frameworks/' in n or n.startswith('Payload/Nodyssey.app/Frameworks/') for n in names), 'embedded frameworks are not allowed'
+              for name in names:
+                  if name.endswith('/'):
+                      continue
+                  data = z.read(name)
+                  if data[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf', b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
+                      macho = macho_info(data)
+                      assert macho, name
+                      assert all(cpu == 0x0100000c and platform == 2 for cpu, platform in macho), (name, macho)
+                      members.append(name)
+          assert members, 'no arm64 iPhoneOS Mach-O payload found'
+          archive_log = root / 'ipa-archive.log'
+          log_text = archive_log.read_text(errors='replace')
+          assert '** ARCHIVE SUCCEEDED **' in log_text
+          native_swift = sorted(str(p.relative_to('iosapp/Nodyssey')) for p in pathlib.Path('iosapp/Nodyssey/Native').rglob('*.swift'))
+          missing_sources = [name for name in native_swift if pathlib.Path(name).name not in log_text]
+          assert not missing_sources, f'shipping Swift sources absent from archive log: {missing_sources[:10]}'
+          manifest = dict(ipa_filename=ipa.name, ipa_path=ipa.name, commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], minimum_os=info['MinimumOSVersion'], supported_platforms=info['CFBundleSupportedPlatforms'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), configuration='Debug', tests_run=False, signed=False, embedded_provisioning_profile=False, embedded_framework_count=0, macho_members=members, archive_succeeded=True, shipping_swift_source_count=len(native_swift), shipping_swift_source_log_missing=missing_sources, storage_namespace='io.github.nodyssey.single-local-v1', acceptance='Internal archive only; device login, scrolling, overlay installation and full original-page parity unverified')
           (root / 'ipa-manifest.json').write_text(json.dumps(manifest, indent=2))
           print(json.dumps(manifest, indent=2))
           PY

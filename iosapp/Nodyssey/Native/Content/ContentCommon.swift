@@ -32,6 +32,7 @@ struct ContentStoreStatus: View {
     var retry: () -> Void
     var body: some View {
         if store.isLoading { NativeBusyView() }
+        else if store.isRefreshing { ProgressView().controlSize(.small) }
         if let failure = store.failure { NativeFailureView(failure: failure, retry: retry) }
     }
 }
@@ -71,52 +72,72 @@ struct ContentPostRow: View {
     var openAuthor: ((Int64) -> Void)? = nil
     var body: some View {
         let summary = value["summary"] ?? value
+        postAction {
+            card(summary)
+                .padding(.horizontal, 12).padding(.vertical, 4)
+                // The shape belongs to the action's label, including its padding.
+                .contentShape(Rectangle())
+        }
+        .overlay(alignment: .topLeading) {
+            if summary.nativeBool("isPinned") != true,
+               let uid = summary.nativeInt("authorUid"), uid > 0, let openAuthor {
+                // Sibling of the post Button, not a Button nested in its label.
+                // Match the header's layout so long names cannot cover the board/badges.
+                HStack(spacing: 6) {
+                    Button { openAuthor(uid) } label: {
+                        author(summary).padding(.top, 8).padding(.bottom, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("native.account.quick_card.title", tableName: "Account"))
+                    board(summary).hidden()
+                    Spacer(minLength: 0)
+                    ContentPostBadges(summary: summary).hidden()
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 28).padding(.top, 4)
+            }
+        }
+    }
+    private func card(_ summary: JSONValue) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if summary.nativeBool("isPinned") == true {
-                postAction {
-                    HStack(spacing: 8) {
-                        Image(systemName: "pin.fill").foregroundStyle(.tint)
-                            .accessibilityLabel(Text(String(localized: "content.pinned", table: "Content")))
-                        Text(summary.nativeString("title") ?? "")
-                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").accessibilityHidden(true)
-                    }.font(.subheadline).frame(minHeight: 44)
-                }
+                HStack(spacing: 8) {
+                    Image(systemName: "pin.fill").foregroundStyle(.tint)
+                        .accessibilityLabel(Text(String(localized: "content.pinned", table: "Content")))
+                    Text(summary.nativeString("title") ?? "")
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").accessibilityHidden(true)
+                }.font(.subheadline).frame(minHeight: 44)
             } else {
                 HStack(spacing: 6) {
-                    if let uid = summary.nativeInt("authorUid"), uid > 0, let openAuthor {
-                        Button { openAuthor(uid) } label: { author(summary).frame(minHeight: 44) }
-                            .buttonStyle(.plain)
-                            .accessibilityHint(Text("native.account.quick_card.title", tableName: "Account"))
+                    if let uid = summary.nativeInt("authorUid"), uid > 0, openAuthor != nil {
+                        author(summary).hidden()
                     } else { author(summary) }
                     board(summary)
                     Spacer(minLength: 0)
                     ContentPostBadges(summary: summary)
                 }.font(.caption).foregroundStyle(.secondary)
-                postAction {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(summary.nativeString("title") ?? "")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
-                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                            .fixedSize(horizontal: false, vertical: true)
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) { replies(summary); lastReply(summary); Spacer(minLength: 0); views(summary) }
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 10) { replies(summary); views(summary) }
-                                lastReply(summary)
-                            }
-                        }.font(.caption).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(summary.nativeString("title") ?? "")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(value.nativeBool("isRead") == true ? .secondary : .primary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { replies(summary); lastReply(summary); Spacer(minLength: 0); views(summary) }
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 10) { replies(summary); views(summary) }
+                            lastReply(summary)
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, summary.nativeBool("isPinned") == true ? 0 : 8)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .background(ContentSurface())
-        .overlay(alignment: .bottom) { VStack(spacing: 0) { Divider() }.padding(.leading, 16) }
-        .contentShape(Rectangle())
+        .background { ContentPostCardSurface().allowsHitTesting(false) }
     }
     @ViewBuilder private func postAction<Label: View>(@ViewBuilder label: () -> Label) -> some View {
         if let openPost { Button(action: openPost, label: label).buttonStyle(.plain) }
@@ -149,6 +170,20 @@ struct ContentPostRow: View {
     }
     @ViewBuilder private func views(_ summary: JSONValue) -> some View {
         if let views = summary.nativeInt("viewCount") { Label("\(views)", systemImage: "eye") }
+    }
+}
+
+/// Match the My-page group's continuous boundary/depth, but keep reading opaque.
+private struct ContentPostCardSurface: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+    var body: some View {
+        ContentSurface()
+            .overlay { shape.fill(.tint).opacity(0.025) }
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(.primary.opacity(contrast == .increased ? 0.25 : 0.08), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.04), radius: 3, y: 1)
+            .accessibilityHidden(true)
     }
 }
 

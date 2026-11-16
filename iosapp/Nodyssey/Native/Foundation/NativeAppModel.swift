@@ -357,7 +357,15 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         let transport = self.transport
         let task = Task { try await transport.request(operation, arguments) }
         requests[id] = (changesSession, task)
-        defer { requests[id] = nil }
+        defer {
+            requests[id] = nil
+            // Even a failed/cancelled write may have reached the server. Keep
+            // rows, but never let an appearance TTL hide its authoritative read.
+            if capturedGeneration == generation {
+                for store in stores { store.value?.invalidateFreshness(after: operation) }
+                for owner in retainedOwners where owner.value != nil { owner.mutation?(operation) }
+            }
+        }
         let result = await withTaskCancellationHandler { await task.result } onCancel: { task.cancel() }
         if !changesSession, capturedGeneration != generation {
             throw NativeFailure(code: "SESSION_CHANGED", message: "Session changed")
@@ -568,6 +576,20 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         }
     }
     private var stores: [WeakNativeStore] = []
+    private final class RetainedOwner {
+        weak var value: AnyObject?
+        let invalidate: () -> Void
+        let mutation: ((String) -> Void)?
+        init(_ value: AnyObject, invalidate: @escaping () -> Void, mutation: ((String) -> Void)?) {
+            self.value = value; self.invalidate = invalidate; self.mutation = mutation
+        }
+    }
+    private var retainedOwners: [RetainedOwner] = []
+    /// Presentation owners remain view-owned; this weak registry only revokes them.
+    func registerRetainedOwner(_ owner: AnyObject, invalidate: @escaping () -> Void, mutation: ((String) -> Void)? = nil) {
+        retainedOwners.removeAll { $0.value == nil || $0.value === owner }
+        retainedOwners.append(RetainedOwner(owner, invalidate: invalidate, mutation: mutation))
+    }
     func register(_ store: NativeStore) {
         stores.removeAll { $0.value == nil }
         if !stores.contains(where: { $0.value === store }) { stores.append(WeakNativeStore(store)) }
@@ -586,6 +608,8 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         for owner in owners { owner.revoke() } // Never flush under the new identity.
         for request in requests.values where !request.changesSession { request.task.cancel() }
         for store in stores { store.value?.invalidate() }
+        for owner in retainedOwners where owner.value != nil { owner.invalidate() }
+        retainedOwners = []
         generation += 1
         homePath = []; notificationsPath = []; profilePath = []; sheetPath = []
         // Assign the same destination identity so a live nested WKWebView isn't

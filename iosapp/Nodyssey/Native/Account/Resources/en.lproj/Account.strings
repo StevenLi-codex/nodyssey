@@ -23,6 +23,9 @@
 "native.account.email_unverified" = "Unverified";
 "native.account.attendance_fixed" = "Fixed 5 drumsticks";
 "native.account.attendance_random" = "Random reward";
+"native.account.attendance_reward" = "Checked in, earned %@ drumsticks";
+"native.account.attendance_view_board" = "View leaderboard";
+"native.account.attendance_amount_unavailable" = "Checked in today (reward amount not provided)";
 "native.account.no_matches" = "No matching results on this page.";
 "native.account.empty_rules" = "No title rules.";
 "native.account.empty_blocked" = "No blocked users.";
