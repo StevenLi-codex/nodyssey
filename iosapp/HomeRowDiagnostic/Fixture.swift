@@ -19,7 +19,7 @@ import NodysseyNativeCore
 // screen declarations compile together. Only non-root destinations/image/theme
 // and the Kotlin/network boundary are replaced; no production fixture hooks.
 struct FixtureDestination: View { let name: String; var body: some View { Text("Destination " + name).accessibilityIdentifier("destination").navigationTitle("Detail") } }
-enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : nil } }
+enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : destination.route == "SignIn" ? AnyView(FixtureThemeDestination()) : nil } }
 enum NativeEditorScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
 enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { AnyView(FixtureDestination(name: destination.route)) } }
 enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? {
@@ -34,7 +34,7 @@ struct FixtureThemeDestination: View {
                     .accessibilityIdentifier("theme70.state").font(.caption2)
             }
             .background(ThemeTintProbe(settings: app.settings, checkpoint: 0, scope: "production-theme").frame(width: 0, height: 0))
-            .toolbar { Button("Theme sheet") { app.sheet = NativeDestination("ThemeSettings") }.accessibilityIdentifier("theme70.sheet") }
+            .toolbar { Button("Theme sheet") { app.open("SignIn") }.accessibilityIdentifier("theme70.sheet") }
     }
 }
 enum NativeMediaScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }

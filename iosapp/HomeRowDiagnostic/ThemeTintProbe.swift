@@ -39,9 +39,9 @@ struct ThemeTintProbe: UIViewRepresentable {
 }
 
 @MainActor enum ThemeUIKitSnapshot {
-    static func rgba(_ value: UIColor?, traits: UITraitCollection) -> Any {
-        guard let value else { return NSNull() }
-        let value = value.resolvedColor(with: traits)
+    static func rgba(_ input: UIColor?, traits: UITraitCollection) -> Any {
+        guard let input else { return NSNull() }
+        let value = input.resolvedColor(with: traits)
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard value.getRed(&r, green: &g, blue: &b, alpha: &a) else { return value.description }
         return [r, g, b, a].map { Double($0) }

@@ -26,9 +26,9 @@ struct ContentNotifications: View {
                     }.pickerStyle(.segmented).padding(.horizontal)
                     List {
                         ContentCommandStatus(command: command)
-                        ContentStoreStatus(store: counts) { retry += 1 }
+                        if let failure = counts.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
                         if selection == "MESSAGES" {
-                            ContentStoreStatus(store: messages) { retry += 1 }
+                            ContentStoreStatus(store: messages, initialLoading: true, silentRefresh: true) { retry += 1 }
                             ForEach(conversations(system: true)) { row in conversationButton(row) }
                             if !conversations(system: true).isEmpty, !conversations(system: false).isEmpty {
                                 Section { ForEach(conversations(system: false)) { row in conversationButton(row) } }
@@ -36,7 +36,7 @@ struct ContentNotifications: View {
                             } else { ForEach(conversations(system: false)) { row in conversationButton(row) } }
                             if messages.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
                         } else {
-                            ContentStoreStatus(store: interactions) { retry += 1 }
+                            ContentStoreStatus(store: interactions, initialLoading: true, silentRefresh: true) { retry += 1 }
                             ForEach(notificationGroups) { group in
                                 Section {
                                     ForEach(group.rows) { row in
@@ -48,10 +48,14 @@ struct ContentNotifications: View {
                             }
                             if interactions.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
                         }
-                    }.refreshable { await refresh() }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .background(ContentSurface(canvas: true))
+                    .refreshable { await refresh() }
                 }
             }
         }
+        .background(ContentSurface(canvas: true))
         .navigationTitle(Text(String(localized: "content.notifications", table: "Content")))
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -68,15 +72,15 @@ struct ContentNotifications: View {
         .sheet(isPresented: $compose) { NavigationStack { ContentNewConversation() } }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { interactions.invalidate(); return }
-            await interactions.observeCached(app, "notifications.list")
+            interactions.observeRetained(app, "notifications.list", restart: retry)
         }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { messages.invalidate(); return }
-            await messages.observeCached(app, "messages.list")
+            messages.observeRetained(app, "messages.list", restart: retry)
         }
         .task(id: "\(app.generation)|\(retry)") {
             guard app.isSignedIn else { counts.invalidate(); return }
-            await counts.observe(app, "notifications.counts")
+            counts.observeRetained(app, "notifications.counts", restart: retry)
         }
         .onDisappear { command.cancel() }
     }
