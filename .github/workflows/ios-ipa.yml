@@ -116,7 +116,10 @@ jobs:
                   return out
               if magic not in (0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe):
                   return []
-              endian = '<' if magic in (0xfeedface, 0xfeedfacf) else '>'
+              # The magic is read as big-endian.  Native little-endian Mach-O
+              # values (cefaedfe/cffaedfe) therefore need little-endian fields;
+              # the byte-swapped values (feedface/feedfacf) use big-endian.
+              endian = '>' if magic in (0xfeedface, 0xfeedfacf) else '<'
               is64 = magic in (0xfeedfacf, 0xcffaedfe)
               header = 32 if is64 else 28
               cputype, cpusub, filetype, ncmds, sizeofcmds, flags = struct.unpack_from(endian + 'IIIIII', data, 4)
@@ -163,7 +166,7 @@ jobs:
         with:
           name: nodyssey-swiftui-full-unsigned
           path: |
-            ${{ runner.temp }}/Nodyssey-1.2.26-build68-unsigned.ipa
+            ${{ runner.temp }}/Nodyssey-1.2.27-build69-unsigned.ipa
             ${{ runner.temp }}/ipa-manifest.json
             ${{ runner.temp }}/shipping-source-manifest.json
           if-no-files-found: error
