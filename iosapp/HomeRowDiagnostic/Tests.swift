@@ -42,7 +42,7 @@ final class NativeNavigationUITests: XCTestCase {
             picker.tap()
             let option = app.buttons[target].firstMatch
             XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription); option.tap()
-            let state = app.staticTexts["theme70.state"]
+            let state = app.staticTexts["theme70.state"].firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "LIGHT/PRESET/" + id), object: state)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, app.debugDescription)
             inspect(id, name)

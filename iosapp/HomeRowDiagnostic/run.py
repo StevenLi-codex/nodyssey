@@ -39,5 +39,6 @@ for candidate in (root/'ProfileDerived/Build/Products').glob('Debug-iphonesimula
         probe=Path(container.stdout.strip())/'Documents/theme70-uikit.jsonl'
         if probe.exists(): shutil.copy2(probe,evidence/'theme70-uikit.jsonl')
 (evidence/'results.json').write_text(json.dumps(results,indent=2))
+subprocess.run([sys.executable,'iosapp/HomeRowDiagnostic/verify_theme.py',str(evidence)],check=True)
 assert results.get('green',{}).get('totalTestCount')==1,results
 assert results['green']['failedTests']==0 and results['green']['passedTests']==1,results
