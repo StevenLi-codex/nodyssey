@@ -43,12 +43,12 @@ import NodysseyNativeCore
 
 @Test func feedRailDirectionIsStickyAndComposeKeepsAuthGate() {
     var direction = ContentFeedDirection()
-    direction.record(index: 20, minY: 10)
-    direction.record(index: 20, minY: -20)
+    direction.record(translation: 0)
+    direction.record(translation: -40)
     #expect(!direction.expanded)
-    direction.record(index: 20, minY: -20)
+    direction.record(translation: -40)
     #expect(!direction.expanded)
-    direction.record(index: 19, minY: -5)
+    direction.record(translation: 0)
     #expect(direction.expanded)
     #expect(ContentFeedCompose.resolve(signedIn: false, board: "tech") == .signIn)
     #expect(ContentFeedCompose.resolve(signedIn: true, board: "tech") == .compose(["boardSlug": .string("tech")]))

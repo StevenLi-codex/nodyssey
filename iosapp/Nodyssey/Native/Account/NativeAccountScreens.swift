@@ -60,6 +60,7 @@ struct AccountStoreStatus: View {
     var retry: () -> Void
     var body: some View {
         if store.isLoading { ProgressView() }
+        else if store.isRefreshing { ProgressView().controlSize(.small) }
         if let failure = store.failure { NativeFailureView(failure: failure, retry: retry) }
     }
 }

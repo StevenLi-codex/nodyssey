@@ -17,6 +17,7 @@ import NodysseyNativeCore
             }.font(.caption)
             NativeRootView()
         }.environmentObject(app).environmentObject(fixture)
+            .overlay(alignment: .topLeading) { RetentionGeometryProbe().frame(width: 1, height: 1).allowsHitTesting(false) }
             .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-profile") ? .accessibility2 : .large)
     } }
 }

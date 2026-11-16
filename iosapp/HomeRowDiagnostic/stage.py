@@ -25,5 +25,12 @@ project=stage/'iosapp/Nodyssey.xcodeproj/project.pbxproj'; s=project.read_text()
 s=re.sub(r'\s*FRAMEWORK_SEARCH_PATHS = \([^;]+;', '',s); s=re.sub(r'\s*OTHER_LDFLAGS = \([^;]+;', '',s); project.write_text(s)
 (app/'Info.plist').write_text('''<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string><key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string><key>CFBundleName</key><string>$(PRODUCT_NAME)</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>69</string><key>CFBundleShortVersionString</key><string>1.0</string><key>UILaunchScreen</key><dict/></dict></plist>''')
 shutil.copy2(repo/'iosapp/HomeRowDiagnostic/Fixture.swift',app/'App.swift')
+shutil.copy2(repo/'iosapp/HomeRowDiagnostic/Geometry.swift',app/'Geometry.swift')
 test=stage/'iosapp/NativeNavigationUITests'; test.mkdir(exist_ok=True); shutil.copy2(repo/'iosapp/HomeRowDiagnostic/Tests.swift',test/'NativeNavigationUITests.swift')
-(stage/'sources.json').write_text(json.dumps(hashes,indent=2)); print(stage)
+(stage/'sources.json').write_text(json.dumps(hashes,indent=2))
+manifest = json.loads((repo/'iosapp/HomeRowDiagnostic/source-union.json').read_text())
+for rel, expected in manifest.items():
+    if rel == '.github/workflows/ios-swiftui.yml': continue
+    assert hashlib.sha256((repo/rel).read_bytes()).hexdigest() == expected, rel
+shutil.copy2(repo/'iosapp/HomeRowDiagnostic/source-union.json',stage/'source-union.json')
+print(stage)

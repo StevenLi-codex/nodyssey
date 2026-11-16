@@ -44,4 +44,5 @@ jobs:
             ${{ runner.temp }}/summary.json
             ${{ runner.temp }}/tests.json
             ${{ runner.temp }}/HomeRow/sources.json
+            ${{ runner.temp }}/HomeRow/source-union.json
           retention-days: 7

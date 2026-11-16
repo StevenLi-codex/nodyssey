@@ -199,6 +199,7 @@ struct AccountProfileAttendance: View {
         }
         .task(id: app.generation) {
             choosing = false
+            app.registerRetainedOwner(action, invalidate: { [weak action] in action?.cancel() })
             if attendanceGeneration != app.generation {
                 action.cancel(); attendance.reset(); status.invalidate(); attendanceGeneration = app.generation
             }
