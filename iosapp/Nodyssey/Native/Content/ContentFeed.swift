@@ -101,7 +101,7 @@ struct ContentPostList: View {
         }
         .sheet(isPresented: $manageBoards) { NavigationStack { ContentBoardManager(categories: categories.value, selection: $category) } }
         .task(id: app.generation) { await refreshCategories() }
-        .onDisappear { command.cancel(); page = positions.position(board: category, sort: sort)?.page ?? page }
+        .onDisappear { command.cancel() }
     }
     private func boardTitle(_ slug: String) -> String {
         (categories.value.array ?? []).first { $0.nativeString("slug") == slug }?.nativeString("title") ?? slug
@@ -260,7 +260,7 @@ struct ContentPagedList: View {
                             .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
                             .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)") {
                                 // Row tasks are prefetch hints, never visibility observations.
-                                guard let ticket = owner, owns(ticket) else { return }
+                                guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return }
                                 guard let arguments = window.accessArguments(for: row.id) else { return }
                                 do { _ = try await app.request("paging.access", arguments) }
                                 catch is CancellationError { }
@@ -299,11 +299,12 @@ struct ContentPagedList: View {
                 if !dragging { direction.endGesture() } // Includes system cancellation.
             }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
-                guard let ticket = owner, owns(ticket),
+                guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
                       let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
                       case .success(let window) = window,
                       let row = window.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
                 visible(row.id, row.page)
+                restoreID = row.id
                 if let page = row.page, page > 0 { visiblePage = page }
             }
             .onChange(of: store.value) { _ in
@@ -313,7 +314,7 @@ struct ContentPagedList: View {
                         perform(action, ticket: ticket, proxy: proxy)
                     }
                 } catch { jump.cancel() } // The invalid window is rendered above; retire its timer.
-                if !restored, let restoreID, case .success(let window) = window, window.rows.contains(where: { $0.id == restoreID }) {
+                if !store.isReplacingPagingWindow, !restored, let restoreID, case .success(let window) = window, window.rows.contains(where: { $0.id == restoreID }) {
                     proxy.scrollTo(restoreID, anchor: .top); restored = true
                 }
             }
@@ -361,12 +362,13 @@ struct ContentPagedList: View {
         }
         .task(id: "\(app.generation)|\(operation)|\(arguments["categorySlug"]?.string ?? "")|\(arguments["sort"]?.string ?? "")|\(retry)") {
             command.cancel()
-            store.invalidate()
+            store.cancel()
             let ticket = ContentFeedTicket(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
                                            sort: arguments["sort"]?.string ?? "", observation: UUID())
             owner = ticket
-            jump = ContentFeedJump(owner: ticket); pageSheet.cancel(); direction = ContentFeedDirection()
+            jump = ContentFeedJump(owner: ticket); pageSheet.cancel()
             var args = arguments
+            if isHome, store.value != .null { args["page"] = .integer(visiblePage) }
             args["pagerId"] = .string(UUID().uuidString)
             await store.observe(app, operation, args)
         }
@@ -384,7 +386,7 @@ struct ContentPagedList: View {
             authorNavigation = nil; authorCard = nil; pageSheet.cancel()
             if owner?.generation != generation { owner = nil; jump.cancel() }
         }
-        .onDisappear { command.cancel(); owner = nil; jump.cancel(); pageSheet.cancel() }
+        .onDisappear { command.cancel(); store.cancel(); owner = nil; restored = false; jump.cancel(); pageSheet.cancel() }
     }
     private func goToPage(_ page: Int64, proxy: ScrollViewProxy) {
         guard let ticket = owner, owns(ticket), !command.busy else { return }

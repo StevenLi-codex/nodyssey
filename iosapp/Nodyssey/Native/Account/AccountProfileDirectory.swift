@@ -36,16 +36,13 @@ struct AccountProfileGroupSurface: View {
     }
 }
 
-/// Retain the List's section spacing/insets, but give each group a single material.
+/// Shared horizontal inset for every My-page group, including the attendance row.
 struct AccountProfileGroupRow: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AccountProfileGroupSurface())
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
     }
 }
 
@@ -154,23 +151,50 @@ struct AccountProfileAttendance: View {
     @StateObject private var status = NativeStore()
     @StateObject private var action = AccountAction()
     @State private var choosing = false
+    @State private var attendance = AccountAttendanceState()
+    @State private var attendanceGeneration: Int?
+    private var presentation: AccountAttendanceState.Presentation {
+        guard attendanceGeneration == app.generation else { return app.isSignedIn ? .unknown : .guest }
+        return attendance.presentation(status: status.value, isSignedIn: app.isSignedIn)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AccountStoreStatus(store: status) { Task { await status.load(app, "attendance.status") } }
-            if let signed = status.value.nativeBool("hasSignedIn") {
-                if signed {
-                    Button("profile_attendance_done") { app.open("Assets") }
-                } else {
-                    Button("profile_attendance_title") { choosing = true }.disabled(action.blocked || status.isLoading)
-                    Text("profile_attendance_modes").font(.caption).foregroundStyle(.secondary)
+            if app.isSignedIn {
+                AccountStoreStatus(store: status) { Task { await status.load(app, "attendance.status") } }
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if case let .reward(gain) = presentation {
+                            Text(String(format: String(localized: "native.account.attendance_reward", table: "Account"), String(gain)))
+                                .font(.subheadline.weight(.semibold))
+                        } else if presentation.isDone {
+                            Text(String(localized: "native.account.attendance_amount_unavailable", table: "Account"))
+                                .font(.subheadline.weight(.semibold))
+                        } else if presentation == .unsigned {
+                            Button("profile_attendance_title") { choosing = true }.disabled(action.blocked || status.isLoading)
+                            Text("profile_attendance_modes").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("profile_attendance_checking").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { app.open("Assets") } label: {
+                        HStack(spacing: 4) {
+                            Text(String(localized: "native.account.attendance_view_board", table: "Account"))
+                            Image(systemName: "chevron.right").accessibilityHidden(true)
+                        }.font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, 8)
+                    }.buttonStyle(.plain).foregroundStyle(.tint)
                 }
+                AccountActionStatus(action: action)
             }
-            Button("profile_attendance_board") { app.open("Assets") }
-            AccountActionStatus(action: action)
         }
         .task(id: app.generation) {
-            choosing = false; action.cancel(); status.invalidate()
-            if app.isSignedIn { await status.load(app, "attendance.status") }
+            choosing = false; action.cancel()
+            if attendanceGeneration != app.generation {
+                attendance.reset(); status.invalidate(); attendanceGeneration = app.generation
+            }
+            if app.isSignedIn { await status.loadIfStale(app, "attendance.status") }
         }
         .confirmationDialog("profile_attendance_title", isPresented: $choosing, titleVisibility: .visible) {
             Button(String(localized: "native.account.attendance_fixed", table: "Account")) { sign("FIXED_FIVE") }
@@ -180,14 +204,14 @@ struct AccountProfileAttendance: View {
         .onDisappear { choosing = false; action.cancel() }
     }
     private func sign(_ mode: String) {
-        guard app.isSignedIn, status.value.nativeBool("hasSignedIn") == false, !action.blocked else { return }
+        guard app.isSignedIn, presentation == .unsigned, !action.blocked else { return }
         let generation = app.generation
         action.perform(app, operation: "attendance.sign", arguments: ["mode": .string(mode), "confirmed": .bool(true)], read: {
             let fresh = try await app.request("attendance.status")
             try Task.checkCancellation()
             guard generation == app.generation else { return }
             status.value = fresh
-        })
+        }, received: { attendance.receive($0) })
     }
 }
 

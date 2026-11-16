@@ -1,88 +1,109 @@
 import SwiftUI
 import NodysseyNativeCore
 
-@main struct HomeRowProbe: App {
-    @StateObject private var app = NativeAppModel()
-    var body: some Scene { WindowGroup { Host().environmentObject(app) } }
+@main struct RetentionProbeApp: App {
+    @StateObject private var fixture: FixtureTransport
+    @StateObject private var app: NativeAppModel
+    init() {
+        let transport = FixtureTransport()
+        _fixture = StateObject(wrappedValue: transport)
+        _app = StateObject(wrappedValue: NativeAppModel(transport: transport))
+    }
+    var body: some Scene { WindowGroup {
+        VStack(spacing: 0) {
+            HStack {
+                Text("p\(fixture.profileReads) n\(fixture.notificationStarts) f\(fixture.feedStarts)").accessibilityIdentifier("requests")
+                Button("Revoke") { fixture.revoke() }.accessibilityIdentifier("revoke")
+            }.font(.caption)
+            NativeRootView()
+        }.environmentObject(app).environmentObject(fixture)
+    } }
 }
-struct Host: View {
-    @EnvironmentObject var app: NativeAppModel
+// Real NativeRootView, NativeAppModel, NativeStore, NativeRequestState and root
+// screen declarations compile together. Only non-root destinations/image/theme
+// and the Kotlin/network boundary are replaced; no production fixture hooks.
+struct NativeScreen: View {
+    let destination: NativeDestination
     var body: some View {
-        NavigationStack {
-            ContentPagedList(operation: "feed", arguments: ["page": .integer(1)], replacePage: { _ in })
-                .navigationTitle("Production feed")
-                .safeAreaInset(edge: .top) {
-                    VStack {
-                        Text(app.event).accessibilityIdentifier("event")
-                        Text(String(app.actionCount)).accessibilityIdentifier("actions")
-                    }
-                }
-        }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large") ? .accessibility2 : .large)
-    }
-}
-@MainActor final class NativeAppModel: ObservableObject {
-    @Published var generation = 1
-    @Published var settings: JSONValue = .null
-    @Published var event = "none"
-    @Published var actionCount = 0
-    var site: JSONValue = .null
-    var siteName: String? = "Fixture"
-    var isSignedIn = false
-    let transport: any NativeTransport = FixtureTransport()
-    func register(_ store: NativeStore) {}
-    func open(_ route: String, _ args: [String: JSONValue] = [:]) {
-        actionCount += 1
-        event = route + ":" + String(args["postId"]?.int ?? args["uid"]?.int ?? 0)
-    }
-    func showSignIn() { event = "signIn" }
-    func request(_ operation: String, _ args: [String: JSONValue] = [:]) async throws -> JSONValue {
-        try await transport.request(operation, args)
-    }
-}
-struct FixtureTransport: NativeTransport {
-    func request(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
-        guard operation == "paging.access" else { throw NativeFailure(code: "BOUNDARY", message: "No network or writes: " + operation) }
-        return .null
-    }
-    func observe(_ operation: String, _ arguments: [String: JSONValue]) -> AsyncThrowingStream<JSONValue, Error> {
-        AsyncThrowingStream { continuation in
-            guard operation == "feed" else { continuation.finish(); return }
-            let rows: [JSONValue] = (0..<30).map { index -> JSONValue in
-                let title: String = index == 1 ? "Long title wraps across several lines with enough words to exercise the production row layout" : "Post \(index)"
-                let postID: Int64 = 9007199254741001 + Int64(index)
-                let authorID: Int64 = 9007199254741101 + Int64(index)
-                let summary: [String: JSONValue] = [
-                    "postId": .integer(postID), "authorUid": .integer(authorID),
-                    "authorName": .string("Author \(index)"), "title": .string(title),
-                    "categoryTitle": .string("Board"), "commentCount": .integer(12), "viewCount": .integer(345),
-                    "lastCommenterName": .string("Reader"), "lastActiveText": .string("5 min"), "isPinned": .bool(index == 2)
-                ]
-                return .object(["page": .integer(Int64(index / 10 + 1)), "summary": .object(summary)])
-            }
-            continuation.yield(.object(["pagerId": arguments["pagerId"] ?? .string("fixture"), "placeholdersBefore": .integer(0), "placeholdersAfter": .integer(0), "itemCount": .integer(30), "totalPages": .integer(3), "items": .array(rows), "refresh": .object(["status": .string("NotLoading")])]))
+        switch destination.route {
+        case "PostList": ContentPostList()
+        case "Notifications": ContentNotifications()
+        case "Profile": AccountProfileScreen()
+        default: Text("Destination " + destination.route).accessibilityIdentifier("destination").navigationTitle("Detail")
         }
     }
 }
-// Explicit non-feed destination/image boundaries. No network, auth or storage.
-struct NativeDestination { let route: String; let arguments: [String: JSONValue] }
-struct ContentNotifications: View { let initialGroup: String?; var body: some View { EmptyView() } }
+struct NativeSettingsAppearance: ViewModifier { let settings: JSONValue; func body(content: Content) -> some View { content } }
+struct NativeRemoteImage: View { let url: String; var aspectFit = true; var body: some View { EmptyView() } }
 struct ContentPostDetail: View { let postID: Int64; let initialFloor: String?; let initialPage: Int64?; let preview: JSONValue?; var body: some View { EmptyView() } }
 struct ContentBoardManager: View { let categories: JSONValue; @Binding var selection: String; var body: some View { EmptyView() } }
+struct ContentNewConversation: View { var body: some View { EmptyView() } }
 enum AccountAuthorQuickCardNavigation { case signIn; case route(String, [String: JSONValue]) }
-struct AccountAuthorQuickCard: View {
-    @EnvironmentObject var app: NativeAppModel
-    @Environment(\.dismiss) var dismiss
-    let uid: Int64
-    let onNavigate: (AccountAuthorQuickCardNavigation) -> Void
-    var body: some View { VStack { Text("Author card \(uid)").accessibilityIdentifier("author-card"); Button("Close card") { dismiss() } }.onAppear { app.event = "Author:\(uid)" } }
-}
-struct NativeFailureView: View { let failure: NativeFailure; var retry: (() -> Void)? = nil; var body: some View { Text(failure.message) } }
-struct NativeEmptyView: View { init(_ title: String) {}; var body: some View { EmptyView() } }
-struct NativeBusyView: View { var body: some View { ProgressView() } }
-struct NativeRemoteImage: View { let url: String; var aspectFit: Bool = true; var body: some View { EmptyView() } }
-extension JSONValue {
-    func nativeString(_ key: String) -> String? { self[key]?.string }
-    func nativeInt(_ key: String) -> Int64? { self[key]?.int }
-    func nativeBool(_ key: String) -> Bool? { self[key]?.bool }
-    func nativeArray(_ key: String) -> [JSONValue] { self[key]?.array ?? [] }
+struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAuthorQuickCardNavigation) -> Void; var body: some View { Text("Author card") } }
+
+@MainActor final class FixtureTransport: ObservableObject, NativeTransport {
+    @Published var profileReads = 0
+    @Published var notificationStarts = 0
+    @Published var feedStarts = 0
+    private var session: AsyncThrowingStream<JSONValue, Error>.Continuation?
+    private var boundary: AsyncThrowingStream<JSONValue, Error>.Continuation?
+    private var feeds: [AsyncThrowingStream<JSONValue, Error>.Continuation] = []
+    var revoked = false
+    private var profile: JSONValue { .object(["uid": .integer(123), "name": .string("Retained reader"), "chickenCount": .integer(234), "starCount": .integer(12), "rank": .integer(5)]) }
+    private var site: JSONValue { .object(["current": .string("DEEPFLOOD"), "selected": .string("DEEPFLOOD"), "requiresRestart": .bool(false), "sites": .array([.object(["id": .string("DEEPFLOOD"), "origin": .string("https://www.deepflood.com"), "displayName": .string("Fixture")])])]) }
+    func request(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
+        switch operation {
+        case "site.get": return site
+        case "profile.self": profileReads += 1; return profile
+        case "attendance.status": return .object(["uid": .integer(123), "date": .string("2026-11-16"), "hasSignedIn": .bool(true), "gain": .integer(14)])
+        case "paging.access", "paging.refresh", "categories.refresh", "app.foreground", "boards.recent.record", "notifications.read", "notifications.refresh", "messages.refresh": return .null
+        default: throw NativeFailure(code: "BOUNDARY", message: operation)
+        }
+    }
+    func observe(_ operation: String, _ arguments: [String: JSONValue]) -> AsyncThrowingStream<JSONValue, Error> {
+        AsyncThrowingStream { continuation in
+            switch operation {
+            case "session.state":
+                session = continuation
+                continuation.yield(.object(["identityEpoch": .string("A"), "isSignedIn": .bool(true), "generation": .integer(1)]))
+            case "session.privateBoundary":
+                boundary = continuation
+                continuation.yield(.object(["identityEpoch": .string("A"), "phase": .string("READY"), "requiresConfirmation": .bool(false), "recoveryEligible": .bool(false)]))
+            case "settings.observe": continuation.yield(.object(["onboardingSeen": .bool(true), "homePageBar": .bool(true)]))
+            case "profile.self": continuation.yield(profile)
+            case "categories", "boards.recent", "messages.list": continuation.yield(.array([]))
+            case "notifications.counts": continuation.yield(.object(["interactions": .integer(40), "messages": .integer(0)]))
+            case "notifications.list":
+                notificationStarts += 1
+                let rows: [JSONValue] = (0..<60).map { i in
+                    .object(["id": .string("n\(i)"), "sourceId": .integer(Int64(i+1)), "category": .string("REPLIES"), "actorUid": .integer(123), "actorName": .string("Reader"), "threadTitle": .string("Notification \(i)"), "createdAtText": .string("Notification \(i)"), "postId": .integer(Int64(i+1)), "isReply": .bool(true), "isUnread": .bool(true)])
+                }
+                continuation.yield(.array(rows))
+            case "feed":
+                feedStarts += 1; feeds.append(continuation)
+                let handle = arguments["pagerId"] ?? .string("fixture")
+                let loading: JSONValue = .object(["pagerId": handle, "items": .array([]), "refresh": .object(["status": .string("Loading")])])
+                continuation.yield(loading)
+                let snapshot = feed(handle)
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(400))
+                    continuation.yield(snapshot) // Deliberate late callback for revocation test.
+                }
+            default: continuation.finish(throwing: NativeFailure(code: "BOUNDARY", message: operation))
+            }
+        }
+    }
+    private func feed(_ handle: JSONValue) -> JSONValue {
+        let rows: [JSONValue] = (0..<60).map { i in
+            let summary: [String: JSONValue] = ["postId": .integer(9007199254741001 + Int64(i)), "authorUid": .integer(123), "authorName": .string("Author \(i)"), "title": .string("Post \(i)"), "categoryTitle": .string("Board"), "commentCount": .integer(12), "viewCount": .integer(345), "lastActiveText": .string("5 min")]
+            return .object(["page": .integer(Int64(i/10+1)), "summary": .object(summary)])
+        }
+        return .object(["pagerId": handle, "items": .array(rows), "placeholdersBefore": .integer(0), "placeholdersAfter": .integer(0), "itemCount": .integer(60), "totalPages": .integer(6), "refresh": .object(["status": .string("NotLoading")])])
+    }
+    func revoke() {
+        revoked = true
+        session?.yield(.object(["identityEpoch": .string("B"), "isSignedIn": .bool(false), "generation": .integer(2)]))
+        boundary?.yield(.object(["identityEpoch": .string("B"), "phase": .string("READY"), "requiresConfirmation": .bool(false), "recoveryEligible": .bool(false)]))
+        for c in feeds { c.yield(feed(.string("late-A"))) }
+    }
 }

@@ -19,8 +19,11 @@ final class AccountSelfProfileState: ObservableObject {
     private var transport: (any NativeTransport)?
     private var isCurrent: (() -> Bool)?
     private var lifecycle = UUID()
+    private let now: () -> TimeInterval
+    private var fetchedAt: TimeInterval?
 
-    init() {
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
         observed.onChange = { [weak self] in self?.publish() }
         fetched.onChange = { [weak self] in self?.publish() }
     }
@@ -33,26 +36,36 @@ final class AccountSelfProfileState: ObservableObject {
     }
 
     func run(using transport: any NativeTransport, currentGeneration: @escaping () -> Int) async {
-        invalidate()
+        guard !Task.isCancelled else { return }
+        if isCurrent?() != true { invalidate() }
+        else { observed.cancel(); fetched.cancel() }
+        lifecycle = UUID()
         self.transport = transport
         let token = lifecycle
         let generation = currentGeneration()
         isCurrent = { currentGeneration() == generation }
-        // Structured children inherit the screen's lifetime; neither path waits for
-        // a non-null Room value (a newly signed-in user may have no cached row).
+        // Reattach Room, but keep the accepted snapshot during the handoff. A
+        // short tab/route return is not an explicit network refresh.
         async let observation: Void = observed.observe(using: transport, operation: "profile.self")
-        await refresh()
+        if fetchedAt.map({ now() - $0 >= 60 }) ?? true { await refresh() }
         await observation
-        if token == lifecycle, Task.isCancelled { invalidate() }
+        if token == lifecycle, Task.isCancelled {
+            observed.cancel(); fetched.cancel()
+        }
     }
 
     func refresh() async {
-        guard let transport, isCurrent?() == true, !fetched.isLoading else { return }
+        guard !Task.isCancelled, let transport, isCurrent?() == true, !fetched.isLoading else { return }
+        let token = lifecycle
+        let revision = fetched.valueRevision
         await fetched.load(using: transport, operation: "profile.self", arguments: ["refresh": .bool(true)])
+        guard token == lifecycle, isCurrent?() == true, !Task.isCancelled else { return }
+        if fetched.valueRevision != revision { fetchedAt = now() }
+        else if fetched.failure != nil { fetchedAt = nil }
     }
 
     func invalidate() {
-        lifecycle = UUID(); isCurrent = nil; transport = nil
+        lifecycle = UUID(); isCurrent = nil; transport = nil; fetchedAt = nil
         observed.invalidate(); fetched.invalidate()
         snapshot = .null; snapshotFailure = nil; loading = false
     }

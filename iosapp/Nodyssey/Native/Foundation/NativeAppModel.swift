@@ -357,7 +357,14 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         let transport = self.transport
         let task = Task { try await transport.request(operation, arguments) }
         requests[id] = (changesSession, task)
-        defer { requests[id] = nil }
+        defer {
+            requests[id] = nil
+            // Even a failed/cancelled write may have reached the server. Keep
+            // rows, but never let an appearance TTL hide its authoritative read.
+            if capturedGeneration == generation {
+                for store in stores { store.value?.invalidateFreshness(after: operation) }
+            }
+        }
         let result = await withTaskCancellationHandler { await task.result } onCancel: { task.cancel() }
         if !changesSession, capturedGeneration != generation {
             throw NativeFailure(code: "SESSION_CHANGED", message: "Session changed")

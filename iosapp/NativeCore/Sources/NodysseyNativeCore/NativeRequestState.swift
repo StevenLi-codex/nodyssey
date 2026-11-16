@@ -3,6 +3,8 @@ import Foundation
 /// Transient screen state. Invalidate before exposing a changed account or site.
 @MainActor public final class NativeRequestState {
     public private(set) var value: JSONValue?
+    /// Advances only for accepted transport values, never cancellation or loading.
+    public private(set) var valueRevision: UInt64 = 0
     public private(set) var failure: NativeFailure?
     public private(set) var isLoading = false
     /// Called after state changes. Capture UI owners weakly to avoid retaining them.
@@ -28,7 +30,7 @@ import Foundation
         defer { onChange?() }
         guard !Task.isCancelled, !task.isCancelled else { return }
         switch result {
-        case .success(let data): value = data
+        case .success(let data): value = data; valueRevision &+= 1
         case .failure(let error):
             if !(error is CancellationError) {
                 failure = error as? NativeFailure ?? NativeFailure(code: "TRANSPORT", message: "Request failed")
@@ -47,6 +49,7 @@ import Foundation
                 for try await data in transport.observe(operation, arguments) {
                     guard let self, self.generation == token, !Task.isCancelled else { return }
                     self.value = data
+                    self.valueRevision &+= 1
                     self.isLoading = false
                     self.onChange?()
                 }
