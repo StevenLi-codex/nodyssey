@@ -1,6 +1,17 @@
 import SwiftUI
 import NodysseyNativeCore
 
+private struct NativeSettingsAccentKey: EnvironmentKey {
+    static let defaultValue: Color = .accentColor
+}
+
+extension EnvironmentValues {
+    var nativeSettingsAccent: Color {
+        get { self[NativeSettingsAccentKey.self] }
+        set { self[NativeSettingsAccentKey.self] = newValue }
+    }
+}
+
 /// Render shared preferences; never creates a second settings store.
 private struct NativePalette {
     // Original primary tokens: designsys/theme/CharacterPalette.kt; graphite is
@@ -78,6 +89,7 @@ struct NativeSettingsAppearance: ViewModifier {
             // Explicit Color.accentColor consumers (rich links, badges, paging)
             // read a different environment from TintShapeStyle/native controls.
             .accentColor(accent)
+            .environment(\.nativeSettingsAccent, accent)
             .environment(\.locale, locale)
             .dynamicTypeSize(typeSize)
             .transaction { if reduceMotion || eink { $0.disablesAnimations = true; $0.animation = nil } }
