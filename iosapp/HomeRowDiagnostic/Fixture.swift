@@ -42,13 +42,17 @@ struct FixtureTransport: NativeTransport {
     func observe(_ operation: String, _ arguments: [String: JSONValue]) -> AsyncThrowingStream<JSONValue, Error> {
         AsyncThrowingStream { continuation in
             guard operation == "feed" else { continuation.finish(); return }
-            let rows: [JSONValue] = (0..<30).map { index in
-                .object(["page": .integer(Int64(index / 10 + 1)), "summary": .object([
-                    "postId": .integer(9007199254741001 + Int64(index)), "authorUid": .integer(9007199254741101 + Int64(index)),
-                    "authorName": .string("Author \(index)"), "title": .string(index == 1 ? "Long title wraps across several lines with enough words to exercise the production row layout" : "Post \(index)"),
+            let rows: [JSONValue] = (0..<30).map { index -> JSONValue in
+                let title: String = index == 1 ? "Long title wraps across several lines with enough words to exercise the production row layout" : "Post \(index)"
+                let postID: Int64 = 9007199254741001 + Int64(index)
+                let authorID: Int64 = 9007199254741101 + Int64(index)
+                let summary: [String: JSONValue] = [
+                    "postId": .integer(postID), "authorUid": .integer(authorID),
+                    "authorName": .string("Author \(index)"), "title": .string(title),
                     "categoryTitle": .string("Board"), "commentCount": .integer(12), "viewCount": .integer(345),
                     "lastCommenterName": .string("Reader"), "lastActiveText": .string("5 min"), "isPinned": .bool(index == 2)
-                ])])
+                ]
+                return .object(["page": .integer(Int64(index / 10 + 1)), "summary": .object(summary)])
             }
             continuation.yield(.object(["pagerId": arguments["pagerId"] ?? .string("fixture"), "placeholdersBefore": .integer(0), "placeholdersAfter": .integer(0), "itemCount": .integer(30), "totalPages": .integer(3), "items": .array(rows), "refresh": .object(["status": .string("NotLoading")])]))
         }
