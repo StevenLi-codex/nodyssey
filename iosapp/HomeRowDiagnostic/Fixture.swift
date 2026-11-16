@@ -21,7 +21,7 @@ import NodysseyNativeCore
 struct FixtureDestination: View { let name: String; var body: some View { Text("Destination " + name).accessibilityIdentifier("destination").navigationTitle("Detail") } }
 enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : destination.route == "SignIn" ? AnyView(FixtureThemeDestination()) : nil } }
 enum NativeEditorScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
-enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { ["Settings", "ThemeSettings", "SignIn"].contains(destination.route) ? nil : AnyView(FixtureDestination(name: destination.route)) } }
+enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "ThemeOther" ? AnyView(FixtureOtherChoice()) : ["Settings", "ThemeSettings", "SignIn"].contains(destination.route) ? nil : AnyView(FixtureDestination(name: destination.route)) } }
 enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? {
     ["Settings", "ThemeSettings"].contains(destination.route) ? AnyView(FixtureThemeDestination()) : nil
 } }
@@ -40,7 +40,23 @@ struct FixtureThemeDestination: View {
                 }
             }
             .background(ThemeTintProbe(settings: app.settings, checkpoint: 0, scope: "production-theme").frame(width: 0, height: 0))
-            .toolbar { Button("Theme sheet") { app.open("SignIn") }.accessibilityIdentifier("theme70.sheet") }
+            .toolbar {
+                Button("Sheet") { app.open("SignIn") }.accessibilityIdentifier("theme70.sheet")
+                Button("Detail") { app.open("ThemeProbeDetail") }.accessibilityIdentifier("theme70.detail")
+                Button("Other") { app.open("ThemeOther") }.accessibilityIdentifier("theme70.other")
+            }
+    }
+}
+struct FixtureOtherChoice: View {
+    @EnvironmentObject private var app: NativeAppModel
+    @StateObject private var action = SettingsAction()
+    var body: some View {
+        Form {
+            SettingsChoice(action: action, key: "appLanguage", title: "settings_language", choices: [
+                ("SYSTEM", "settings_language_system"), ("ENGLISH", "settings_language_en")
+            ])
+            Text(app.settings["appLanguage"]?.string ?? "missing").accessibilityIdentifier("theme70.language")
+        }.modifier(SettingsLifecycle(action: action))
     }
 }
 enum NativeMediaScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
@@ -61,7 +77,7 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
     private var feeds: [AsyncThrowingStream<JSONValue, Error>.Continuation] = []
     var revoked = false
     private var settings: JSONValue = .object(["onboardingSeen": .bool(true), "homePageBar": .bool(true),
-        "appLanguage": .string("ENGLISH"), "themeMode": .string(ProcessInfo.processInfo.arguments.contains("--dark") ? "DARK" : "LIGHT"),
+        "appLanguage": .string("ENGLISH"), "themeMode": .string(ProcessInfo.processInfo.arguments.contains("--system-dark") ? "SYSTEM" : ProcessInfo.processInfo.arguments.contains("--dark") ? "DARK" : "LIGHT"),
         "colorSource": .string("PRESET"), "presetId": .string("twins"), "paletteStyle": .string("SOFT"),
         "seedColor": .integer(-13279122), "einkMode": .bool(false)])
     private var profile: JSONValue { .object(["uid": .integer(123), "name": .string("Retained reader"), "chickenCount": .integer(234), "starCount": .integer(12), "rank": .integer(5)]) }
@@ -70,7 +86,7 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
         switch operation {
         case "settings.get": return settings
         case "settings.set":
-            try await Task.sleep(nanoseconds: 120_000_000)
+            try await Task.sleep(nanoseconds: 3_000_000_000) // Observe the real busy/disabled gate before readback.
             var fields = settings.object ?? [:]
             if let key = arguments["key"]?.string, let value = arguments["value"] { fields[key] = value }
             settings = .object(fields)

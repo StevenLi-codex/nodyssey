@@ -28,7 +28,7 @@ struct ThemeTintProbe: UIViewRepresentable {
         let scope = scope, checkpoint = checkpoint, scheme = scheme == .dark ? "dark" : "light"
         // Sample after the current SwiftUI transaction without forcing UIKit layout.
         Task { @MainActor [weak view] in
-            for delay in [100, 400, 1000] {
+            for delay in [100, 400] + Array(repeating: 1000, count: 600) {
                 try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
                 guard let view, view.token == token, let window = view.window else { return }
                 ThemeUIKitSnapshot.emit(window: window, settings: snapshot, scheme: scheme,
@@ -70,6 +70,11 @@ struct ThemeTintProbe: UIViewRepresentable {
                 "alpha": Double(view.alpha), "tintAdjustmentMode": view.tintAdjustmentMode.rawValue,
                 "interfaceStyle": traits.userInterfaceStyle.rawValue
             ]
+            row["accessibilityLabel"] = view.accessibilityLabel ?? ""
+            row["accessibilityValue"] = view.accessibilityValue ?? ""
+            row["contextMenuInteractions"] = view.interactions.compactMap { interaction in
+                interaction is UIContextMenuInteraction ? String(describing: ObjectIdentifier(interaction)) : nil
+            }
             if let control = view as? UIControl { row["enabled"] = control.isEnabled }
             if let text = view as? UILabel {
                 row["text"] = text.text ?? ""

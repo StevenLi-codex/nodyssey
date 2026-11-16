@@ -3,19 +3,27 @@ import UIKit
 final class NativeNavigationUITests: XCTestCase {
     @MainActor func testLightProfileCanvasExtendsBehindNativeTab() { verify(dark: false) }
     @MainActor func testDarkProfileCanvasExtendsBehindNativeTab() { verify(dark: true) }
-    @MainActor func testSameHostProductionPresetMenuAndSheet() {
-        let app = XCUIApplication(); app.launch();
+    @MainActor func testSameHostProductionPresetMenuAndSheet() { verifyTheme(systemDark: false) }
+    @MainActor func testSystemDarkProductionMenu() { verifyTheme(systemDark: true) }
+    @MainActor private func verifyTheme(systemDark: Bool) {
+        let app = XCUIApplication()
+        app.launchArguments = systemDark ? ["--system-dark"] : []
+        app.launch()
         XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout: 20))
         app.tabBars.buttons.element(boundBy: 2).tap()
         XCTAssertTrue(app.staticTexts["Retained reader"].waitForExistence(timeout: 10))
         app.buttons["native.profile.settings"].tap()
-        func inspect(_ id: String, _ name: String) {
+        let titles = ["theme": "settings_theme_mode", "source": "settings_color_source", "preset": "settings_color_source_preset"]
+        var mode = systemDark ? "SYSTEM" : "LIGHT"
+        var preset = "twins"
+        func control(_ role: String) -> XCUIElement { app.buttons[titles[role]!].firstMatch }
+        func inspect(_ name: String) {
             let state = app.staticTexts["theme70.state"].firstMatch
             XCTAssertTrue(state.waitForExistence(timeout: 8), app.debugDescription)
-            XCTAssertEqual(state.label, "LIGHT/PRESET/" + id)
+            XCTAssertEqual(state.label, mode + "/PRESET/" + preset)
             Thread.sleep(forTimeInterval: 2)
-            let shot = app.screenshot()
-            let attachment = XCTAttachment(screenshot: shot); attachment.name = name + "-swatches"; attachment.lifetime = .keepAlways; add(attachment)
+            let shot = app.screenshot() // One capture supplies swatches AND actual closed control glyphs.
+            let attachment = XCTAttachment(screenshot: shot); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
             let image = shot.image.cgImage!
             let w = image.width, h = image.height
             var bytes = [UInt8](repeating: 0, count: w * h * 4)
@@ -24,40 +32,96 @@ final class NativeNavigationUITests: XCTestCase {
                     space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
                 context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
             }
-            let expected = ["twins": [143, 111, 0], "graphite": [53, 96, 110], "reimu": [188, 48, 56], "miku": [0, 128, 120]][id]!
+            let dark = mode == "DARK" || (mode == "SYSTEM" && systemDark)
+            let lightPalette = ["twins": [143, 111, 0], "graphite": [53, 96, 110], "reimu": [188, 48, 56], "miku": [0, 128, 120]]
+            let darkPalette = ["twins": [255, 216, 74], "graphite": [53, 96, 110], "reimu": [255, 179, 182], "miku": [83, 215, 206]]
+            let expected = (dark ? darkPalette : lightPalette)[preset]!
+            let scale = CGFloat(w) / app.frame.width
             for key in ["theme70.tint", "theme70.accent"] {
                 let swatch = app.descendants(matching: .any)[key].firstMatch
                 XCTAssertTrue(swatch.exists, app.debugDescription)
                 guard swatch.exists else { continue }
-                let scale = CGFloat(w) / app.frame.width
                 let index = (Int(swatch.frame.midY * scale) * w + Int(swatch.frame.midX * scale)) * 4
                 let actual = Array(bytes[index..<index + 3]).map(Int.init)
                 print("THEME70_SWATCH \(name) \(key) expected=\(expected) actual=\(actual)")
                 XCTAssertLessThanOrEqual(zip(expected, actual).map { abs($0 - $1) }.max()!, 2, name + " " + key)
             }
+            for role in ["theme", "source", "preset"] {
+                let button = control(role)
+                XCTAssertTrue(button.exists && button.isEnabled, app.debugDescription)
+                let rect = button.frame
+                var histogram: [Int: Int] = [:]
+                for y in max(0, Int(rect.minY * scale))..<min(h, Int(rect.maxY * scale)) {
+                    for x in max(0, Int(rect.minX * scale))..<min(w, Int(rect.maxX * scale)) {
+                        let index = (y * w + x) * 4
+                        let rgb = Array(bytes[index..<index + 3]).map(Int.init)
+                        if rgb.max()! - rgb.min()! > 20 { histogram[(rgb[0] << 16) | (rgb[1] << 8) | rgb[2], default: 0] += 1 }
+                    }
+                }
+                let dominant = histogram.max(by: { $0.value < $1.value }) ?? (key: 0, value: 0)
+                let actual = [(dominant.key >> 16) & 255, (dominant.key >> 8) & 255, dominant.key & 255]
+                let record: [String: Any] = ["name": name, "role": role, "preset": preset, "mode": mode, "timestamp": Date().timeIntervalSince1970,
+                    "scheme": dark ? "dark" : "light", "expected": expected, "actual": actual, "count": dominant.value,
+                    "label": button.label, "value": button.value as? String ?? "", "frame": [rect.minX, rect.minY, rect.width, rect.height]]
+                print("THEME70_CONTROL " + String(data: try! JSONSerialization.data(withJSONObject: record, options: .sortedKeys), encoding: .utf8)!)
+                XCTAssertGreaterThan(dominant.value, 20, name + " missing rendered value")
+                XCTAssertLessThanOrEqual(zip(expected, actual).map { abs($0 - $1) }.max()!, 2, name + " " + role)
+            }
         }
-        func choose(_ current: String, _ target: String, _ id: String, _ name: String) {
-            let picker = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", current)).firstMatch
+        func choose(_ role: String, _ target: String, _ newMode: String, _ newPreset: String, _ name: String) {
+            let picker = control(role)
             XCTAssertTrue(picker.waitForExistence(timeout: 8), app.debugDescription)
+            let oldValue = picker.value as? String ?? ""
+            XCTAssertFalse(oldValue.isEmpty, "Accessible selected value missing")
             picker.tap()
+            Thread.sleep(forTimeInterval: 1.2)
+            print("THEME70_MENU " + String(data: try! JSONSerialization.data(withJSONObject: ["name": name, "role": role, "selected": oldValue, "timestamp": Date().timeIntervalSince1970], options: .sortedKeys), encoding: .utf8)!)
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-open-menu"; tree.lifetime = .keepAlways; add(tree)
             let option = app.buttons[target].firstMatch
             XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription); option.tap()
+            let busy = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == NO"), object: control("preset"))
+            XCTAssertEqual(XCTWaiter.wait(for: [busy], timeout: 2), .completed, "SettingsAction busy gate")
+            for r in ["theme", "source", "preset"] { XCTAssertFalse(control(r).isEnabled) }
+            mode = newMode; preset = newPreset
             let state = app.staticTexts["theme70.state"].firstMatch
-            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "LIGHT/PRESET/" + id), object: state)
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", mode + "/PRESET/" + preset), object: state)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, app.debugDescription)
-            inspect(id, name)
-            let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
-            let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-tree"; tree.lifetime = .keepAlways; add(tree)
+            inspect(name)
         }
-        inspect("twins", "theme-push-initial")
-        choose("settings_preset_twins", "settings_preset_graphite", "graphite", "theme-push-graphite")
-        choose("settings_preset_graphite", "settings_preset_reimu", "reimu", "theme-push-reimu")
-        choose("settings_preset_reimu", "settings_preset_miku", "miku", "theme-push-miku")
-        choose("settings_preset_miku", "settings_preset_graphite", "graphite", "theme-push-graphite-return")
+        let prefix = systemDark ? "system-dark" : "theme"
+        inspect(prefix + "-push-initial")
+        choose("preset", "settings_preset_graphite", mode, "graphite", prefix + "-push-graphite")
+        choose("preset", "settings_preset_reimu", mode, "reimu", prefix + "-push-reimu")
+        choose("preset", "settings_preset_miku", mode, "miku", prefix + "-push-miku")
+        choose("theme", "settings_theme_dark", "DARK", preset, prefix + "-mode-dark")
+        choose("theme", "settings_theme_light", "LIGHT", preset, prefix + "-mode-light")
+        choose("theme", "settings_theme_system", "SYSTEM", preset, prefix + "-mode-system")
+        choose("preset", "settings_preset_graphite", mode, "graphite", prefix + "-push-graphite-return")
+        app.buttons["theme70.detail"].tap()
+        XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 8))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        inspect(prefix + "-push-after-detail")
         app.buttons["theme70.sheet"].tap()
-        inspect("graphite", "theme-sheet-initial")
-        choose("settings_preset_graphite", "settings_preset_miku", "miku", "theme-sheet-miku")
-        choose("settings_preset_miku", "settings_preset_graphite", "graphite", "theme-sheet-graphite")
+        inspect(prefix + "-sheet-initial")
+        choose("preset", "settings_preset_miku", mode, "miku", prefix + "-sheet-miku")
+        choose("preset", "settings_preset_graphite", mode, "graphite", prefix + "-sheet-graphite")
+        app.buttons["action_close"].firstMatch.tap()
+        inspect(prefix + "-push-after-sheet")
+        app.buttons["theme70.other"].tap()
+        let language = app.buttons["settings_language"].firstMatch
+        XCTAssertTrue(language.waitForExistence(timeout: 8))
+        XCTAssertEqual(language.value as? String, "settings_language_en")
+        language.tap()
+        app.buttons["settings_language_system"].firstMatch.tap()
+        let disabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == NO"), object: language)
+        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 2), .completed)
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == YES", "settings_language_system"), object: language)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
+        XCTAssertEqual(app.staticTexts["theme70.language"].label, "SYSTEM")
+        language.tap(); app.buttons["settings_language_en"].firstMatch.tap()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == YES", "settings_language_en"), object: language)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed)
+        XCTAssertEqual(app.staticTexts["theme70.language"].label, "ENGLISH")
     }
     @MainActor private func verify(dark: Bool) {
         let app = XCUIApplication()

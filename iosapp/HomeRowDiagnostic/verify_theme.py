@@ -1,42 +1,58 @@
-"""Read-only assertions over original real-iOS probe data, not synthetic UI data."""
+"""Assert actual closed-menu pixels, native owner identity and selected menu actions.
+Disposable iOS diagnostics only: replacing UILabel with SwiftUI never skips color checks.
+"""
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
 records=[json.loads(line) for line in (root/'theme70-uikit.jsonl').read_text().splitlines()]
-palette={'twins':[143,111,0],'graphite':[53,96,110],'reimu':[188,48,56],'miku':[0,128,120]}
-scopes=[]; checkpoints=[]; failures=[]; identities={}
-for record in records:
-    if record['delayMillis']!=1000:continue
-    scope=record['scope']
-    if scope not in scopes:scopes.append(scope)
-    if len(scopes)>1 and scope==scopes[0]:continue # Covered push host is dimmed by UIKit, not stale tint.
-    location='push' if scope==scopes[0] else 'sheet'
-    preset=record['settings']['presetId'].split('"')[1]
-    expected=palette[preset]
-    assert record['settings']['themeMode']=='string("LIGHT")'
-    assert record['settings']['colorSource']=='string("PRESET")'
-    buttons=[n for n in record['nodes'] if 'menu' in n and n['tintAdjustmentMode']!=2 and n.get('configurationTitle','').startswith(('settings_preset_','settings_theme_','settings_color_source_'))]
-    assert len(buttons)==3, (location,preset,len(buttons))
-    samples=[]
-    for button in buttons:
-        role='preset' if button['configurationTitle'].startswith('settings_preset_') else 'theme' if button['configurationTitle'].startswith('settings_theme_') else 'source'
-        key=(location,role)
-        previous=identities.setdefault(key,button['identity'])
-        if previous!=button['identity']:failures.append(f'{location}/{role}: button remounted')
-        labels=[n for n in record['nodes'] if n['path'].startswith(button['path']+'/') and n['class']=='UILabel' and n.get('text')==button['configurationTitle']]
-        assert len(labels)==1,(location,preset,role,labels)
-        label=labels[0]
-        previous=identities.setdefault((location,role+'-label'),label['identity'])
-        if previous!=label['identity']:failures.append(f'{location}/{role}: label remounted')
-        colors={'tint':button['tint'],'titleColor':button['titleColor'],'labelTextColor':label['textColor']}
-        for channel,rgba in colors.items():
-            actual=[round(c*255) for c in rgba[:3]]
-            if max(abs(a-b) for a,b in zip(actual,expected))>1:failures.append(f'{location}/{preset}/{role}/{channel}: {actual} != {expected}')
-        samples.append({'role':role,'button':button['identity'],'label':label['identity'],'title':button['configurationTitle'],'colors':colors})
-    checkpoints.append({'location':location,'preset':preset,'controls':samples})
-sequences={location:[c['preset'] for c in checkpoints if c['location']==location] for location in ['push','sheet']}
-assert sequences=={'push':['twins','graphite','reimu','miku','graphite'],'sheet':['graphite','miku','graphite']},sequences
-report={'originalSnapshots':len(records),'checkpoints':checkpoints,'sequences':sequences,'failures':failures,'passed':not failures}
+log=(root/'green-xcodebuild.log').read_text()
+def lines(marker):
+    return [json.loads(line.split(marker,1)[1]) for line in log.splitlines() if marker in line]
+samples=lines('THEME70_CONTROL '); menus=lines('THEME70_MENU ')
+failures=[]; identities={}; evidence=[]
+expected_suffixes=['push-initial','push-graphite','push-reimu','push-miku','mode-dark','mode-light','mode-system','push-graphite-return','push-after-detail','sheet-initial','sheet-miku','sheet-graphite','push-after-sheet']
+prefix='system-dark-' if root.name=='dark' else 'theme-'
+expected_names=[prefix+s for s in expected_suffixes]
+assert list(dict.fromkeys(s['name'] for s in samples))==expected_names, [s['name'] for s in samples]
+assert len(samples)==len(expected_names)*3, len(samples)
+def actions(menu):
+    if 'state' in menu: return [menu]
+    return [a for child in menu.get('children',[]) for a in actions(child)]
+def frame_matches(a,b):
+    return max(abs(x-y) for x,y in zip(a,b))<3
+for sample in samples:
+    if max(abs(a-b) for a,b in zip(sample['actual'],sample['expected']))>2 or sample['count']<=20:
+        failures.append(f"{sample['name']}/{sample['role']}: stale or missing actual glyphs {sample['actual']} != {sample['expected']}")
+    relevant=[r for r in records if abs(r['timestamp']-sample['timestamp'])<3 and r['settings']['presetId']=='string("'+sample['preset']+'")' and r['settings']['themeMode']=='string("'+sample['mode']+'")']
+    found=[]
+    for r in sorted(relevant,key=lambda r:abs(r['timestamp']-sample['timestamp'])):
+        for n in r['nodes']:
+            if n.get('hidden') or n.get('alpha',1)<0.9 or n.get('tintAdjustmentMode')==2 or not n.get('enabled',True):continue
+            if ('menu' in n or n.get('contextMenuInteractions')) and frame_matches(n['frame'],sample['frame']):
+                found.append((r,n))
+        if found: break
+    if len(found)!=1:
+        failures.append(f"{sample['name']}/{sample['role']}: expected exactly one live menu owner at {sample['frame']}, got {len(found)}")
+        continue
+    record,node=found[0]
+    location='sheet' if '-sheet-' in sample['name'] else 'push'
+    key=(location,sample['role'])
+    identity=(node['identity'],tuple(node.get('contextMenuInteractions',[])))
+    prior=identities.setdefault(key,identity)
+    if prior!=identity:failures.append(f'{key}: owner remounted {prior} -> {identity}')
+    evidence.append(dict(sample,owner=node['identity'],ownerClass=node['class'],interactions=node.get('contextMenuInteractions'),snapshotTime=record['timestamp'],scope=record['scope']))
+checkmarks=[]
+for check in menus:
+    nearby=[r for r in records if abs(r['timestamp']-check['timestamp'])<1.5]
+    matches=[]
+    for r in nearby:
+        for n in r['nodes']:
+            aa=actions(n.get('menu',{}))
+            if any(a.get('title')==check['selected'] and a.get('state')==1 for a in aa):matches.append((r,n,aa))
+    if not matches: failures.append(f"{check['name']}: selected UIAction/checkmark missing for {check['selected']}")
+    else:checkmarks.append(dict(check,owner=matches[0][1]['identity']))
+assert len(menus)==9,len(menus)
+report={'snapshots':len(records),'samples':evidence,'identities':{str(k):v for k,v in identities.items()},'checkmarks':checkmarks,'failures':failures,'passed':not failures}
 (root/'derived-theme-verification.json').write_text(json.dumps(report,indent=2))
-print(json.dumps({'originalSnapshots':len(records),'checkpoints':len(checkpoints),'sequences':sequences,'failedColorOrIdentityChecks':len(failures),'firstFailures':failures[:9]},indent=2))
-assert not failures, f'{len(failures)} stale tint or identity failures; see derived-theme-verification.json'
+print(json.dumps({'snapshots':len(records),'checkpoints':len(expected_names),'samples':len(samples),'identityMatches':len(evidence),'checkmarks':len(checkmarks),'failures':failures},indent=2))
+assert not failures, failures
