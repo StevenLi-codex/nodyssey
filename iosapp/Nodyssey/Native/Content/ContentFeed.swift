@@ -318,10 +318,27 @@ struct ContentPagedList: View {
                         perform(action, ticket: ticket, proxy: proxy)
                     }
                 } catch { jump.cancel() } // The invalid window is rendered above; retire its timer.
-                if !store.isReplacingPagingWindow, !restored, case .success(let window) = window,
-                   let target = restoreID ?? window.rows.first?.id, window.rows.contains(where: { $0.id == target }) {
-                    proxy.scrollTo(target, anchor: .top); restored = true
+                if isVisible, !store.isReplacingPagingWindow, !restored, store.failure == nil,
+                   store.value["refresh"]?.nativeString("status") == "NotLoading", case .success(let window) = window {
+                    // A completed window may no longer contain the saved post.
+                    // Fall back once (including loaded-empty), then let viewport
+                    // observations replace that stale memory with real user travel.
+                    let target = restoreID.flatMap { id in window.rows.contains(where: { $0.id == id }) ? id : nil } ?? window.rows.first?.id
+                    if let target { proxy.scrollTo(target, anchor: .top) }
+                    restoreID = target
+                    restored = true
                 }
+            }
+            .onChange(of: isVisible) { visible in
+                // Retained observations can finish while hidden. No new value is
+                // required to complete the deferred restoration on return.
+                guard visible, let ticket = owner, owns(ticket), !store.isReplacingPagingWindow, !restored,
+                      store.failure == nil, store.value["refresh"]?.nativeString("status") == "NotLoading",
+                      case .success(let window) = window else { return }
+                let target = restoreID.flatMap { id in window.rows.contains(where: { $0.id == id }) ? id : nil } ?? window.rows.first?.id
+                if let target { proxy.scrollTo(target, anchor: .top) }
+                restoreID = target
+                restored = true
             }
             .task(id: jump.wait) {
                 guard let wait = jump.wait, let ticket = owner, owns(ticket) else { return }

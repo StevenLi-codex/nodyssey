@@ -107,14 +107,14 @@ final class NativeNavigationUITests: XCTestCase {
     @MainActor private func assertPosition(_ app: XCUIApplication, _ title: String, _ before: [String: Any], _ name: String) {
         let after = settled(app, app.staticTexts[title], name)
         XCTAssertEqual(after["owner"] as? String, before["owner"] as? String, "UIKit list owner changed")
-        XCTAssertEqual(after["offsetY"] as? Double ?? -9999, before["offsetY"] as? Double ?? 9999, accuracy: 3, name)
-        XCTAssertEqual(after["anchorY"] as? Double ?? -9999, before["anchorY"] as? Double ?? 9999, accuracy: 3, name)
+        XCTAssertEqual((after["offsetY"] as? NSNumber)?.doubleValue ?? -9999, (before["offsetY"] as? NSNumber)?.doubleValue ?? 9999, accuracy: 3, name)
+        XCTAssertEqual((after["anchorY"] as? NSNumber)?.doubleValue ?? -9999, (before["anchorY"] as? NSNumber)?.doubleValue ?? 9999, accuracy: 3, name)
         XCTAssertTrue(app.staticTexts[title].isHittable)
     }
     @MainActor private func partialScroll(_ app: XCUIApplication) {
         for _ in 0..<2 { app.swipeUp() }
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.543)))
-        let g = geometry(app); let top = g["viewportY"] as? Double ?? 0
+        let g = geometry(app); let top = (g["viewportY"] as? NSNumber)?.doubleValue ?? 0
         let partial = app.cells.allElementsBoundByIndex.contains { $0.frame.minY < top && $0.frame.maxY > top }
         print("PARTIAL top=\(top) cells=" + app.cells.allElementsBoundByIndex.map { "\($0.frame)" }.joined(separator: ";"))
         XCTAssertTrue(partial, "Must begin with a partially clipped row")
@@ -182,7 +182,7 @@ final class NativeNavigationUITests: XCTestCase {
         app.buttons["Go"].tap()
         XCTAssertTrue(app.staticTexts["Post 90"].waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.staticTexts["Post 90"].isHittable)
-        XCTAssertTrue(app.staticTexts["requests"].label.hasSuffix("f2"))
+        XCTAssertTrue(app.staticTexts["requests"].label.contains("f2"))
         screenshot(app, "page-ten")
         app.buttons["Board B"].tap()
         XCTAssertTrue(app.staticTexts["BoardB 0"].waitForExistence(timeout: 10), app.debugDescription)
@@ -194,8 +194,47 @@ final class NativeNavigationUITests: XCTestCase {
         let before = settled(app, app.staticTexts[title], "board-restored")
         tab(app, 1); tab(app, 0)
         assertPosition(app, title, before, "board-return")
-        XCTAssertTrue(app.staticTexts["requests"].label.hasSuffix("f4"), app.staticTexts["requests"].label)
+        XCTAssertTrue(app.staticTexts["requests"].label.contains("f4"), app.staticTexts["requests"].label)
         screenshot(app, "board-restored")
+    }
+    @MainActor func testMissingAnchorHiddenCompletionAndPageGeometryCanAdvance() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--anchor-probe", "--hold-feed", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        XCTAssertTrue(app.activityIndicators.firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Hide feed"].tap()
+        control(app, "Release")
+        XCTAssertTrue(app.staticTexts["Hidden feed"].exists)
+        app.buttons["Hide feed"].tap()
+        XCTAssertTrue(app.staticTexts["Post 30"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Post 30"].isHittable)
+        app.swipeUp(); app.swipeUp()
+        XCTAssertNotEqual(app.staticTexts["observed-page"].label, "observed 0", app.debugDescription)
+        XCTAssertNotEqual(app.staticTexts["observed-page"].label, "observed 4", "Missing anchor must not freeze viewport page")
+        app.buttons["Page 10"].tap(); app.buttons["Hide feed"].tap()
+        control(app, "Release"); app.buttons["Hide feed"].tap()
+        XCTAssertTrue(app.staticTexts["Post 90"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Post 90"].isHittable, app.debugDescription)
+        app.swipeUp(); app.swipeUp()
+        XCTAssertNotEqual(app.staticTexts["observed-page"].label, "observed 10")
+        screenshot(app, "missing-anchor-page-advanced")
+    }
+    @MainActor func testStaleNotificationReturnKeepsRowsWhileRefreshHeld() {
+        let app = launch(); tab(app, 1)
+        XCTAssertTrue(app.staticTexts["Notification 0"].waitForExistence(timeout: 8)); partialScroll(app)
+        let title = visible(app, "Notification ").label
+        let before = settled(app, app.staticTexts[title], "ttl-before")
+        tab(app, 0)
+        // Real production 60-second monotonic TTL; no test clock/hook.
+        Thread.sleep(forTimeInterval: 62)
+        tab(app, 1)
+        XCTAssertTrue(app.staticTexts["requests"].label.contains("r1"), app.staticTexts["requests"].label)
+        XCTAssertTrue(app.staticTexts[title].isHittable)
+        XCTAssertFalse(app.activityIndicators.firstMatch.exists)
+        assertPosition(app, title, before, "ttl-refresh-held")
+        control(app, "Change")
+        assertPosition(app, title, before, "ttl-refreshed")
+        screenshot(app, "ttl-old-rows-return")
     }
     @MainActor func testIdentityRevocationRemovesPrivateRootsAndLateCallbacks() {
         let app = launch(); tab(app, 2)

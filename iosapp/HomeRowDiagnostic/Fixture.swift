@@ -12,7 +12,7 @@ import NodysseyNativeCore
     var body: some Scene { WindowGroup {
         VStack(spacing: 0) {
             HStack {
-                Text("p\(fixture.profileReads) n\(fixture.notificationStarts) f\(fixture.feedStarts)").accessibilityIdentifier("requests")
+                Text("p\(fixture.profileReads) n\(fixture.notificationStarts) f\(fixture.feedStarts) r\(fixture.notificationRefreshes)").accessibilityIdentifier("requests")
                 Button("Revoke") { fixture.revoke() }.accessibilityIdentifier("revoke")
                 Menu("Control") {
                     Button("Same") { fixture.emit(change: false) }
@@ -24,7 +24,8 @@ import NodysseyNativeCore
                 }.accessibilityIdentifier("control")
                 Text("e\(fixture.emissions)").accessibilityIdentifier("emissions")
             }.font(.caption)
-            NativeRootView()
+            if ProcessInfo.processInfo.arguments.contains("--anchor-probe") { FixtureAnchorRoot() }
+            else { NativeRootView() }
         }.environmentObject(app).environmentObject(fixture)
             .overlay(alignment: .topLeading) { RetentionGeometryProbe().frame(width: 1, height: 1).allowsHitTesting(false) }
             .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-profile") ? .accessibility2 : .large)
@@ -48,10 +49,34 @@ struct ContentBoardManager: View { let categories: JSONValue; @Binding var selec
 enum AccountAuthorQuickCardNavigation { case signIn; case route(String, [String: JSONValue]) }
 struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAuthorQuickCardNavigation) -> Void; var body: some View { Text("Author card") } }
 
+// Additional synthetic parent exercises the shipping ContentPagedList with a
+// saved post absent from a replacement page; main tests keep actual NativeRootView.
+struct FixtureAnchorRoot: View {
+    @State private var page: Int64 = 4
+    @State private var hide = false
+    @State private var observed: Int64 = 0
+    var body: some View {
+        VStack {
+            HStack {
+                Button("Page 10") { page = 10 }
+                Button("Hide feed") { hide.toggle() }
+                Text("observed \(observed)").accessibilityIdentifier("observed-page")
+            }
+            TabView(selection: $hide) {
+                NavigationStack {
+                    ContentPagedList(operation: "feed", arguments: ["sort": .string("LAST_REPLY"), "page": .integer(page)],
+                                     restoreID: 42, replacePage: { page = $0 }, visible: { _, value in observed = value ?? 0 })
+                }.tag(false).tabItem { Text("Feed") }
+                Text("Hidden feed").tag(true).tabItem { Text("Other") }
+            }
+        }
+    }
+}
 @MainActor final class FixtureTransport: ObservableObject, NativeTransport {
     @Published var profileReads = 0
     @Published var notificationStarts = 0
     @Published var feedStarts = 0
+    @Published var notificationRefreshes = 0
     private var session: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var boundary: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var feeds: [(AsyncThrowingStream<JSONValue, Error>.Continuation, [String: JSONValue])] = []
@@ -72,7 +97,8 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
         case "site.get": return site
         case "profile.self": profileReads += 1; return profile
         case "attendance.status": return .object(["uid": .integer(123), "date": .string("2026-11-16"), "hasSignedIn": .bool(true), "gain": .integer(14)])
-        case "paging.access", "paging.refresh", "categories.refresh", "app.foreground", "boards.recent.record", "notifications.read", "notifications.refresh", "messages.refresh": return .null
+        case "notifications.refresh": notificationRefreshes += 1; return .null
+        case "paging.access", "paging.refresh", "categories.refresh", "app.foreground", "boards.recent.record", "notifications.read", "messages.refresh": return .null
         default: throw NativeFailure(code: "BOUNDARY", message: operation)
         }
     }
@@ -100,9 +126,11 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
                 let loading: JSONValue = .object(["pagerId": handle, "items": .array([]), "refresh": .object(["status": .string("Loading")])])
                 continuation.yield(loading)
                 let snapshot = feed(handle, arguments)
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(400))
-                    continuation.yield(snapshot) // Deliberate late callback for revocation test.
+                if !ProcessInfo.processInfo.arguments.contains("--hold-feed") {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(400))
+                        continuation.yield(snapshot) // Deliberate late callback for revocation test.
+                    }
                 }
             default: continuation.finish(throwing: NativeFailure(code: "BOUNDARY", message: operation))
             }
@@ -124,7 +152,7 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
         emissions += 1
     }
     func releaseEmpty() { for c in notifications { c.yield(.array([])) }; emissions += 1 }
-    func releaseRows() { for c in notifications { c.yield(notificationRows) }; emissions += 1 }
+    func releaseRows() { emit(change: false) }
     func fail() { for c in notifications { c.finish(throwing: NativeFailure(code: "NETWORK", message: "Fixture failure")) } }
     func late() {
         for (c, args) in feeds { c.yield(feed(.string("late-A"), args)) }

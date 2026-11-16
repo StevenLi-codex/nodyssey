@@ -22,7 +22,7 @@ for sub in ['Content','Account','Foundation']:
 for src in (repo/'iosapp/Nodyssey').glob('*.lproj/*.strings'):
     target=app/src.parent.name/src.name; target.parent.mkdir(exist_ok=True); shutil.copy2(src,target)
 for src in (repo/'iosapp/Nodyssey/Native/Resources').rglob('*.strings'):
-    target=app/src.parent.name/src.name; target.parent.mkdir(exist_ok=True); shutil.copy2(src,target)
+    target=app/'Native'/src.parent.name/src.name; target.parent.mkdir(exist_ok=True); shutil.copy2(src,target)
 for sub in ['Content','Account','Foundation']:
     for src in (repo/'iosapp/Nodyssey/Native'/sub/'Resources').glob('*.xcstrings'):
         shutil.copy2(src, app/'Native'/src.name)

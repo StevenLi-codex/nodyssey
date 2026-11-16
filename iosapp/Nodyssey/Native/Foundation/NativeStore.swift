@@ -27,12 +27,15 @@ import NodysseyNativeCore
     private var pagingHandle: String?
     private var retainedObservation: Task<Void, Never>?
     private var retainedRestart = 0
+    private var retainedRefresh: Task<Void, Never>?
+    private var refreshRequestedAt: TimeInterval?
+    private var refreshRevision: UInt64?
     private var hasPagingValue = false
     private var observing = false
     private var isPaging: Bool { key?.operation == "feed" || key?.operation == "search.feed" }
     var hasValue: Bool { isPaging ? hasPagingValue : state.value != nil }
 
-    deinit { retainedObservation?.cancel() }
+    deinit { retainedObservation?.cancel(); retainedRefresh?.cancel() }
 
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now
@@ -41,6 +44,8 @@ import NodysseyNativeCore
             if self.valueRevision != self.state.valueRevision {
                 self.valueRevision = self.state.valueRevision
                 self.receivedAt = self.now()
+                self.refreshRevision = nil
+                self.refreshRequestedAt = nil
             }
             var next = self.state.value ?? .null
             if self.isReplacingPagingWindow, !self.value.nativeArray("items").isEmpty {
@@ -93,7 +98,10 @@ import NodysseyNativeCore
     func observeRetained(_ app: NativeAppModel, _ name: String, _ arguments: [String: JSONValue] = [:], restart: Int = 0) -> Bool {
         guard !Task.isCancelled else { return false }
         prepare(app, name, arguments)
-        if retainedObservation != nil, retainedRestart == restart { return false }
+        if retainedObservation != nil, retainedRestart == restart {
+            refreshRetainedIfStale(app, name)
+            return false
+        }
         cancel()
         retainedRestart = restart
         pagingHandle = arguments["pagerId"]?.string
@@ -119,6 +127,47 @@ import NodysseyNativeCore
             if self.failure != nil { self.receivedAt = nil }
         }
         return true
+    }
+
+    /// Kotlin list revisions are local invalidations, not remote push. Revalidate
+    /// an expired appearance without replacing its subscription or loaded rows.
+    private func refreshRetainedIfStale(_ app: NativeAppModel, _ name: String, maximumAge: TimeInterval = 60) {
+        let refresh: String
+        switch name {
+        case "notifications.list": refresh = "notifications.refresh"
+        case "messages.list": refresh = "messages.refresh"
+        default: return
+        }
+        guard hasValue, freshnessRemaining(maximumAge) <= 0, retainedRefresh == nil else { return }
+        // The refresh receipt only advances Kotlin's revision. Wait for accepted
+        // list data, bounded by the same TTL if that revision never produces it.
+        if refreshRevision == valueRevision, let requested = refreshRequestedAt,
+           now() - requested < maximumAge { return }
+        refreshRevision = valueRevision
+        refreshRequestedAt = now()
+        let token = operation
+        let revision = valueRevision
+        let transport = app.transport
+        retainedRefresh = Task { [weak self] in
+            do {
+                // A refresh is read-only; call the same Kotlin graph directly so
+                // app mutation invalidation cannot erase a newer list timestamp.
+                _ = try await transport.request(refresh, [:])
+                try Task.checkCancellation()
+                guard let self, self.operation == token else { return }
+                self.retainedRefresh = nil
+            } catch {
+                guard let self, self.operation == token else { return }
+                self.retainedRefresh = nil
+                self.refreshRevision = nil
+                self.refreshRequestedAt = nil
+                // An intervening authoritative value supersedes a late failure.
+                if !(error is CancellationError), self.valueRevision == revision {
+                    self.receivedAt = nil
+                    self.failure = error as? NativeFailure ?? .init(code: "TRANSPORT", message: "Refresh failed")
+                }
+            }
+        }
     }
 
     /// Explicit user refresh/readback remains authoritative, regardless of age.
@@ -227,6 +276,8 @@ import NodysseyNativeCore
         operation = UUID()
         observing = false
         retainedObservation?.cancel(); retainedObservation = nil
+        retainedRefresh?.cancel(); retainedRefresh = nil
+        refreshRevision = nil; refreshRequestedAt = nil
         freshnessWait?.cancel(); freshnessWait = nil
         loadingTask?.cancel(); loadingTask = nil
         state.cancel()
