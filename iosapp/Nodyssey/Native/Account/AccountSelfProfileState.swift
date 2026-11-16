@@ -69,4 +69,8 @@ final class AccountSelfProfileState: ObservableObject {
         observed.invalidate(); fetched.invalidate()
         snapshot = .null; snapshotFailure = nil; loading = false
     }
+
+    func markStale(after operation: String) {
+        if operation == "attendance.sign" || operation.hasPrefix("account.") { fetchedAt = nil }
+    }
 }

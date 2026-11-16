@@ -6,6 +6,7 @@ for path in ['iosapp/Nodyssey.xcodeproj','iosapp/NativeCore']:
 app=stage/'iosapp/Nodyssey'; (app/'Native').mkdir(parents=True,exist_ok=True)
 files=['Content/ContentCommon.swift','Content/ContentFeed.swift','Content/ContentState.swift','Content/ContentCommand.swift','Content/ContentPreferences.swift','Content/ContentNotifications.swift','Foundation/NativeStore.swift','Foundation/NativeAppModel.swift','Foundation/NativeRootView.swift','Foundation/NativeDestination.swift','Foundation/NativePresentation.swift','Foundation/NativeCommonViews.swift','Account/AccountProfileDirectory.swift','Account/AccountSelfProfileState.swift','Account/AccountAttendanceState.swift','Account/AccountActionState.swift','Account/AccountMutationState.swift','Account/AccountProfileDate.swift']
 hashes={}
+files += ['Foundation/NativeScreen.swift', 'Foundation/NativePrivateBoundaryRecoveryView.swift']
 for name in files:
     src=repo/'iosapp/Nodyssey/Native'/name
     shutil.copy2(src,app/'Native'/src.name); hashes[name]=hashlib.sha256(src.read_bytes()).hexdigest()

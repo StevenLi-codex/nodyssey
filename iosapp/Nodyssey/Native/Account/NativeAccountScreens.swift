@@ -247,6 +247,8 @@ struct AccountProfileScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: app.generation) {
+            app.registerRetainedOwner(profile, invalidate: { [weak profile] in profile?.invalidate() },
+                                      mutation: { [weak profile] in profile?.markStale(after: $0) })
             if app.isSignedIn { await profile.run(using: app.transport, currentGeneration: { app.generation }) }
             else { profile.invalidate() }
         }

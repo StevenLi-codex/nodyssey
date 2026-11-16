@@ -153,9 +153,17 @@ struct AccountProfileAttendance: View {
     @State private var choosing = false
     @State private var attendance = AccountAttendanceState()
     @State private var attendanceGeneration: Int?
+    @State private var attendanceNow = Date()
+    @Environment(\.scenePhase) private var scenePhase
+    private var attendanceScope: AccountAttendanceState.Scope? {
+        guard let uid = status.value["uid"]?.int,
+              let epoch = app.session["identityEpoch"]?.string,
+              let site = app.activeSite?.rawValue else { return nil }
+        return .init(generation: app.generation, identityEpoch: epoch, site: site, uid: uid)
+    }
     private var presentation: AccountAttendanceState.Presentation {
         guard attendanceGeneration == app.generation else { return app.isSignedIn ? .unknown : .guest }
-        return attendance.presentation(status: status.value, isSignedIn: app.isSignedIn)
+        return attendance.presentation(status: status.value, isSignedIn: app.isSignedIn, scope: attendanceScope, now: attendanceNow)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -190,9 +198,9 @@ struct AccountProfileAttendance: View {
             }
         }
         .task(id: app.generation) {
-            choosing = false; action.cancel()
+            choosing = false
             if attendanceGeneration != app.generation {
-                attendance.reset(); status.invalidate(); attendanceGeneration = app.generation
+                action.cancel(); attendance.reset(); status.invalidate(); attendanceGeneration = app.generation
             }
             if app.isSignedIn { await status.loadIfStale(app, "attendance.status") }
         }
@@ -201,17 +209,48 @@ struct AccountProfileAttendance: View {
             Button(String(localized: "native.account.attendance_random", table: "Account")) { sign("RANDOM") }
             Button("action_cancel", role: .cancel) {}
         } message: { Text("profile_attendance_modes") }
-        .onDisappear { choosing = false; action.cancel() }
+        // A pushed destination is not identity revocation. Keep the existing
+        // action alive, including its uncertain-write gate and read-only retry.
+        .onDisappear { choosing = false }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await checkAttendanceDay() } }
+        }
+        .task {
+            await checkAttendanceDay()
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
+                await checkAttendanceDay()
+            }
+        }
+    }
+    private func checkAttendanceDay() async {
+        let now = Date()
+        let changed = AccountAttendanceState.siteDay(now) != AccountAttendanceState.siteDay(attendanceNow)
+        attendanceNow = now
+        guard changed, app.isSignedIn, attendanceGeneration == app.generation else { return }
+        choosing = false
+        if action.canRefresh { action.refreshOnly() }
+        else if !action.blocked { await status.load(app, "attendance.status") }
     }
     private func sign(_ mode: String) {
-        guard app.isSignedIn, presentation == .unsigned, !action.blocked else { return }
+        guard app.isSignedIn, presentation == .unsigned, !action.blocked,
+              let scope = attendanceScope,
+              let day = status.value["date"]?.string,
+              day == AccountAttendanceState.siteDay() else { return }
         let generation = app.generation
         action.perform(app, operation: "attendance.sign", arguments: ["mode": .string(mode), "confirmed": .bool(true)], read: {
-            let fresh = try await app.request("attendance.status")
+            // Load through the store's owner, not its public value: cancellation
+            // must not restore the pre-write internal snapshot over this readback.
+            await status.load(app, "attendance.status")
             try Task.checkCancellation()
-            guard generation == app.generation else { return }
-            status.value = fresh
-        }, received: { attendance.receive($0) })
+            guard generation == app.generation else { throw CancellationError() }
+            if let failure = status.failure { throw failure }
+            guard status.value["uid"]?.int == scope.uid,
+                  let date = status.value["date"]?.string, date >= day,
+                  status.value["hasSignedIn"]?.bool != nil else {
+                throw NativeFailure(code: "INVALID_RESPONSE", message: "")
+            }
+        }, received: { attendance.receive($0, scope: scope, day: day) })
     }
 }
 

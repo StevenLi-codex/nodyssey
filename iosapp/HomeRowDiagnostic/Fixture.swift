@@ -22,22 +22,18 @@ import NodysseyNativeCore
 // Real NativeRootView, NativeAppModel, NativeStore, NativeRequestState and root
 // screen declarations compile together. Only non-root destinations/image/theme
 // and the Kotlin/network boundary are replaced; no production fixture hooks.
-struct NativeScreen: View {
-    let destination: NativeDestination
-    var body: some View {
-        switch destination.route {
-        case "PostList": ContentPostList()
-        case "Notifications": ContentNotifications()
-        case "Profile": AccountProfileScreen()
-        default: Text("Destination " + destination.route).accessibilityIdentifier("destination").navigationTitle("Detail")
-        }
-    }
-}
+struct FixtureDestination: View { let name: String; var body: some View { Text("Destination " + name).accessibilityIdentifier("destination").navigationTitle("Detail") } }
+enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : nil } }
+enum NativeEditorScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
+enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { AnyView(FixtureDestination(name: destination.route)) } }
+enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
+enum NativeMediaScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
+struct NativeExternalBrowser: View { let url: URL; var body: some View { EmptyView() } }
 struct NativeSettingsAppearance: ViewModifier { let settings: JSONValue; func body(content: Content) -> some View { content } }
 struct NativeRemoteImage: View { let url: String; var aspectFit = true; var body: some View { EmptyView() } }
-struct ContentPostDetail: View { let postID: Int64; let initialFloor: String?; let initialPage: Int64?; let preview: JSONValue?; var body: some View { EmptyView() } }
+struct ContentPostDetail: View { let postID: Int64; let initialFloor: String?; let initialPage: Int64?; let preview: JSONValue?; var body: some View { FixtureDestination(name: "PostDetail") } }
 struct ContentBoardManager: View { let categories: JSONValue; @Binding var selection: String; var body: some View { EmptyView() } }
-struct ContentNewConversation: View { var body: some View { EmptyView() } }
+
 enum AccountAuthorQuickCardNavigation { case signIn; case route(String, [String: JSONValue]) }
 struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAuthorQuickCardNavigation) -> Void; var body: some View { Text("Author card") } }
 
@@ -76,7 +72,7 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
             case "notifications.list":
                 notificationStarts += 1
                 let rows: [JSONValue] = (0..<60).map { i in
-                    .object(["id": .string("n\(i)"), "sourceId": .integer(Int64(i+1)), "category": .string("REPLIES"), "actorUid": .integer(123), "actorName": .string("Reader"), "threadTitle": .string("Notification \(i)"), "createdAtText": .string("Notification \(i)"), "postId": .integer(Int64(i+1)), "isReply": .bool(true), "isUnread": .bool(true)])
+                    .object(["id": .string("n\(i)"), "sourceId": .integer(Int64(i+1)), "sources": .array([.object(["id": .string("n\(i)"), "category": .string("REPLIES")])]), "category": .string("REPLIES"), "actorUid": .integer(123), "actorName": .string("Reader"), "threadTitle": .string("Notification \(i)"), "createdAtText": .string("Notification \(i)"), "postId": .integer(Int64(i+1)), "isReply": .bool(true), "isUnread": .bool(true)])
                 }
                 continuation.yield(.array(rows))
             case "feed":
