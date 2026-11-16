@@ -118,7 +118,6 @@ struct SettingsRouteRow: View {
 
 struct SettingsChoice: View {
     @EnvironmentObject private var app: NativeAppModel
-    @Environment(\.nativeSettingsAccent) private var accent
     @ObservedObject var action: SettingsAction
     let key: String
     let title: String
@@ -129,9 +128,6 @@ struct SettingsChoice: View {
                 ForEach(choices, id: \.0) { option in settingsText(option.1).tag(option.0) }
                 if !choices.contains(where: { $0.0 == selected }) { Text(verbatim: selected).tag(selected) }
             } label: { settingsText(title) }
-            // UIKit's menu-backed Picker can retain its initial inherited tint.
-            // Pass the current resolved color at the control without replacing it.
-            .tint(accent)
             .disabled(action.busy)
         }
     }
