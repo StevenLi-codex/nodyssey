@@ -16,7 +16,26 @@ final class NativeNavigationUITests: XCTestCase {
         let titles = ["theme": "settings_theme_mode", "source": "settings_color_source", "preset": "settings_color_source_preset"]
         var mode = systemDark ? "SYSTEM" : "LIGHT"
         var preset = "twins"
+        var saves = 0
         func control(_ role: String) -> XCUIElement { app.buttons[titles[role]!].firstMatch }
+        func releaseHeldSave(_ name: String, controls: [XCUIElement]) {
+            saves += 1
+            let gate = app.staticTexts["theme70.saveGate"].firstMatch
+            let heldValue = "\(saves)/\(saves - 1)"
+            let held = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", heldValue), object: gate)
+            XCTAssertEqual(XCTWaiter.wait(for: [held], timeout: 10), .completed, "Fixture save entered hold")
+            for button in controls { XCTAssertFalse(button.isEnabled, "SettingsAction busy gate") }
+            // A real second hit on the same disabled owner must not reopen the
+            // menu or dispatch another write. No production action is injected.
+            controls[0].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertEqual(gate.label, heldValue, "Duplicate settings request")
+            for button in controls { XCTAssertFalse(button.isEnabled, "Held save must remain disabled") }
+            let releaseTime = Date().timeIntervalSince1970
+            print("THEME70_SAVE " + String(data: try! JSONSerialization.data(withJSONObject: ["name": name, "releaseTimestamp": releaseTime, "starts": saves], options: .sortedKeys), encoding: .utf8)!)
+            app.buttons["theme70.release"].firstMatch.tap()
+            let released = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "\(saves)/\(saves)"), object: gate)
+            XCTAssertEqual(XCTWaiter.wait(for: [released], timeout: 10), .completed, "Fixture save released")
+        }
         func inspect(_ name: String) {
             let state = app.staticTexts["theme70.state"].firstMatch
             XCTAssertTrue(state.waitForExistence(timeout: 8), app.debugDescription)
@@ -73,16 +92,14 @@ final class NativeNavigationUITests: XCTestCase {
             XCTAssertTrue(picker.waitForExistence(timeout: 8), app.debugDescription)
             let oldValue = picker.value as? String ?? ""
             XCTAssertFalse(oldValue.isEmpty, "Accessible selected value missing")
-            picker.tap()
+            // Exercise the restored padded hit area, not only the text glyphs.
+            picker.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1)).withOffset(CGVector(dx: 0, dy: -2)).tap()
             Thread.sleep(forTimeInterval: 1.2)
             print("THEME70_MENU " + String(data: try! JSONSerialization.data(withJSONObject: ["name": name, "role": role, "selected": oldValue, "timestamp": Date().timeIntervalSince1970], options: .sortedKeys), encoding: .utf8)!)
             let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-open-menu"; tree.lifetime = .keepAlways; add(tree)
             let option = app.buttons[target].firstMatch
             XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription); option.tap()
-            let busy = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == NO"), object: control("preset"))
-            XCTAssertEqual(XCTWaiter.wait(for: [busy], timeout: 2), .completed, "SettingsAction busy gate")
-            // Probe snapshots assert all three disabled atomically; sequential AX
-            // queries can cross the asynchronous save completion boundary.
+            releaseHeldSave(name, controls: [control(role)] + ["theme", "source", "preset"].filter { $0 != role }.map(control))
             mode = newMode; preset = newPreset
             let state = app.staticTexts["theme70.state"].firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", mode + "/PRESET/" + preset), object: state)
@@ -114,12 +131,12 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertEqual(language.value as? String, "settings_language_en")
         language.tap()
         app.buttons["settings_language_system"].firstMatch.tap()
-        let disabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == NO"), object: language)
-        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 2), .completed)
+        releaseHeldSave(prefix + "-language-system", controls: [language])
         let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == YES", "settings_language_system"), object: language)
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
         XCTAssertEqual(app.staticTexts["theme70.language"].label, "SYSTEM")
         language.tap(); app.buttons["settings_language_en"].firstMatch.tap()
+        releaseHeldSave(prefix + "-language-en", controls: [language])
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == YES", "settings_language_en"), object: language)
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed)
         XCTAssertEqual(app.staticTexts["theme70.language"].label, "ENGLISH")

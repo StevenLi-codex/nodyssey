@@ -30,6 +30,7 @@ struct FixtureThemeDestination: View {
     var body: some View {
         SettingsThemeScreen()
             .overlay(alignment: .bottom) {
+                VStack {
                 HStack {
                     Rectangle().fill(.tint).frame(width: 20, height: 20)
                         .accessibilityElement(children: .ignore).accessibilityLabel("Tint swatch").accessibilityIdentifier("theme70.tint")
@@ -37,6 +38,8 @@ struct FixtureThemeDestination: View {
                         .accessibilityElement(children: .ignore).accessibilityLabel("Accent swatch").accessibilityIdentifier("theme70.accent")
                     Text(["themeMode", "colorSource", "presetId"].map { app.settings[$0]?.string ?? "null" }.joined(separator: "/"))
                         .accessibilityIdentifier("theme70.state").font(.caption2)
+                }
+                FixtureSaveGateControls()
                 }
             }
             .background(ThemeTintProbe(settings: app.settings, checkpoint: 0, scope: "production-theme").frame(width: 0, height: 0))
@@ -57,6 +60,18 @@ struct FixtureOtherChoice: View {
             ])
             Text(app.settings["appLanguage"]?.string ?? "missing").accessibilityIdentifier("theme70.language")
         }.modifier(SettingsLifecycle(action: action))
+            .overlay(alignment: .bottom) { FixtureSaveGateControls() }
+    }
+}
+struct FixtureSaveGateControls: View {
+    @EnvironmentObject private var fixture: FixtureTransport
+    var body: some View {
+        HStack {
+            Text("\(fixture.saveStarts)/\(fixture.saveReleases)")
+                .accessibilityIdentifier("theme70.saveGate")
+            Button("Release save") { fixture.releaseSave() }
+                .accessibilityIdentifier("theme70.release")
+        }.font(.caption2)
     }
 }
 enum NativeMediaScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
@@ -69,6 +84,15 @@ enum AccountAuthorQuickCardNavigation { case signIn; case route(String, [String:
 struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAuthorQuickCardNavigation) -> Void; var body: some View { Text("Author card") } }
 
 @MainActor final class FixtureTransport: ObservableObject, NativeTransport {
+    @Published private(set) var saveStarts = 0
+    @Published private(set) var saveReleases = 0
+    private var pendingSave: CheckedContinuation<Void, Never>?
+    func releaseSave() {
+        guard let pending = pendingSave else { return }
+        pendingSave = nil
+        saveReleases += 1
+        pending.resume()
+    }
     @Published var profileReads = 0
     @Published var notificationStarts = 0
     @Published var feedStarts = 0
@@ -86,7 +110,14 @@ struct AccountAuthorQuickCard: View { let uid: Int64; let onNavigate: (AccountAu
         switch operation {
         case "settings.get": return settings
         case "settings.set":
-            try await Task.sleep(nanoseconds: 3_000_000_000) // Observe the real busy/disabled gate before readback.
+            // Fixture-only handshake: real menu/action owns busy until XCTest
+            // verifies disabled hit rejection and explicitly releases transport.
+            saveStarts += 1
+            await withCheckedContinuation { continuation in
+                precondition(pendingSave == nil, "Duplicate settings write while held")
+                pendingSave = continuation
+            }
+            try Task.checkCancellation()
             var fields = settings.object ?? [:]
             if let key = arguments["key"]?.string, let value = arguments["value"] { fields[key] = value }
             settings = .object(fields)

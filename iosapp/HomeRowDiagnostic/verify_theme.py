@@ -9,6 +9,7 @@ log=(root/'green-xcodebuild.log').read_text()
 def lines(marker):
     return [json.loads(line.split(marker,1)[1]) for line in log.splitlines() if marker in line]
 samples=lines('THEME70_CONTROL '); menus=lines('THEME70_MENU ')
+saves={s['name']:s for s in lines('THEME70_SAVE ')}
 failures=[]; identities={}; evidence=[]
 expected_suffixes=['push-initial','push-graphite','push-reimu','push-miku','mode-dark','mode-light','mode-system','push-graphite-return','push-after-detail','sheet-initial','sheet-miku','sheet-graphite','push-after-sheet']
 prefix='system-dark-' if root.name=='dark' else 'theme-'
@@ -43,19 +44,24 @@ for sample in samples:
     evidence.append(dict(sample,owner=node['identity'],ownerClass=node['class'],interactions=node.get('contextMenuInteractions'),snapshotTime=record['timestamp'],scope=record['scope']))
 checkmarks=[]; busy_checks=[]
 for check in menus:
+    location='sheet' if '-sheet-' in check['name'] else 'push'
+    selected_owner=identities[(location,check['role'])][0]
     nearby=[r for r in records if abs(r['timestamp']-check['timestamp'])<1.5]
     matches=[]
     for r in nearby:
         for n in r['nodes']:
+            if n['identity']!=selected_owner: continue
             aa=actions(n.get('menu',{}))
             if any(a.get('title')==check['selected'] and a.get('state')==1 for a in aa):matches.append((r,n,aa))
     if not matches: failures.append(f"{check['name']}: selected UIAction/checkmark missing for {check['selected']}")
     else:checkmarks.append(dict(check,owner=matches[0][1]['identity']))
-    location='sheet' if '-sheet-' in check['name'] else 'push'
     owners={identities[(location,role)][0] for role in ['theme','source','preset']}
     disabled=[]
+    if check['name'] not in saves:
+        failures.append(f"{check['name']}: missing explicit save release handshake")
+    release=saves.get(check['name'],{}).get('releaseTimestamp',check['timestamp'])
     for r in records:
-        if check['timestamp']<r['timestamp']<check['timestamp']+8:
+        if check['timestamp']<r['timestamp']<release:
             nodes=[n for n in r['nodes'] if n['identity'] in owners and n.get('enabled') is False]
             if len(nodes)==3: disabled.append(r['timestamp'])
     if not disabled:failures.append(f"{check['name']}: no atomic all-disabled snapshot during save")

@@ -130,6 +130,7 @@ extension EnvironmentValues {
 struct SettingsChoice: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativeSettingsAccent) private var accent
+    @ScaledMetric(relativeTo: .body) private var menuVerticalInset: CGFloat = 7
     @ObservedObject var action: SettingsAction
     let key: String
     let title: String
@@ -153,6 +154,11 @@ struct SettingsChoice: View {
                         selectedLabel
                         Image(systemName: "chevron.up.chevron.down").font(.caption)
                     }.foregroundStyle(accent)
+                        // Restore the automatic Picker's content insets without
+                        // fixing its total height; the semantic text still grows.
+                        .padding(.vertical, menuVerticalInset)
+                        .padding(.horizontal, 5)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(settingsText(title))
