@@ -221,32 +221,43 @@ struct ContentPostDetail: View {
     private var openingCard: some View {
         let body = thread.value["body"].flatMap { $0 == .null ? nil : $0 }
         let summary = preview?["summary"] ?? preview
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                if let category = body?.nativeString("categoryTitle") ?? summary?.nativeString("categoryTitle") { Text(category).foregroundStyle(.tint) }
-                if thread.value.nativeBool("isAwarded") == true { Label(CT("awarded"), systemImage: "diamond") }
-            }.font(.caption.weight(.medium))
-            Text(title).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled).accessibilityAddTraits(.isHeader).modifier(ContentThreadFrame(id: "thread.title"))
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    if let category = body?.nativeString("categoryTitle") ?? summary?.nativeString("categoryTitle") { Text(category).foregroundStyle(.tint) }
+                    if thread.value.nativeBool("isAwarded") == true { Label(CT("awarded"), systemImage: "diamond") }
+                }.font(.caption.weight(.medium))
+                Text(title).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled).accessibilityAddTraits(.isHeader).modifier(ContentThreadFrame(id: "thread.title"))
+            }.modifier(ContentThreadOpeningBand(prominent: true))
             if let body {
-                if blocked(body, opening: true) { reveal(body, opening: true) }
+                if blocked(body, opening: true) { reveal(body, opening: true).padding(14) }
                 else {
                     HStack(alignment: .top, spacing: 8) {
                         authorButton(body, size: 28)
                         metadata(body).frame(maxWidth: .infinity, alignment: .leading)
                     }.onLongPressGesture { selectedFloor = .init(id: "#0", opening: true) }
-                    richBody(body, opening: true)
-                    floorActions(body, page: 1, opening: true)
+                        .modifier(ContentThreadOpeningBand())
+                    // Opaque reading plane: only the surrounding title/author bands carry tint.
+                    VStack(alignment: .leading, spacing: 10) {
+                        richBody(body, opening: true)
+                        floorActions(body, page: 1, opening: true)
+                    }.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ContentSurface())
                 }
             } else if thread.value != .null {
-                Button(CT("openOriginal")) { jump(.init(floor: "#0", page: 1)) }.frame(minHeight: 44)
+                Button(CT("openOriginal")) { jump(.init(floor: "#0", page: 1)) }.frame(minHeight: 44).padding(.horizontal, 14)
             } else {
-                if let summary { HStack { ContentAvatar(value: summary, size: 28); Text(summary.nativeString("authorName") ?? "").font(.subheadline) } }
+                if let summary {
+                    HStack { ContentAvatar(value: summary, size: 28); Text(summary.nativeString("authorName") ?? "").font(.subheadline) }
+                        .modifier(ContentThreadOpeningBand())
+                }
                 ProgressView().frame(maxWidth: .infinity, minHeight: 80)
             }
-        }.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ContentSurface().clipShape(RoundedRectangle(cornerRadius: 16)))
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .background(ContentSurface())
+            .clipShape(RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 8).padding(.top, 8)
     }
     private func commentRow(_ row: CommentRow) -> some View {

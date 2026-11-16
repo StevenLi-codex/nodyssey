@@ -1,6 +1,8 @@
 {
   "sourceLanguage": "zh-Hans",
   "strings": {
+    "expand": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "展开编辑器"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "展開編輯器"}}, "en": {"stringUnit": {"state": "translated", "value": "Expand editor"}}}},
+    "collapse": {"localizations": {"zh-Hans": {"stringUnit": {"state": "translated", "value": "收起编辑器"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "收起編輯器"}}, "en": {"stringUnit": {"state": "translated", "value": "Collapse editor"}}}},
   "reply": {
     "localizations": {
       "en": {

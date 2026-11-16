@@ -1,6 +1,54 @@
 import SwiftUI
 import NodysseyNativeCore
 
+/// One surface per My-page group, never per tile or nested inside another glass card.
+/// The pre-iOS 26 material is deliberately a fallback, not simulated Liquid Glass.
+struct AccountProfileGroupSurface: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+    var body: some View {
+        if reduceTransparency || contrast == .increased {
+            AccountSurface()
+                .overlay { shape.fill(.tint).opacity(0.04) }
+                .clipShape(shape)
+                .overlay { shape.strokeBorder(.primary.opacity(contrast == .increased ? 0.25 : 0.08), lineWidth: 0.5) }
+        } else {
+            #if os(iOS) && compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                Color.clear
+                    .overlay { shape.fill(.tint).opacity(0.035) }
+                    .glassEffect(.regular, in: shape)
+            } else {
+                materialSurface
+            }
+            #else
+            materialSurface
+            #endif
+        }
+    }
+
+    private var materialSurface: some View {
+        shape.fill(.regularMaterial)
+            .overlay { shape.fill(.tint).opacity(0.035) }
+            .overlay { shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
+    }
+}
+
+/// Retain the List's section spacing/insets, but give each group a single material.
+struct AccountProfileGroupRow: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AccountProfileGroupSurface())
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+}
+
 /// The Android profile is a directory, not a long settings menu. Keep its
 /// content/community grouping, with native symbols and no per-entry card chrome.
 struct AccountProfileDirectory: View {
@@ -167,7 +215,7 @@ struct AccountProfileBalances: View {
                     .font(.headline).monospacedDigit().foregroundStyle(.primary)
                     .lineLimit(1).minimumScaleFactor(0.7)
             }.padding(10).frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-                .background((key == "chickenCount" ? Color.orange : key == "starCount" ? Color.purple : Color.accentColor).opacity(0.10))
+                .background(.tint.opacity(0.08))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityElement(children: .combine)
     }

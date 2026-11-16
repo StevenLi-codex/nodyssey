@@ -1,0 +1,20 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "titleHint": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "一句话说清主题" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "一句話說清主題" } },
+        "en": { "stringUnit": { "state": "translated", "value": "One line that says what this is about" } }
+      }
+    },
+    "bodyHint": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "写下正文，支持 Markdown…" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "寫下內文，支援 Markdown…" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Write the body — Markdown works…" } }
+      }
+    }
+  },
+  "version": "1.0"
+}

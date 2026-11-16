@@ -36,6 +36,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           cache-read-only: false
+      - name: Verify integrated shipping sources before device archive
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          pinned = {
+              'iosapp/Nodyssey/Native/Editing/EditorThreadReply.swift': '6a29dd2460f2bdc9c6eaaa61d17ad04e53fccc1730c7098cb7155fba1edeb03c',
+              'iosapp/Nodyssey/Native/Editing/Resources/Editor.xcstrings': 'ccdbda37be1ca7bb0d44c290681c12f876e657b81433c905011b33bd161ef3e4',
+          }
+          sources = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(pathlib.Path('iosapp/Nodyssey/Native').rglob('*')) if p.is_file()}
+          for path, expected in pinned.items():
+              assert sources[path] == expected, path
+          subprocess.run(['git', 'diff', '--exit-code', 'HEAD', '--', 'iosapp/Nodyssey/Native'], check=True)
+          manifest = dict(commit=os.environ['GITHUB_SHA'], keyboard_source_pins=pinned, sources=sources)
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'shipping-source-manifest.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(dict(commit=manifest['commit'], keyboard_source_pins=pinned, source_count=len(sources)), indent=2))
+          PY
       - name: Archive full-feature unsigned iPhone application without tests
         run: |
           set -o pipefail
@@ -43,7 +61,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.25" CURRENT_PROJECT_VERSION="67" \
+            MARKETING_VERSION="1.2.26" CURRENT_PROJECT_VERSION="68" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |
@@ -56,15 +74,19 @@ jobs:
           subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
           subprocess.run(['xcrun', 'vtool', '-show-build', str(executable)], check=True)
           assert info['CFBundleIdentifier'] == 'io.github.nodyssey', info['CFBundleIdentifier']
+          assert info['CFBundleShortVersionString'] == '1.2.26'
+          assert info['CFBundleVersion'] == '68'
+          assert info['MinimumOSVersion'] == '16.0'
+          assert info['CFBundleSupportedPlatforms'] == ['iPhoneOS']
           payload = root / 'Payload'
           payload.mkdir(exist_ok=True)
           shutil.copytree(source, payload / 'Nodyssey.app', symlinks=True)
-          ipa = root / 'nodyssey-swiftui-full-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.26-build68-unsigned.ipa'
           subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(payload), str(ipa)], check=True)
           with zipfile.ZipFile(ipa) as z:
               assert 'Payload/Nodyssey.app/Info.plist' in z.namelist()
               assert z.testzip() is None
-          manifest = dict(commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), configuration='Debug', tests_run=False, signed=False, storage_namespace='io.github.nodyssey.single-local-v1', acceptance='Internal archive only; device login, scrolling, overlay installation and full original-page parity unverified')
+          manifest = dict(ipa_filename=ipa.name, ipa_path=ipa.name, commit=os.environ['GITHUB_SHA'], bundle_id=info['CFBundleIdentifier'], version=info['CFBundleShortVersionString'], build=info['CFBundleVersion'], bytes=ipa.stat().st_size, sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(), configuration='Debug', tests_run=False, signed=False, storage_namespace='io.github.nodyssey.single-local-v1', acceptance='Internal archive only; device login, scrolling, overlay installation and full original-page parity unverified')
           (root / 'ipa-manifest.json').write_text(json.dumps(manifest, indent=2))
           print(json.dumps(manifest, indent=2))
           PY
@@ -72,8 +94,9 @@ jobs:
         with:
           name: nodyssey-swiftui-full-unsigned
           path: |
-            ${{ runner.temp }}/nodyssey-swiftui-full-unsigned.ipa
+            ${{ runner.temp }}/Nodyssey-1.2.26-build68-unsigned.ipa
             ${{ runner.temp }}/ipa-manifest.json
+            ${{ runner.temp }}/shipping-source-manifest.json
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v7

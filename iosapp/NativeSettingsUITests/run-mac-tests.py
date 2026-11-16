@@ -7,10 +7,12 @@ import pathlib
 import shlex
 import subprocess
 import sys
+import os
 import tarfile
 
 repo = pathlib.Path(__file__).resolve().parents[2]
-stage = "/Users/steven/.cache/hermes-build/nodyssey-settings-" + uuid.uuid4().hex
+stage = os.environ.get("SETTINGS_MAC_STAGE", "/Users/steven/.cache/hermes-build/nodyssey-settings-" + uuid.uuid4().hex)
+print("SETTINGS_MAC_STAGE", stage)
 manifest = []
 outer = ["ssh", "-p", "18323", "-i", "/home/hermes/.ssh/n100_london_ed25519", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/home/hermes/.ssh/known_hosts_n100_service", "steven@127.0.0.1"]
 inner = ["ssh", "-o", "Hostname=StevendeMacBook-Pro.local", "-o", "HostKeyAlias=192.168.31.128", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "macbook"]
@@ -20,9 +22,12 @@ with tarfile.open(fileobj=archive, mode="w") as tar:
         path = repo / relative
         if path.exists():
             tar.add(path, arcname=relative, filter=lambda item: None if any(s in item.name for s in ["/.build", "__pycache__", "/Evidence/"]) else item)
+    if snapshots := os.environ.get("SETTINGS_PRESET_SNAPSHOTS"):
+        tar.add(snapshots, arcname="preset-snapshots.json")
     for member in tar.getmembers():
         if member.isfile():
-            manifest.append(hashlib.sha256((repo / member.name).read_bytes()).hexdigest() + "  " + member.name)
+            source = pathlib.Path(os.environ["SETTINGS_PRESET_SNAPSHOTS"]) if member.name == "preset-snapshots.json" else repo / member.name
+            manifest.append(hashlib.sha256(source.read_bytes()).hexdigest() + "  " + member.name)
     data = ("\n".join(manifest) + "\n").encode()
     info = tarfile.TarInfo("sources.sha256")
     info.size = len(data)

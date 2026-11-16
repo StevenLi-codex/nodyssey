@@ -153,21 +153,23 @@ struct AccountProfileScreen: View {
         List {
             if app.isSignedIn {
                 Section {
-                    if let uid = profile.value.nativeInt("uid") {
-                        Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
-                            HStack {
-                                AccountProfileIdentity(profile: profile.value)
-                                if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
-                                else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
-                            }
-                        }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
-                    } else if profile.value != .null {
-                        AccountProfileIdentity(profile: profile.value)
-                    }
-                    AccountProfileStatus(profile: profile)
-                    AccountProfileBalances(profile: profile.value)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let uid = profile.value.nativeInt("uid") {
+                            Button { app.open("UserSpace", ["uid": .integer(uid), "isSelf": .bool(true)]) } label: {
+                                HStack {
+                                    AccountProfileIdentity(profile: profile.value)
+                                    if profile.isLoading { ProgressView().controlSize(.small).accessibilityLabel(Text("loading_indicator_label")) }
+                                    else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                                }
+                            }.buttonStyle(.plain).accessibilityHint(Text("profile_space"))
+                        } else if profile.value != .null {
+                            AccountProfileIdentity(profile: profile.value)
+                        }
+                        AccountProfileStatus(profile: profile)
+                        AccountProfileBalances(profile: profile.value)
+                    }.modifier(AccountProfileGroupRow())
                 }.listRowSeparator(.hidden)
-                Section { AccountProfileAttendance() }
+                Section { AccountProfileAttendance().modifier(AccountProfileGroupRow()) }
                 Section {
                     AccountProfileDirectory(entries: [
                         .init("profile_tile_topics", "text.bubble", "MyTopics"),
@@ -176,7 +178,7 @@ struct AccountProfileScreen: View {
                         .init("profile_tile_history", "clock", "ReadHistory"),
                         .init("profile_tile_following", "person.badge.plus", "Follow", ["showFollowers": .bool(false)]),
                         .init("profile_tile_followers", "person.2", "Follow", ["showFollowers": .bool(true)])
-                    ])
+                    ]).modifier(AccountProfileGroupRow())
                 }
                 Section {
                     AccountProfileDirectory(entries: [
@@ -187,7 +189,7 @@ struct AccountProfileScreen: View {
                         .init("profile_tile_block", "hand.raised", "AccountBlockList", ["titles": .bool(false)]),
                         .init("profile_tile_invite", "ticket", "Invite"),
                         .init("profile_tile_about_community", "info.circle", "AboutCommunity")
-                    ])
+                    ]).modifier(AccountProfileGroupRow())
                 }
                 Section {
                     AccountProfileDirectory(entries: [
@@ -195,14 +197,16 @@ struct AccountProfileScreen: View {
                         .init("profile_tile_notifications", "bell", "NotificationSettings"),
                         .init("profile_tile_theme", "paintpalette", "ThemeSettings"),
                         .init("profile_tile_about", "info.circle", "AboutApp")
-                    ])
+                    ]).modifier(AccountProfileGroupRow())
                 }
             } else {
-                Section { AccountProfileWelcome() }
+                Section { AccountProfileWelcome().modifier(AccountProfileGroupRow()) }
                 Section {
-                    AccountProfileBenefit(symbol: "square.and.pencil", title: "profile_guest_benefit_post", subtitle: "profile_guest_benefit_post_hint")
-                    AccountProfileBenefit(symbol: "envelope", title: "profile_guest_benefit_messages", subtitle: "profile_guest_benefit_messages_hint")
-                    AccountProfileBenefit(symbol: "calendar", title: "profile_guest_benefit_attendance", subtitle: "profile_guest_benefit_attendance_hint")
+                    VStack(alignment: .leading, spacing: 8) {
+                        AccountProfileBenefit(symbol: "square.and.pencil", title: "profile_guest_benefit_post", subtitle: "profile_guest_benefit_post_hint")
+                        AccountProfileBenefit(symbol: "envelope", title: "profile_guest_benefit_messages", subtitle: "profile_guest_benefit_messages_hint")
+                        AccountProfileBenefit(symbol: "calendar", title: "profile_guest_benefit_attendance", subtitle: "profile_guest_benefit_attendance_hint")
+                    }.modifier(AccountProfileGroupRow())
                 }.listRowSeparator(.hidden)
                 Section {
                     VStack(spacing: 8) {
@@ -212,6 +216,7 @@ struct AccountProfileScreen: View {
                         Text("profile_sign_in_hint").font(.caption).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }.frame(maxWidth: .infinity).padding(.vertical, 8)
+                        .modifier(AccountProfileGroupRow())
                 }
             }
             if !app.isSignedIn { Section("profile_guest_section") {
@@ -221,7 +226,7 @@ struct AccountProfileScreen: View {
                     .init("profile_tile_lucky", "dice", "Lucky")
                 ] + Array(webEntries.prefix(1)) + [
                     .init("profile_tools", "wrench.and.screwdriver", "CommunityTools")
-                ])
+                ]).modifier(AccountProfileGroupRow())
             } }
         }
         #if os(iOS)

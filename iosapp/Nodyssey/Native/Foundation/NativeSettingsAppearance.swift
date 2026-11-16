@@ -37,9 +37,15 @@ struct NativeSettingsAppearance: ViewModifier {
         }
     }
     private var accent: Color {
-        if eink || settings.nativeString("paletteStyle") == "MONOCHROME" { return .primary }
+        let source = settings.nativeString("colorSource")
+        let preset = settings.nativeString("presetId") ?? "graphite"
+        // Original PlazaTheme gives character palettes precedence over seed style.
+        // MONOCHROME steers only generated palettes; e-ink overrides every source.
+        let character = source == "PRESET" && preset != "graphite" && NativePalette.accents[preset] != nil
+        if eink || (!character && settings.nativeString("paletteStyle") == "MONOCHROME") { return .primary }
         let dark = (scheme ?? systemColorScheme) == .dark
-        let pair = NativePalette.accents[settings.nativeString("presetId") ?? "graphite"] ?? NativePalette.accents["graphite"]!
+        // Match presetById: stale catalogue IDs explicitly fall back to graphite.
+        let pair = NativePalette.accents[preset] ?? NativePalette.accents["graphite"]!
         let raw: UInt32
         if settings.nativeString("colorSource") == "CUSTOM", let seed = settings.nativeInt("seedColor") {
             raw = UInt32(truncatingIfNeeded: seed)
@@ -69,6 +75,9 @@ struct NativeSettingsAppearance: ViewModifier {
         content
             .preferredColorScheme(scheme)
             .tint(accent)
+            // Explicit Color.accentColor consumers (rich links, badges, paging)
+            // read a different environment from TintShapeStyle/native controls.
+            .accentColor(accent)
             .environment(\.locale, locale)
             .dynamicTypeSize(typeSize)
             .transaction { if reduceMotion || eink { $0.disablesAnimations = true; $0.animation = nil } }

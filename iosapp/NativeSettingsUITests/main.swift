@@ -246,8 +246,35 @@ struct NativeFailureView: View {
         check(app.settings == .null, "\(key): ignored value must not be published as saved")
     }
 }
+@MainActor func realPresetReceiptTests() async throws {
+    // Receipts produced by production Kotlin dispatch + file-backed DataStore.
+    // Replay only the transport boundary through the unchanged native action.
+    let url = URL(fileURLWithPath: "preset-snapshots.json")
+    guard FileManager.default.fileExists(atPath: url.path) else { return }
+    let rows = try JSONDecoder().decode([JSONValue].self, from: Data(contentsOf: url))
+    check(rows.count == 18, "actual catalogue x three modes reached DataStore reopen")
+    for row in rows {
+        let app = NativeAppModel()
+        let action = SettingsAction()
+        app.settings = row["before"]!
+        let preset = row["reopened"]!["presetId"]!
+        var operations: [String] = []
+        app.respond = { operation, args in
+            operations.append(operation)
+            if operation == "settings.get" { return row["readback"]! }
+            return args["key"] == .string("colorSource") ? row["activated"]! : row["written"]!
+        }
+        action.setting(app, "presetId", preset)
+        _ = await waitForKeywordAction { !action.busy }
+        check(action.failure == nil, "real preset receipt succeeds")
+        check(app.settings == row["readback"]!, "real preset reaches published consumer snapshot")
+        check(operations == ["settings.set", "settings.set", "settings.get"], "real preset activates before authoritative read")
+        check(app.settings["presetId"] == row["reopened"]!["presetId"], "published preset matches actual reopened store")
+    }
+}
 await keywordActionTests()
 await themeActionTests()
+try await realPresetReceiptTests()
 #endif
 
 keywordEditedDraftTest()

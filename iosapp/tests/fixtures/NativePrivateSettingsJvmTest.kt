@@ -285,6 +285,55 @@ class NativePrivateSettingsJvmTest {
     }
 
     @Test
+    fun actualPresetCatalogSurvivesNativeDispatchAndStoreReopen() = runBlocking {
+        val source = java.io.File(System.getProperty("nodyssey.theme.catalog")).readText()
+        val ids = Regex("""id = "([^"]+)"""").findAll(source).map { it.groupValues[1] }.toList()
+        val presets = listOf(SettingsRepository.DEFAULT_PRESET_ID) + ids
+        assertEquals(6, presets.distinct().size, "Exercise every actual supported preset, no synthetic IDs")
+        val snapshots = mutableListOf<JsonElement>()
+        for (mode in listOf("LIGHT", "DARK", "SYSTEM")) {
+            for (preset in presets) {
+                val fixture = Fixture()
+                val reopenedJob = SupervisorJob()
+                try {
+                    suspend fun write(key: String, value: Any) = fixture.context.settingsRequest(
+                        "settings.set", settingsObject("key" to key, "value" to value),
+                    )!!.jsonObject
+                    write("themeMode", mode)
+                    write("seedColor", -65536)
+                    val before = write("colorSource", "CUSTOM")
+                    val receipt = write("presetId", preset)
+                    assertEquals(preset, receipt.settingsString("presetId"))
+                    assertEquals("CUSTOM", receipt.settingsString("colorSource"), "A preset write alone remains dormant")
+                    val activated = write("colorSource", "PRESET")
+                    val readback = fixture.context.settingsRequest("settings.get", JsonObject(emptyMap()))!!.jsonObject
+                    assertEquals(preset, readback.settingsString("presetId"))
+                    assertEquals("PRESET", readback.settingsString("colorSource"))
+                    assertEquals(mode, readback.settingsString("themeMode"))
+                    fixture.job.cancelAndJoin()
+                    val store = PreferenceDataStoreFactory.createWithPath(
+                        scope = CoroutineScope(reopenedJob + Dispatchers.Default),
+                        produceFile = { fixture.directory.resolve("settings.preferences_pb").path.toPath() },
+                    )
+                    val reopened = SettingsRepository(store).settings.first().settingsJson(false)
+                    assertEquals(preset, reopened.settingsString("presetId"))
+                    assertEquals("PRESET", reopened.settingsString("colorSource"))
+                    assertEquals(mode, reopened.settingsString("themeMode"))
+                    assertEquals(-65536, reopened.settingsInt("seedColor"), "Dormant signed seed is retained")
+                    snapshots += JsonObject(mapOf("before" to before, "written" to receipt,
+                        "activated" to activated, "readback" to readback, "reopened" to reopened))
+                } finally {
+                    reopenedJob.cancelAndJoin()
+                    fixture.close()
+                }
+            }
+        }
+        java.io.File(System.getProperty("nodyssey.theme.snapshots")).writeText(
+            kotlinx.serialization.json.JsonArray(snapshots).toString(),
+        )
+    }
+
+    @Test
     fun unknownPublicMutationRemainsUsableAndItsResponseIsRedacted() = runBlocking {
         val fixture = Fixture()
         try {

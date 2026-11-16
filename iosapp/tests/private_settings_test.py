@@ -154,7 +154,10 @@ compile_result = run([java, '-cp', cp, 'org.jetbrains.kotlin.cli.jvm.K2JVMCompil
     '-classpath', cp, '-d', str(out / 'tests.jar')] + list(map(str, sources)), 'compile', 120)
 if compile_result['returncode']:
     sys.exit(compile_result['returncode'])
-command = [java, f'-Djava.io.tmpdir={out}', '-cp', str(out / 'tests.jar') + ':' + cp,
+command = [java, f'-Djava.io.tmpdir={out}',
+           f'-Dnodyssey.theme.catalog={root}/ui/src/commonMain/kotlin/io/github/nodyssey/ui/settings/theme/ThemePresets.kt',
+           f'-Dnodyssey.theme.snapshots={out}/preset-snapshots.json',
+           '-cp', str(out / 'tests.jar') + ':' + cp,
            'io.github.nodyssey.ios.native.RunnerKt'] + ([args.method] if args.method else [])
 results = [run(command, f'tests-{i + 1}', 45) for i in range(args.repeat)]
 (out / 'results.json').write_text(json.dumps(results, indent=2))

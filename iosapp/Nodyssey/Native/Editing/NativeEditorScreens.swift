@@ -130,9 +130,17 @@ private struct EditorHost: View {
                 }.padding()
             }
             if session.mode.showsTitle {
-                MarkedTextEditor(buffer: titleBinding, focus: model.focus, isTitle: true, accessibilityLabel: EL("title"))
-                    .frame(minHeight: 48, maxHeight: 90)
+                // Original ComposerOptions precedes its borderless page heading.
+                // Keep metadata shallow rather than turning the editor into cards.
                 metadata
+                    .padding(.vertical, 8)
+                    .background(.quaternary)
+                NativeComposerField(buffer: titleBinding, focus: model.focus, isTitle: true,
+                                    accessibilityLabel: EL("title"), hint: PCL("titleHint"))
+                    .frame(minHeight: 48, maxHeight: 90)
+                    .padding(.horizontal, 7)
+                    .padding(.top, 12)
+                Divider().padding(.horizontal, 16)
             }
             if let quote = model.quotePrefix {
                 HStack {
@@ -146,8 +154,11 @@ private struct EditorHost: View {
                     else if model.failure == nil { ProgressView() }
                 }
             } else {
-                MarkedTextEditor(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"))
+                NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
+                                    hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
                     .frame(minHeight: isMessage ? 100 : 180, maxHeight: isMessage ? 180 : .infinity)
+                    .padding(.horizontal, 7)
+                    .padding(.top, 8)
             }
             if isMessage {
                 Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() })).padding(.horizontal)
@@ -238,24 +249,30 @@ private struct EditorHost: View {
     }
 
     private var metadata: some View {
-        VStack {
-            if session.mode == .post {
-                Menu {
-                    let rows = boards.value.array ?? []
-                    let recent = recentBoards.value.array?.compactMap(\.string) ?? []
-                    Section(EL("recentBoards")) {
-                        ForEach(recent, id: \.self) { slug in
-                            if let row = rows.first(where: { $0["slug"]?.string == slug }) { boardButton(row) }
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    if session.mode == .post {
+                        Menu {
+                            let rows = boards.value.array ?? []
+                            let recent = recentBoards.value.array?.compactMap(\.string) ?? []
+                            Section(EL("recentBoards")) {
+                                ForEach(recent, id: \.self) { slug in
+                                    if let row = rows.first(where: { $0["slug"]?.string == slug }) { boardButton(row) }
+                                }
+                            }
+                            ForEach(rows.indices, id: \.self) { index in boardButton(rows[index]) }
+                        } label: { Label(session.boardTitle ?? EL("board"), systemImage: "folder") }
                     }
-                    ForEach(rows.indices, id: \.self) { index in boardButton(rows[index]) }
-                } label: { Label(session.boardTitle ?? EL("board"), systemImage: "folder") }
-            }
-            Menu {
-                ForEach(permissions.value.array?.compactMap(\.int) ?? [], id: \.self) { rank in
-                    Button(rank == 255 ? EL("private") : String(rank)) { session.permission = rank; session.changed() }
+                    Menu {
+                        ForEach(permissions.value.array?.compactMap(\.int) ?? [], id: \.self) { rank in
+                            Button(rank == 255 ? EL("private") : String(rank)) { session.permission = rank; session.changed() }
+                        }
+                    } label: { Label(session.permission == 255 ? EL("private") : "\(EL("permission")): \(session.permission)", systemImage: "lock") }
                 }
-            } label: { Label(session.permission == 255 ? EL("private") : "\(EL("permission")): \(session.permission)", systemImage: "lock") }
+                .font(.subheadline)
+                .buttonStyle(.borderless)
+            }
             if let failure = boards.failure { NativeFailureView(failure: failure, retry: { Task { await boards.load(app, "categories.refresh") } }) }
             if let failure = permissions.failure { NativeFailureView(failure: failure, retry: { Task { await permissions.load(app, "editor.permissions", ["selfRank": profile.value["rank"] ?? .null]) } }) }
         }.padding(.horizontal)

@@ -114,6 +114,15 @@ Remaining SETTINGS-1 acceptance: full Xcode/iOS build and actual TextField inter
 - Disposable real macOS SwiftUI board/palette renders produced distinct red/green light and red system-dark/preset-dark PNGs with an opaque, lightly tinted surface. This is not an iOS screenshot or visual acceptance. Both Mac runners now use unique stage directories and verify staged SHA-256 manifests before compiling.
 - Remaining gates: full Xcode archive/Objective-C linkage and actual iOS ColorPicker/Save/relaunch interaction, plus device light/dark/system readability acceptance. macOS renders, signature checks and JVM DataStore execution do not close those gates.
 
+## PRESET-68: preset persistence was correct; native accent consumers were split
+
+- Confirmed the native picker matches all six actual `ThemePresets.kt` IDs (`graphite`, `miku`, `twins`, `tianyi`, `reimu`, `marisa`) and the native primary pairs match `CharacterPalette.kt`. No replacement catalogue or invented palette was introduced.
+- Real macOS SwiftUI execution reproduced `Color.accentColor` consumers remaining system blue while `.tint` consumers changed. `NativeSettingsAppearance` now supplies both environments from its one resolver. Existing rich-text links, badges, paging and other accent consumers inherit the selection without module edits.
+- Native `MONOCHROME` also incorrectly suppressed character presets. Match original `PlazaTheme`: character presets override generated-palette style, while e-ink still overrides every source. Unknown/stale IDs explicitly retain the original graphite fallback.
+- Disposable catalogue-derived SwiftUI probe (not committed appearance assertions): calibrated RED **132 checks / 96 failures**, GREEN **132 / 0**; expanded real DataStore readback/reopened snapshots plus stale-ID and signed-custom checks **280 / 0**. Pixel comparisons use equally rendered source tokens to account for macOS output color-space conversion, not screenshot goldens. All six light/dark primary pairs are distinct.
+- Actual production Kotlin dispatch + real file-backed DataStore **31 tests / 0 failures / 0 ignored**, including 18 catalogue/mode combinations that reopen the store and export exact receipts. Approved Mac `SettingsAction` replay consumes those real receipts: **167 checks / 0 failures**, plus **26 / 0** base suite; complete Settings signature check exit 0. Replay has a test-only transport, not direct Kotlin/Swift interoperability.
+- Evidence: `/home/hermes/.hermes/cache/scratch/nodyssey-preset-theme68.json` and disposable `preset68-probe.py`. Existing Xcode/Objective-C linkage and actual iOS selection/relaunch/appearance remain device gates. No shared settings keys/store/dependency/auth changes.
+
 ## Parent integration gates / exact remaining work
 
 - Wire settings Swift sources and localized Settings table into the Xcode target; do not package test Typecheck signatures.

@@ -80,11 +80,14 @@ private struct EditorReplySheet: View {
     @State private var photos = false
     @State private var emoji = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var selectedDetent: PresentationDetent = .height(240)
-    private var expanded: Bool { dynamicTypeSize.isAccessibilitySize || selectedDetent == .large }
-    private var detentSelection: Binding<PresentationDetent> {
-        Binding(get: { dynamicTypeSize.isAccessibilitySize ? .large : selectedDetent },
-                set: { selectedDetent = $0 })
+    @State private var explicitlyExpanded = false
+
+    private var expanded: Bool { dynamicTypeSize.isAccessibilitySize || explicitlyExpanded }
+    // Offering .large beside the compact detent makes UIKit choose full height
+    // during keyboard avoidance, without changing SwiftUI's selected detent.
+    // Only an explicit user action may offer the large detent.
+    private var detents: Set<PresentationDetent> {
+        expanded ? [.large] : [.height(240)]
     }
     private var session: EditorSession { model.session }
     private var canPublish: Bool {
@@ -96,6 +99,10 @@ private struct EditorReplySheet: View {
                 Button(action: close) { Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44) }.accessibilityLabel(EL("close"))
                 Text(EL("reply") + (session.replyContext["replyToFloor"]?.int.map { " #\($0)" } ?? ""))
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
+                Button { explicitlyExpanded.toggle() } label: {
+                    Image(systemName: explicitlyExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .frame(minWidth: 44, minHeight: 44)
+                }.accessibilityLabel(EL(explicitlyExpanded ? "collapse" : "expand"))
                 Button(action: onPreview) { Image(systemName: "eye").frame(minWidth: 44, minHeight: 44) }
                     .accessibilityLabel(EL("preview")).disabled(!model.ready || session.busy)
                 Button(EL("publishReply")) {
@@ -134,7 +141,7 @@ private struct EditorReplySheet: View {
                     }
                     MarkedTextEditor(buffer: Binding(get: { session.body }, set: session.changeBody), focus: model.focus, accessibilityLabel: EL("body"), autofocus: model.ready && owner.initialFocusAllowed)
                         // Match the original reply's bounded editor, not a half-page empty field.
-                        // Dragging the sheet larger gives long replies more room; UITextView still scrolls.
+                        // Expansion is explicit; keyboard avoidance must not select long-editor mode.
                         .frame(height: expanded ? 260 : 80)
                         .simultaneousGesture(TapGesture().onEnded { emoji = false })
                     attachments
@@ -157,9 +164,9 @@ private struct EditorReplySheet: View {
         .disabled(owner.closing || app.departureRunning || session.busy)
         .interactiveDismissDisabled(true)
         .background(EditorReplyDismissAttempt(onAttempt: close))
-        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height(240), .large], selection: detentSelection)
+        .presentationDetents(detents)
         .presentationDragIndicator(.visible)
-        .onChange(of: emoji) { if $0 { selectedDetent = .large } }
+        .onChange(of: emoji) { if $0 { explicitlyExpanded = true } }
         .sheet(item: $panel) { panel in NavigationStack { EditorPanelView(panel: panel, model: model) } }
         .sheet(isPresented: $photos) { EditorPhotoPicker(model: model) }
         .onDisappear { model.focus.handoff {} }
