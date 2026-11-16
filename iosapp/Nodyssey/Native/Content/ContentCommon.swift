@@ -29,10 +29,12 @@ struct ContentCommandStatus: View {
 
 struct ContentStoreStatus: View {
     @ObservedObject var store: NativeStore
+    var initialLoading = false
+    var silentRefresh = false
     var retry: () -> Void
     var body: some View {
-        if store.isLoading { NativeBusyView() }
-        else if store.isRefreshing { ProgressView().controlSize(.small) }
+        if store.isLoading || (initialLoading && !store.hasValue && store.value == .null && store.failure == nil) { NativeBusyView() }
+        else if store.isRefreshing && !silentRefresh { ProgressView().controlSize(.small) }
         if let failure = store.failure { NativeFailureView(failure: failure, retry: retry) }
     }
 }

@@ -236,7 +236,7 @@ struct AccountProfileScreen: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
-        .background(AccountSurface(canvas: true))
+        .background(AccountSurface(canvas: true).ignoresSafeArea(.container))
         .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

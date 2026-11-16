@@ -33,6 +33,8 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
     @Published var isLoading = false
     var isReplacingPagingWindow: Bool { false }
     var isRefreshing: Bool { false }
+    var hasValue: Bool { value != .null }
+    @discardableResult func observeRetained(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], restart: Int = 0) -> Bool { fatalError("Unexpected retained observation") }
     func cancel() { fatalError("Unexpected cancellation") }
     func observeCached(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError("Unexpected cached observation") }
     func load(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async {

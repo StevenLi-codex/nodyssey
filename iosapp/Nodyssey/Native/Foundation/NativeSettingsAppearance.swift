@@ -78,6 +78,7 @@ struct NativeSettingsAppearance: ViewModifier {
             // Explicit Color.accentColor consumers (rich links, badges, paging)
             // read a different environment from TintShapeStyle/native controls.
             .accentColor(accent)
+            .environment(\.nativeSettingsAccent, accent)
             .environment(\.locale, locale)
             .dynamicTypeSize(typeSize)
             .transaction { if reduceMotion || eink { $0.disablesAnimations = true; $0.animation = nil } }

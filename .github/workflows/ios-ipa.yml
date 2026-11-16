@@ -61,7 +61,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.27" CURRENT_PROJECT_VERSION="69" \
+            MARKETING_VERSION="1.2.28" CURRENT_PROJECT_VERSION="70" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |
@@ -74,8 +74,8 @@ jobs:
           subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
           subprocess.run(['xcrun', 'vtool', '-show-build', str(executable)], check=True)
           assert info['CFBundleIdentifier'] == 'io.github.nodyssey', info['CFBundleIdentifier']
-          assert info['CFBundleShortVersionString'] == '1.2.27'
-          assert info['CFBundleVersion'] == '69'
+          assert info['CFBundleShortVersionString'] == '1.2.28'
+          assert info['CFBundleVersion'] == '70'
           assert info['MinimumOSVersion'] == '16.0'
           assert info['CFBundleSupportedPlatforms'] == ['iPhoneOS']
           payload = root / 'Payload'
@@ -83,7 +83,7 @@ jobs:
               shutil.rmtree(payload)
           payload.mkdir()
           shutil.copytree(source, payload / 'Nodyssey.app', symlinks=True)
-          ipa = root / 'Nodyssey-1.2.27-build69-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.28-build70-unsigned.ipa'
           subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(payload), str(ipa)], check=True)
 
           def macho_info(data):
@@ -166,7 +166,7 @@ jobs:
         with:
           name: nodyssey-swiftui-full-unsigned
           path: |
-            ${{ runner.temp }}/Nodyssey-1.2.27-build69-unsigned.ipa
+            ${{ runner.temp }}/Nodyssey-1.2.28-build70-unsigned.ipa
             ${{ runner.temp }}/ipa-manifest.json
             ${{ runner.temp }}/shipping-source-manifest.json
           if-no-files-found: error

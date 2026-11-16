@@ -116,17 +116,53 @@ struct SettingsRouteRow: View {
     }
 }
 
+private struct NativeSettingsAccentKey: EnvironmentKey {
+    static let defaultValue: Color = .accentColor
+}
+
+extension EnvironmentValues {
+    var nativeSettingsAccent: Color {
+        get { self[NativeSettingsAccentKey.self] }
+        set { self[NativeSettingsAccentKey.self] = newValue }
+    }
+}
+
 struct SettingsChoice: View {
     @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.nativeSettingsAccent) private var accent
+    @ScaledMetric(relativeTo: .body) private var menuVerticalInset: CGFloat = 7
     @ObservedObject var action: SettingsAction
     let key: String
     let title: String
     let choices: [(String, String)]
     var body: some View {
         if let selected = app.settings[key]?.string {
-            Picker(selection: Binding(get: { selected }, set: { action.setting(app, key, .string($0)) })) {
-                ForEach(choices, id: \.0) { option in settingsText(option.1).tag(option.0) }
-                if !choices.contains(where: { $0.0 == selected }) { Text(verbatim: selected).tag(selected) }
+            let selectedLabel = choices.first(where: { $0.0 == selected }).map { settingsText($0.1) }
+                ?? Text(verbatim: selected)
+            LabeledContent {
+                // The automatic Picker label on iOS retains its initial UIKit tint,
+                // even with a changing local .tint. Keep Apple's menu/selection
+                // behavior, but render the closed value in SwiftUI. Remove this
+                // split when the automatic label follows live theme changes.
+                Menu {
+                    Picker(selection: Binding(get: { selected }, set: { action.setting(app, key, .string($0)) })) {
+                        ForEach(choices, id: \.0) { option in settingsText(option.1).tag(option.0) }
+                        if !choices.contains(where: { $0.0 == selected }) { Text(verbatim: selected).tag(selected) }
+                    } label: { settingsText(title) }
+                } label: {
+                    HStack {
+                        selectedLabel
+                        Image(systemName: "chevron.up.chevron.down").font(.caption)
+                    }.foregroundStyle(accent)
+                        // Restore the automatic Picker's content insets without
+                        // fixing its total height; the semantic text still grows.
+                        .padding(.vertical, menuVerticalInset)
+                        .padding(.horizontal, 5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(settingsText(title))
+                .accessibilityValue(selectedLabel)
             } label: { settingsText(title) }
             .disabled(action.busy)
         }

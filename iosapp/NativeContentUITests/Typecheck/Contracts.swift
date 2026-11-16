@@ -18,6 +18,8 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
     @Published var isLoading = false
     var isReplacingPagingWindow: Bool { false }
     var isRefreshing: Bool { false }
+    var hasValue: Bool { false }
+    @discardableResult func observeRetained(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], restart: Int = 0) -> Bool { fatalError("Signature fixture") }
     func cancel() { fatalError("Signature fixture") }
     func observeCached(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError("Signature fixture") }
     func load(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async { fatalError("Signature fixture") }
