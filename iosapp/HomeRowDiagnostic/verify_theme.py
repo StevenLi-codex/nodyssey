@@ -41,7 +41,7 @@ for sample in samples:
     prior=identities.setdefault(key,identity)
     if prior!=identity:failures.append(f'{key}: owner remounted {prior} -> {identity}')
     evidence.append(dict(sample,owner=node['identity'],ownerClass=node['class'],interactions=node.get('contextMenuInteractions'),snapshotTime=record['timestamp'],scope=record['scope']))
-checkmarks=[]
+checkmarks=[]; busy_checks=[]
 for check in menus:
     nearby=[r for r in records if abs(r['timestamp']-check['timestamp'])<1.5]
     matches=[]
@@ -51,8 +51,17 @@ for check in menus:
             if any(a.get('title')==check['selected'] and a.get('state')==1 for a in aa):matches.append((r,n,aa))
     if not matches: failures.append(f"{check['name']}: selected UIAction/checkmark missing for {check['selected']}")
     else:checkmarks.append(dict(check,owner=matches[0][1]['identity']))
+    location='sheet' if '-sheet-' in check['name'] else 'push'
+    owners={identities[(location,role)][0] for role in ['theme','source','preset']}
+    disabled=[]
+    for r in records:
+        if check['timestamp']<r['timestamp']<check['timestamp']+8:
+            nodes=[n for n in r['nodes'] if n['identity'] in owners and n.get('enabled') is False]
+            if len(nodes)==3: disabled.append(r['timestamp'])
+    if not disabled:failures.append(f"{check['name']}: no atomic all-disabled snapshot during save")
+    else:busy_checks.append({'name':check['name'],'timestamps':disabled})
 assert len(menus)==9,len(menus)
-report={'snapshots':len(records),'samples':evidence,'identities':{str(k):v for k,v in identities.items()},'checkmarks':checkmarks,'failures':failures,'passed':not failures}
+report={'snapshots':len(records),'samples':evidence,'identities':{str(k):v for k,v in identities.items()},'checkmarks':checkmarks,'busyChecks':busy_checks,'failures':failures,'passed':not failures}
 (root/'derived-theme-verification.json').write_text(json.dumps(report,indent=2))
 print(json.dumps({'snapshots':len(records),'checkpoints':len(expected_names),'samples':len(samples),'identityMatches':len(evidence),'checkmarks':len(checkmarks),'failures':failures},indent=2))
 assert not failures, failures

@@ -81,7 +81,8 @@ final class NativeNavigationUITests: XCTestCase {
             XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription); option.tap()
             let busy = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == NO"), object: control("preset"))
             XCTAssertEqual(XCTWaiter.wait(for: [busy], timeout: 2), .completed, "SettingsAction busy gate")
-            for r in ["theme", "source", "preset"] { XCTAssertFalse(control(r).isEnabled) }
+            // Probe snapshots assert all three disabled atomically; sequential AX
+            // queries can cross the asynchronous save completion boundary.
             mode = newMode; preset = newPreset
             let state = app.staticTexts["theme70.state"].firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", mode + "/PRESET/" + preset), object: state)

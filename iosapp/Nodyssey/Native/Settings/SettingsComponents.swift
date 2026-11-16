@@ -116,6 +116,17 @@ struct SettingsRouteRow: View {
     }
 }
 
+private struct NativeSettingsAccentKey: EnvironmentKey {
+    static let defaultValue: Color = .accentColor
+}
+
+extension EnvironmentValues {
+    var nativeSettingsAccent: Color {
+        get { self[NativeSettingsAccentKey.self] }
+        set { self[NativeSettingsAccentKey.self] = newValue }
+    }
+}
+
 struct SettingsChoice: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativeSettingsAccent) private var accent

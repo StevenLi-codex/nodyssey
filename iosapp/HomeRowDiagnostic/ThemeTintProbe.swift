@@ -30,7 +30,8 @@ struct ThemeTintProbe: UIViewRepresentable {
         Task { @MainActor [weak view] in
             for delay in [100, 400] + Array(repeating: 1000, count: 600) {
                 try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
-                guard let view, view.token == token, let window = view.window else { return }
+                guard let view, view.token == token else { return }
+                guard let window = view.window else { continue }
                 ThemeUIKitSnapshot.emit(window: window, settings: snapshot, scheme: scheme,
                                         scope: scope + "-" + String(describing: ObjectIdentifier(view)), checkpoint: checkpoint, delay: delay)
             }
@@ -108,7 +109,7 @@ struct ThemeTintProbe: UIViewRepresentable {
             "swiftUIEnvironmentScheme": scheme, "settings": settings, "nodes": nodes]
         do {
             let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
-            print("THEME70_UIKIT " + String(decoding: data, as: UTF8.self))
+            // Persist raw data without streaming megabytes through XCTest stdout.
             let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("theme70-uikit.jsonl")
             if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
             let handle = try FileHandle(forWritingTo: file)
