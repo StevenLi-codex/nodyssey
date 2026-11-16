@@ -30,8 +30,14 @@ struct FixtureThemeDestination: View {
     var body: some View {
         SettingsThemeScreen()
             .overlay(alignment: .bottom) {
-                Text(["themeMode", "colorSource", "presetId"].map { app.settings[$0]?.string ?? "null" }.joined(separator: "/"))
-                    .accessibilityIdentifier("theme70.state").font(.caption2)
+                HStack {
+                    Rectangle().fill(.tint).frame(width: 20, height: 20)
+                        .accessibilityElement(children: .ignore).accessibilityLabel("Tint swatch").accessibilityIdentifier("theme70.tint")
+                    Rectangle().fill(Color.accentColor).frame(width: 20, height: 20)
+                        .accessibilityElement(children: .ignore).accessibilityLabel("Accent swatch").accessibilityIdentifier("theme70.accent")
+                    Text(["themeMode", "colorSource", "presetId"].map { app.settings[$0]?.string ?? "null" }.joined(separator: "/"))
+                        .accessibilityIdentifier("theme70.state").font(.caption2)
+                }
             }
             .background(ThemeTintProbe(settings: app.settings, checkpoint: 0, scope: "production-theme").frame(width: 0, height: 0))
             .toolbar { Button("Theme sheet") { app.open("SignIn") }.accessibilityIdentifier("theme70.sheet") }

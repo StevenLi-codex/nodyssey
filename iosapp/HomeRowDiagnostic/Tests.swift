@@ -9,6 +9,33 @@ final class NativeNavigationUITests: XCTestCase {
         app.tabBars.buttons.element(boundBy: 2).tap()
         XCTAssertTrue(app.staticTexts["Retained reader"].waitForExistence(timeout: 10))
         app.buttons["native.profile.settings"].tap()
+        func inspect(_ id: String, _ name: String) {
+            let state = app.staticTexts["theme70.state"].firstMatch
+            XCTAssertTrue(state.waitForExistence(timeout: 8), app.debugDescription)
+            XCTAssertEqual(state.label, "LIGHT/PRESET/" + id)
+            Thread.sleep(forTimeInterval: 2)
+            let shot = app.screenshot()
+            let attachment = XCTAttachment(screenshot: shot); attachment.name = name + "-swatches"; attachment.lifetime = .keepAlways; add(attachment)
+            let image = shot.image.cgImage!
+            let w = image.width, h = image.height
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            bytes.withUnsafeMutableBytes { data in
+                let context = CGContext(data: data.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            }
+            let expected = ["twins": [143, 111, 0], "graphite": [53, 96, 110], "reimu": [188, 48, 56], "miku": [0, 128, 120]][id]!
+            for key in ["theme70.tint", "theme70.accent"] {
+                let swatch = app.descendants(matching: .any)[key].firstMatch
+                XCTAssertTrue(swatch.exists, app.debugDescription)
+                guard swatch.exists else { continue }
+                let scale = CGFloat(w) / app.frame.width
+                let index = (Int(swatch.frame.midY * scale) * w + Int(swatch.frame.midX * scale)) * 4
+                let actual = Array(bytes[index..<index + 3]).map(Int.init)
+                print("THEME70_SWATCH \(name) \(key) expected=\(expected) actual=\(actual)")
+                XCTAssertLessThanOrEqual(zip(expected, actual).map { abs($0 - $1) }.max()!, 2, name + " " + key)
+            }
+        }
         func choose(_ current: String, _ target: String, _ id: String, _ name: String) {
             let picker = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", current)).firstMatch
             XCTAssertTrue(picker.waitForExistence(timeout: 8), app.debugDescription)
@@ -18,14 +45,19 @@ final class NativeNavigationUITests: XCTestCase {
             let state = app.staticTexts["theme70.state"]
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "LIGHT/PRESET/" + id), object: state)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed, app.debugDescription)
+            inspect(id, name)
             let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
             let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-tree"; tree.lifetime = .keepAlways; add(tree)
         }
-        choose("Yellow × orange × charcoal", "Graphite teal", "graphite", "theme-push-graphite")
-        choose("Graphite teal", "Red × white × gold", "reimu", "theme-push-reimu")
-        choose("Red × white × gold", "Teal × grey × pink", "miku", "theme-push-miku")
+        inspect("twins", "theme-push-initial")
+        choose("settings_preset_twins", "settings_preset_graphite", "graphite", "theme-push-graphite")
+        choose("settings_preset_graphite", "settings_preset_reimu", "reimu", "theme-push-reimu")
+        choose("settings_preset_reimu", "settings_preset_miku", "miku", "theme-push-miku")
+        choose("settings_preset_miku", "settings_preset_graphite", "graphite", "theme-push-graphite-return")
         app.buttons["theme70.sheet"].tap()
-        choose("Teal × grey × pink", "Graphite teal", "graphite", "theme-sheet-graphite")
+        inspect("graphite", "theme-sheet-initial")
+        choose("settings_preset_graphite", "settings_preset_miku", "miku", "theme-sheet-miku")
+        choose("settings_preset_miku", "settings_preset_graphite", "graphite", "theme-sheet-graphite")
     }
     @MainActor private func verify(dark: Bool) {
         let app = XCUIApplication()

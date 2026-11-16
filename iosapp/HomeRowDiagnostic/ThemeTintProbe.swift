@@ -32,7 +32,7 @@ struct ThemeTintProbe: UIViewRepresentable {
                 try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
                 guard let view, view.token == token, let window = view.window else { return }
                 ThemeUIKitSnapshot.emit(window: window, settings: snapshot, scheme: scheme,
-                                        scope: scope, checkpoint: checkpoint, delay: delay)
+                                        scope: scope + "-" + String(describing: ObjectIdentifier(view)), checkpoint: checkpoint, delay: delay)
             }
         }
     }
@@ -99,11 +99,17 @@ struct ThemeTintProbe: UIViewRepresentable {
             for (index, child) in view.subviews.enumerated() { walk(child, path: path + "/" + String(index), depth: depth + 1) }
         }
         walk(window, path: "window", depth: 0)
-        let report: [String: Any] = ["scope": scope, "checkpoint": checkpoint, "delayMillis": delay,
+        let report: [String: Any] = ["scope": scope, "checkpoint": checkpoint, "delayMillis": delay, "timestamp": Date().timeIntervalSince1970,
             "swiftUIEnvironmentScheme": scheme, "settings": settings, "nodes": nodes]
         do {
             let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
             print("THEME70_UIKIT " + String(decoding: data, as: UTF8.self))
+            let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("theme70-uikit.jsonl")
+            if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data + Data([10]))
         } catch { print("THEME70_DIAGNOSTIC_SERIALIZATION_ERROR", error) }
     }
 }

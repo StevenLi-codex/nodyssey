@@ -17,7 +17,7 @@ results={}
 for phase in ['green']:
     source.write_text(green.replace('.background(AccountSurface(canvas: true).ignoresSafeArea(.container))','.background(AccountSurface(canvas: true))') if phase=='red' else green)
     result=evidence/(phase+'.xcresult')
-    command=['xcodebuild','test','-project',str(root/'HomeRow/iosapp/Nodyssey.xcodeproj'),'-scheme','Nodyssey','-configuration','Debug','-destination','platform=iOS Simulator,id='+phone['udid'],'-derivedDataPath',str(root/'ProfileDerived'),'-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests','-parallel-testing-enabled','NO','CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','ASSETCATALOG_COMPILER_APPICON_NAME=']
+    command=['xcodebuild','test','-project',str(root/'HomeRow/iosapp/Nodyssey.xcodeproj'),'-scheme','Nodyssey','-configuration','Debug','-destination','platform=iOS Simulator,id='+phone['udid'],'-derivedDataPath',str(root/'ProfileDerived'),'-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests/NativeNavigationUITests/testSameHostProductionPresetMenuAndSheet','-parallel-testing-enabled','NO','CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','ASSETCATALOG_COMPILER_APPICON_NAME=']
     if phase=='red': command += ['-skip-testing:NativeNavigationUITests/NativeNavigationUITests/testSameHostProductionPresetMenuAndSheet']
     (evidence/(phase+'-command.json')).write_text(json.dumps(command))
     with (evidence/(phase+'-xcodebuild.log')).open('w') as log: code=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT).returncode
@@ -31,6 +31,13 @@ for phase in ['green']:
         try: results[phase]=json.loads((evidence/(phase+'-summary.json')).read_text())
         except Exception: pass
 source.write_text(green)
+for candidate in (root/'ProfileDerived/Build/Products').glob('Debug-iphonesimulator/*.app'):
+    import plistlib
+    bundle=plistlib.loads((candidate/'Info.plist').read_bytes())['CFBundleIdentifier']
+    container=subprocess.run(['xcrun','simctl','get_app_container',phone['udid'],bundle,'data'],text=True,capture_output=True)
+    if container.returncode==0:
+        probe=Path(container.stdout.strip())/'Documents/theme70-uikit.jsonl'
+        if probe.exists(): shutil.copy2(probe,evidence/'theme70-uikit.jsonl')
 (evidence/'results.json').write_text(json.dumps(results,indent=2))
-assert results.get('green',{}).get('totalTestCount')==3,results
-assert results['green']['failedTests']==0 and results['green']['passedTests']==3,results
+assert results.get('green',{}).get('totalTestCount')==1,results
+assert results['green']['failedTests']==0 and results['green']['passedTests']==1,results
