@@ -63,6 +63,31 @@ final class NativeNavigationUITests: XCTestCase {
         // Disposable diagnostic only, not an appearance assertion in shipping tests.
         XCTAssertLessThan(title.minY - author.maxY, 16)
     }
+    @MainActor func testRailTracksFingerThresholdNotGeometryOrProgrammaticScroll() {
+        let app = launch()
+        let next = app.buttons["page_jump_next"]
+        XCTAssertTrue(next.exists)
+        func drag(_ distance: CGFloat) {
+            let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 190, dy: 420))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)))
+        }
+        drag(-20)
+        XCTAssertTrue(next.exists, "Small drag must not collapse the rail")
+        drag(-120)
+        XCTAssertFalse(next.exists, "Intentional upward drag collapses the rail")
+        XCTAssertEqual(app.staticTexts["event"].label, "none")
+        drag(20)
+        XCTAssertFalse(next.exists, "Small reversal must not expand the rail")
+        drag(80)
+        XCTAssertTrue(next.exists, "Intentional reverse drag expands the rail")
+        XCTAssertEqual(app.staticTexts["actions"].label, "0")
+        app.buttons["page_jump_page_of"].tap()
+        XCTAssertTrue(app.navigationBars["page_jump_title"].waitForExistence(timeout: 5))
+        app.buttons["2"].tap()
+        XCTAssertTrue(app.staticTexts["Post 10"].waitForExistence(timeout: 5))
+        XCTAssertTrue(next.exists, "Programmatic scroll and chrome relayout must preserve expansion")
+        XCTAssertEqual(app.staticTexts["actions"].label, "0", "Scrolling must not activate a post")
+    }
     @MainActor func testLargeTypeCardPadding() {
         let app = launch(large: true); let cell = row(app, "Post 0")
         print("HOME69 large hierarchy\n" + app.debugDescription)

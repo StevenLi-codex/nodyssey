@@ -214,6 +214,7 @@ struct ContentPagedList: View {
     @State private var jump = ContentFeedJump()
     @State private var pageSheet = ContentFeedSheet()
     @State private var direction = ContentFeedDirection()
+    @GestureState private var feedDragging = false
     @State private var chromeHeight: CGFloat = 0
     private var isHome: Bool { operation == "feed" && replacePage != nil }
     private var totalPages: Int64 { max(1, store.value.nativeInt("totalPages") ?? 1) }
@@ -252,7 +253,7 @@ struct ContentPagedList: View {
                                         Color.clear.preference(key: ContentFeedRowsPreference.self, value: [
                                             ContentFeedVisibleRow(ticket: owner, id: row.id, page: row.page, frame: geometry.frame(in: .global))
                                         ])
-                                    }
+                                    }.allowsHitTesting(false)
                                 }
                             }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
@@ -285,6 +286,18 @@ struct ContentPagedList: View {
             }
             .listStyle(.plain).scrollContentBackground(.hidden)
             .background(ContentSurface(canvas: true))
+            // Simultaneous observation does not replace the List's pan recognizer or
+            // delay buttons. Inertia and programmatic/geometry changes never feed the rail.
+            .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                .updating($feedDragging) { _, dragging, _ in dragging = true }
+                .onChanged { gesture in
+                    guard isHome, let ticket = owner, owns(ticket) else { return }
+                    direction.record(translation: gesture.translation.height)
+                }
+                .onEnded { _ in direction.endGesture() })
+            .onChange(of: feedDragging) { dragging in
+                if !dragging { direction.endGesture() } // Includes system cancellation.
+            }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
                 guard let ticket = owner, owns(ticket),
                       let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
@@ -292,7 +305,6 @@ struct ContentPagedList: View {
                       let row = window.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
                 visible(row.id, row.page)
                 if let page = row.page, page > 0 { visiblePage = page }
-                direction.record(index: row.globalIndex, minY: first.frame.minY - viewport.frame(in: .global).minY)
             }
             .onChange(of: store.value) { _ in
                 guard let ticket = owner, owns(ticket) else { return }
@@ -324,7 +336,7 @@ struct ContentPagedList: View {
                     homeControls(proxy: proxy).padding(12)
                         .background { GeometryReader { geometry in
                             Color.clear.preference(key: ContentFeedChromeHeightPreference.self, value: geometry.size.height)
-                        } }
+                        }.allowsHitTesting(false) }
                 }
             }
             .onPreferenceChange(ContentFeedChromeHeightPreference.self) { chromeHeight = $0 }

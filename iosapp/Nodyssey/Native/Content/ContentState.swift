@@ -204,16 +204,28 @@ struct ContentFeedSheet {
     }
 }
 
+/// Follow finger travel, never row geometry (prefetch, relayout and scrollTo are not intent).
 struct ContentFeedDirection {
     private(set) var expanded = true
-    private var previous: (index: Int64, minY: CGFloat)?
-    mutating func record(index: Int64, minY: CGFloat) {
-        if let previous {
-            if index != previous.index { expanded = index < previous.index }
-            else if abs(minY - previous.minY) >= 8 { expanded = minY > previous.minY }
-            else { return }
-        }
-        previous = (index, minY)
+    private var previous: CGFloat = 0
+    private var travel: CGFloat = 0
+
+    mutating func record(translation: CGFloat) {
+        guard translation.isFinite else { return }
+        let delta = translation - previous
+        previous = translation
+        guard delta != 0 else { return }
+        // A reversal starts a fresh threshold; subthreshold jitter cannot flip the rail.
+        if (delta > 0 && travel < 0) || (delta < 0 && travel > 0) { travel = 0 }
+        travel += delta
+        guard abs(travel) >= 40 else { return }
+        expanded = travel > 0
+        travel = 0
+    }
+
+    mutating func endGesture() {
+        previous = 0
+        travel = 0
     }
 }
 

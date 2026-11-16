@@ -12,7 +12,10 @@ struct Host: View {
             ContentPagedList(operation: "feed", arguments: ["page": .integer(1)], replacePage: { _ in })
                 .navigationTitle("Production feed")
                 .safeAreaInset(edge: .top) {
-                    Text(app.event).accessibilityIdentifier("event")
+                    VStack {
+                        Text(app.event).accessibilityIdentifier("event")
+                        Text(String(app.actionCount)).accessibilityIdentifier("actions")
+                    }
                 }
         }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large") ? .accessibility2 : .large)
     }
@@ -21,12 +24,14 @@ struct Host: View {
     @Published var generation = 1
     @Published var settings: JSONValue = .null
     @Published var event = "none"
+    @Published var actionCount = 0
     var site: JSONValue = .null
     var siteName: String? = "Fixture"
     var isSignedIn = false
     let transport: any NativeTransport = FixtureTransport()
     func register(_ store: NativeStore) {}
     func open(_ route: String, _ args: [String: JSONValue] = [:]) {
+        actionCount += 1
         event = route + ":" + String(args["postId"]?.int ?? args["uid"]?.int ?? 0)
     }
     func showSignIn() { event = "signIn" }
