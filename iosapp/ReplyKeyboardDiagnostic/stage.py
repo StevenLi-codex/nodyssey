@@ -75,6 +75,9 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         if !app.keyboards.firstMatch.waitForExistence(timeout: 10) { field.tap() }
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "Software keyboard must really be open")
+        let tutorial = app.buttons["Continue"]
+        if tutorial.waitForExistence(timeout: 3) { tutorial.tap() }
+        XCTAssertTrue(app.keyboards.buttons["space"].waitForExistence(timeout: 10), "Normal software keyboard keys must be visible, not keyboard onboarding")
         field.typeText("short reply")
         sleep(2)
         let keyboard = app.keyboards.firstMatch.frame
@@ -86,6 +89,15 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertLessThanOrEqual(body.height, 120, "Typing a short reply must not choose long-editor mode")
         XCTAssertGreaterThanOrEqual(header.minY, keyboard.minY - 310, "The composer above the actual keyboard must remain compact")
         XCTAssertLessThanOrEqual(body.maxY, keyboard.minY + 1, "Input must remain above the software keyboard")
+        app.buttons["expand"].tap()
+        XCTAssertTrue(app.buttons["collapse"].waitForExistence(timeout: 5))
+        field.typeText("\\nsecond line\\nthird line\\nfourth line")
+        XCTAssertTrue(app.keyboards.buttons["space"].exists)
+        XCTAssertTrue((field.value as? String)?.contains("fourth line") == true)
+        app.buttons["collapse"].tap()
+        sleep(2)
+        XCTAssertGreaterThanOrEqual(app.buttons["close"].frame.minY, app.keyboards.firstMatch.frame.minY - 310)
+        XCTAssertTrue((field.value as? String)?.contains("fourth line") == true, "Collapsing must retain input")
     }
 }
 ''')
