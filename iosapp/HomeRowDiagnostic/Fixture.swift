@@ -21,7 +21,7 @@ import NodysseyNativeCore
 struct FixtureDestination: View { let name: String; var body: some View { Text("Destination " + name).accessibilityIdentifier("destination").navigationTitle("Detail") } }
 enum NativeAccountScreens { static func make(destination: NativeDestination) -> AnyView? { destination.route == "Profile" ? AnyView(AccountProfileScreen()) : destination.route == "SignIn" ? AnyView(FixtureThemeDestination()) : nil } }
 enum NativeEditorScreens { static func make(destination: NativeDestination) -> AnyView? { nil } }
-enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { AnyView(FixtureDestination(name: destination.route)) } }
+enum NativeLibraryScreens { static func make(destination: NativeDestination) -> AnyView? { ["Settings", "ThemeSettings", "SignIn"].contains(destination.route) ? nil : AnyView(FixtureDestination(name: destination.route)) } }
 enum NativeSettingsScreens { static func make(destination: NativeDestination) -> AnyView? {
     ["Settings", "ThemeSettings"].contains(destination.route) ? AnyView(FixtureThemeDestination()) : nil
 } }
