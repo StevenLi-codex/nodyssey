@@ -53,9 +53,9 @@ final class NativeNavigationUITests: XCTestCase {
         let text = probe.value as? String ?? "{}"
         let geometry = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
         let record: [String: Any] = ["name": name, "reference": reference, "samples": samples, "geometry": geometry,
-                                   "tabFrame": NSStringFromCGRect(app.tabBars.firstMatch.frame),
-                                   "settingsFrame": NSStringFromCGRect(app.buttons["native.profile.settings"].frame),
-                                   "screen": NSStringFromCGRect(app.frame)]
+                                   "tabFrame": NSCoder.string(for:app.tabBars.firstMatch.frame),
+                                   "settingsFrame": NSCoder.string(for:app.buttons["native.profile.settings"].frame),
+                                   "screen": NSCoder.string(for:app.frame)]
         let json = String(data: try! JSONSerialization.data(withJSONObject: record, options: .sortedKeys), encoding: .utf8)!
         let evidence = XCTAttachment(string: json); evidence.name = name + "-metrics"; evidence.lifetime = .keepAlways; add(evidence)
         print("BACKGROUND " + json)
