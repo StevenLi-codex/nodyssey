@@ -58,7 +58,6 @@ struct ContentPostList: View {
                 guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
                 positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
             })
-                .id("\(app.generation)|\(category)|\(sort)|\(page)")
         }
         .background(ContentSurface(canvas: true))
         .navigationTitle(app.siteName ?? String(localized: "content.posts", table: "Content"))
@@ -91,8 +90,8 @@ struct ContentPostList: View {
         .onChange(of: category) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
         .onChange(of: sort) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
         .onChange(of: app.generation) { _ in command.cancel(); positions = ContentFeedMemory(); page = 1 }
-        .task(id: "\(app.generation)|\(retry)") { await categories.observe(app, "categories") }
-        .task(id: "\(app.generation)|\(retry)") { await recent.observe(app, "boards.recent") }
+        .task(id: "\(app.generation)|\(retry)") { categories.observeRetained(app, "categories", restart: retry) }
+        .task(id: "\(app.generation)|\(retry)") { recent.observeRetained(app, "boards.recent", restart: retry) }
         .task(id: category) {
             guard !category.isEmpty else { return }
             do { _ = try await app.request("boards.recent.record", ["categorySlug": .string(category)]) }
@@ -197,18 +196,23 @@ struct ContentPagedList: View {
     @State private var authorCard: ContentIdentityRow?
     @State private var authorNavigation: AccountAuthorQuickCardNavigation?
     @State private var restoreID: Int64?
+    private let requestedRestoreID: Int64?
+    @State private var observedArguments: [String: JSONValue]?
     let replacePage: ((Int64) -> Void)?
     let visible: (Int64, Int64?) -> Void
     init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil, clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil, visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
         self.operation = operation; self.arguments = arguments; self.visible = visible; self.clearSearch = clearSearch
         self.replacePage = replacePage
+        self.requestedRestoreID = restoreID
         _restoreID = State(initialValue: restoreID)
+        _restored = State(initialValue: restoreID == nil)
         _visiblePage = State(initialValue: max(1, arguments["page"]?.int ?? 1))
     }
     @StateObject private var store = NativeStore()
     @StateObject private var command = ContentCommand()
     @State private var retry = 0
     @State private var restored = false
+    @State private var isVisible = false
     @State private var owner: ContentFeedTicket?
     @State private var visiblePage: Int64
     @State private var jump = ContentFeedJump()
@@ -230,7 +234,7 @@ struct ContentPagedList: View {
         ScrollViewReader { proxy in
           GeometryReader { viewport in
             List {
-                ContentStoreStatus(store: store) { retry += 1 }
+                ContentStoreStatus(store: store, initialLoading: true, silentRefresh: true) { retry += 1 }
                 ContentCommandStatus(command: command)
                 loadState("prepend", proxy: proxy)
                 switch window {
@@ -299,7 +303,7 @@ struct ContentPagedList: View {
                 if !dragging { direction.endGesture() } // Includes system cancellation.
             }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
-                guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
+                guard isVisible, restored, let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
                       let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
                       case .success(let window) = window,
                       let row = window.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
@@ -314,8 +318,9 @@ struct ContentPagedList: View {
                         perform(action, ticket: ticket, proxy: proxy)
                     }
                 } catch { jump.cancel() } // The invalid window is rendered above; retire its timer.
-                if !store.isReplacingPagingWindow, !restored, let restoreID, case .success(let window) = window, window.rows.contains(where: { $0.id == restoreID }) {
-                    proxy.scrollTo(restoreID, anchor: .top); restored = true
+                if !store.isReplacingPagingWindow, !restored, case .success(let window) = window,
+                   let target = restoreID ?? window.rows.first?.id, window.rows.contains(where: { $0.id == target }) {
+                    proxy.scrollTo(target, anchor: .top); restored = true
                 }
             }
             .task(id: jump.wait) {
@@ -360,17 +365,30 @@ struct ContentPagedList: View {
                 command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.")
             }
         }
-        .task(id: "\(app.generation)|\(operation)|\(arguments["categorySlug"]?.string ?? "")|\(arguments["sort"]?.string ?? "")|\(retry)") {
+        .task(id: JSONValue.object(["generation": .integer(Int64(app.generation)), "operation": .string(operation), "arguments": .object(arguments), "retry": .integer(Int64(retry))])) {
+            guard !Task.isCancelled else { return }
+            // Explicit board/sort/page changes replace only the request, not the
+            // List subtree. A repeated appearance keeps every presentation owner.
+            if observedArguments != arguments || owner?.generation != app.generation {
+                store.invalidate()
+                restoreID = requestedRestoreID
+                restored = requestedRestoreID == nil && observedArguments == nil
+                visiblePage = max(1, arguments["page"]?.int ?? 1)
+                direction = ContentFeedDirection()
+                authorNavigation = nil; authorCard = nil
+            }
+            var args = arguments
+            if isHome, store.value != .null { args["page"] = .integer(visiblePage) }
+            args["pagerId"] = .string(UUID().uuidString)
+            // A tab appearance is not a new feed. Keep the actual Kotlin pager,
+            // loaded window and navigation ticket owned by this StateObject.
+            guard store.observeRetained(app, operation, args, restart: retry) else { return }
+            observedArguments = arguments
             command.cancel()
-            store.cancel()
             let ticket = ContentFeedTicket(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
                                            sort: arguments["sort"]?.string ?? "", observation: UUID())
             owner = ticket
             jump = ContentFeedJump(owner: ticket); pageSheet.cancel()
-            var args = arguments
-            if isHome, store.value != .null { args["page"] = .integer(visiblePage) }
-            args["pagerId"] = .string(UUID().uuidString)
-            await store.observe(app, operation, args)
         }
         .sheet(item: $authorCard, onDismiss: {
             guard let destination = authorNavigation else { return }
@@ -386,7 +404,8 @@ struct ContentPagedList: View {
             authorNavigation = nil; authorCard = nil; pageSheet.cancel()
             if owner?.generation != generation { owner = nil; jump.cancel() }
         }
-        .onDisappear { command.cancel(); store.cancel(); owner = nil; restored = false; jump.cancel(); pageSheet.cancel() }
+        .onDisappear { command.cancel(); isVisible = false; direction.endGesture() }
+        .onAppear { isVisible = true }
     }
     private func goToPage(_ page: Int64, proxy: ScrollViewProxy) {
         guard let ticket = owner, owns(ticket), !command.busy, !store.isReplacingPagingWindow else { return }
@@ -454,7 +473,7 @@ struct ContentPagedList: View {
     }
     @ViewBuilder private func loadState(_ name: String, proxy: ScrollViewProxy) -> some View {
         let state = store.value[name] ?? .null
-        if state.nativeString("status") == "Loading" { ProgressView() }
+        if state.nativeString("status") == "Loading", name != "refresh", !store.isLoading { ProgressView() }
         if state.nativeString("status") == "Error", let code = state["error"]?.nativeString("code") {
             NativeFailureView(failure: .init(code: code, message: "Operation could not be completed."), retry: {
                 guard let ticket = owner, owns(ticket) else { return }

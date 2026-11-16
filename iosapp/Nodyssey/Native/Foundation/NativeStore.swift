@@ -25,6 +25,14 @@ import NodysseyNativeCore
     private var loadingTask: Task<Void, Never>?
     private var freshnessWait: Task<Void, Never>?
     private var pagingHandle: String?
+    private var retainedObservation: Task<Void, Never>?
+    private var retainedRestart = 0
+    private var hasPagingValue = false
+    private var observing = false
+    private var isPaging: Bool { key?.operation == "feed" || key?.operation == "search.feed" }
+    var hasValue: Bool { isPaging ? hasPagingValue : state.value != nil }
+
+    deinit { retainedObservation?.cancel() }
 
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now
@@ -46,11 +54,23 @@ import NodysseyNativeCore
                     next = .object(retained)
                 } else if next.nativeString("pagerId") == self.pagingHandle { self.isReplacingPagingWindow = false }
             }
-            self.value = next
-            self.failure = self.state.failure
-            // Empty and JSON null are responses too; only absence owns skeletons.
-            self.isLoading = self.state.isLoading && self.state.value == nil
-            self.isRefreshing = self.state.isLoading && self.state.value != nil
+            // @Published emits even for equal assignments. Transport freshness is
+            // independent of presentation changes; don't invalidate every row on
+            // equal snapshots, load bookkeeping, or cancellation.
+            // Paging emits an empty Idle/Loading presenter shell before Room's
+            // result. It is not an accepted empty feed. Once loaded, an empty
+            // result remains content even while its existing pager refreshes.
+            if self.state.value == nil { self.hasPagingValue = false }
+            else if self.isPaging, !next.nativeArray("items").isEmpty || next["refresh"]?.nativeString("status") == "NotLoading" {
+                self.hasPagingValue = true
+            }
+            if self.value != next { self.value = next }
+            if self.failure != self.state.failure { self.failure = self.state.failure }
+            let pagingPending = self.isPaging && self.observing && self.state.value != nil && next["refresh"]?.nativeString("status") != "Error"
+            let loading = !self.hasValue && self.state.failure == nil && (self.state.isLoading || pagingPending)
+            let refreshing = self.state.isLoading && self.hasValue
+            if self.isLoading != loading { self.isLoading = loading }
+            if self.isRefreshing != refreshing { self.isRefreshing = refreshing }
         }
     }
 
@@ -62,6 +82,43 @@ import NodysseyNativeCore
         let next = Key(app: ObjectIdentifier(app), generation: app.generation, operation: name, arguments: identity)
         if key != next { invalidate(); key = next }
         app.register(self)
+    }
+
+    /// A retained native page owns its subscription, not its appearance task.
+    /// TabView cancels .task on departure even when its StateObject survives.
+    /// Keep Kotlin's actual presenter/revision source alive until key change,
+    /// explicit retry/cancel, identity revocation, or release of the page owner.
+    /// Returns true only when a new observation (and paging ticket) is needed.
+    @discardableResult
+    func observeRetained(_ app: NativeAppModel, _ name: String, _ arguments: [String: JSONValue] = [:], restart: Int = 0) -> Bool {
+        guard !Task.isCancelled else { return false }
+        prepare(app, name, arguments)
+        if retainedObservation != nil, retainedRestart == restart { return false }
+        cancel()
+        retainedRestart = restart
+        pagingHandle = arguments["pagerId"]?.string
+        isReplacingPagingWindow = (name == "feed" || name == "search.feed") && !value.nativeArray("items").isEmpty
+        isLoading = !hasValue
+        isRefreshing = hasValue
+        let token = operation
+        let state = self.state
+        let transport = app.transport
+        // Do not retain the store across the await: releasing its StateObject
+        // must cancel the Kotlin handle instead of forming a self/task cycle.
+        observing = true
+        retainedObservation = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            await state.observe(using: transport, operation: name, arguments: arguments)
+            guard let self, self.operation == token else { return }
+            self.retainedObservation = nil
+            self.observing = false
+            if self.isLoading { self.isLoading = false }
+            if !Task.isCancelled, self.failure == nil {
+                self.failure = NativeFailure(code: "OBSERVATION_ENDED", message: "Observation ended")
+            }
+            if self.failure != nil { self.receivedAt = nil }
+        }
+        return true
     }
 
     /// Explicit user refresh/readback remains authoritative, regardless of age.
@@ -134,8 +191,11 @@ import NodysseyNativeCore
     }
 
     private func observePrepared(_ app: NativeAppModel, _ name: String, _ arguments: [String: JSONValue], token: UUID) async {
+        observing = true
         await state.observe(using: app.transport, operation: name, arguments: arguments)
         guard operation == token else { return }
+        observing = false
+        if isLoading { isLoading = false }
         if !Task.isCancelled, failure == nil {
             failure = NativeFailure(code: "OBSERVATION_ENDED", message: "Observation ended")
         }
@@ -165,6 +225,8 @@ import NodysseyNativeCore
     /// Temporary navigation-away: retire callbacks, keep this identity's rows.
     func cancel() {
         operation = UUID()
+        observing = false
+        retainedObservation?.cancel(); retainedObservation = nil
         freshnessWait?.cancel(); freshnessWait = nil
         loadingTask?.cancel(); loadingTask = nil
         state.cancel()
