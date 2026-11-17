@@ -44,7 +44,7 @@ final class NativeNavigationUITests: XCTestCase {
         let searched = trace(app).last { $0["operation"] as? String == "search.feed" }
         XCTAssertEqual((searched?["arguments"] as? [String:Any])?["query"] as? String, "needle")
         guard reachEnd(app, "search-end", lastRow: "Search 59") else { return }
-        let footer = app.staticTexts["6"].firstMatch
+        let footer = app.staticTexts["Total pages"].firstMatch
         XCTAssertTrue(footer.exists, "Pagination footer remains present")
         let lastFrame = app.staticTexts["Search 59"].frame
         print("GLASS71_FOOTER frame=\(NSCoder.string(for: footer.frame)) lastRow=\(NSCoder.string(for: lastFrame)) tab=\(NSCoder.string(for: app.tabBars.firstMatch.frame))")
