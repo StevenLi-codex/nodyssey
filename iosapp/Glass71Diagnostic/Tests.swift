@@ -122,6 +122,12 @@ final class NativeNavigationUITests: XCTestCase {
         // excluding native navigation/float rails; retain raw strips for review.
         let sampleYs: [CGFloat]=[app.frame.height/2,app.frame.height-150,app.frame.height-12]
         print("GLASS71_STRIP \(name) " + sampleYs.map { "\($0):\(pixel(1,$0))" }.joined(separator:" "))
-        if detail { XCTAssertEqual(app.tabBars.count,0,"Detail hides root tab chrome") }
+        if detail {
+            XCTAssertEqual(app.tabBars.count,0,"Detail hides root tab chrome")
+            let a=pixel(1,app.frame.height-150),b=pixel(1,app.frame.height-12)
+            let jump=zip(a,b).map { abs($0-$1) }.max()!
+            print("GLASS71_DETAIL_CANVAS \(name) above=\(a) safeBottom=\(b) jump=\(jump)")
+            XCTAssertLessThanOrEqual(jump,2,"Detail bottom safe-area canvas continuity outside reply rail")
+        }
     }
 }

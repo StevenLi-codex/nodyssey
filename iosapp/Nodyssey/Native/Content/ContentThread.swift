@@ -120,7 +120,7 @@ struct ContentPostDetail: View {
             .onChange(of: target) { _ in restoreScroll(proxy) }
             .onChange(of: loadingPage) { _ in restoreScroll(proxy) }
         }
-        .background(ContentSurface(canvas: true))
+        .nativePageCanvas()
         .navigationTitle(titleOffscreen ? title : CT("thread"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

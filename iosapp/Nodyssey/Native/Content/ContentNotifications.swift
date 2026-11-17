@@ -55,7 +55,7 @@ struct ContentNotifications: View {
                 }
             }
         }
-        .background(ContentSurface(canvas: true))
+        .nativePageCanvas()
         .navigationTitle(Text(String(localized: "content.notifications", table: "Content")))
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {

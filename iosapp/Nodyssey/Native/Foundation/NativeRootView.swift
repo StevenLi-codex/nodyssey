@@ -30,6 +30,7 @@ struct NativeRootView: View {
                 NativeBusyView()
             }
         }
+        .nativePageCanvas()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("native.root")
         .modifier(NativeSettingsAppearance(settings: app.settings))
@@ -46,6 +47,7 @@ struct NativeRootView: View {
                         }
                     }
             }
+            .nativePageCanvas()
             .environmentObject(app)
             .interactiveDismissDisabled(app.sheetRequiresDeparture || app.departureRunning)
             .modifier(NativeSettingsAppearance(settings: app.settings))
@@ -86,8 +88,9 @@ struct NativeRootView: View {
             .tabItem { Label("tab_profile", systemImage: "person.crop.circle").accessibilityIdentifier("native.tab.profile") }
             .tag(NativeTab.profile)
         }
+        .nativePageCanvas()
         // System TabView/NavigationStack supplies Liquid Glass on iOS 26;
-        // no painted background hides the native treatment or scroll-edge behavior.
+        // the canvas sits behind it, not on the bars or their scroll-edge treatment.
     }
 }
 

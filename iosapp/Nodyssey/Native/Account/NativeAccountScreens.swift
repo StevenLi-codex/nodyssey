@@ -74,12 +74,9 @@ struct AccountRequireSignIn: View {
 }
 
 struct AccountSurface: View {
-    @Environment(\.colorScheme) private var scheme
     var canvas = false
     var body: some View {
-        (scheme == .dark
-            ? (canvas ? Color(.sRGB, white: 0.035, opacity: 1) : Color(.sRGB, white: 0.085, opacity: 1))
-            : (canvas ? Color(.sRGB, white: 0.95, opacity: 1) : Color.white))
+        NativePageSurface(canvas: canvas)
     }
 }
 
@@ -236,7 +233,7 @@ struct AccountProfileScreen: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
-        .background(AccountSurface(canvas: true).ignoresSafeArea(.container))
+        .nativePageCanvas()
         .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
