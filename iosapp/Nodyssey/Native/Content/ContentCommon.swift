@@ -41,12 +41,9 @@ struct ContentStoreStatus: View {
 
 /// Neutral reading surfaces inherit the user's existing theme accent.
 struct ContentSurface: View {
-    @Environment(\.colorScheme) private var scheme
     var canvas = false
     var body: some View {
-        (scheme == .dark
-            ? (canvas ? Color(.sRGB, white: 0.035, opacity: 1) : Color(.sRGB, white: 0.085, opacity: 1))
-            : (canvas ? Color(.sRGB, white: 0.95, opacity: 1) : Color.white))
+        NativePageSurface(canvas: canvas)
     }
 }
 

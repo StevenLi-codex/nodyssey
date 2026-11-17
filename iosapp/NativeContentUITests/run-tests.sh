@@ -14,6 +14,8 @@ cp "$HERE/../Nodyssey/Native/Content/ContentPreferences.swift" "$STAGE/Sources/C
 # Compose the actual Content/Rendering tree; only platform/bridge and terminal
 # source leaves use executable probes (never the signature-only fixtures).
 if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
+    cp "$HERE/../Nodyssey/Native/Foundation/NativePageCanvas.swift" "$STAGE/Sources/"
+    cp "$HERE/../Nodyssey/Native/Foundation/NativeGlassSurface.swift" "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Content/"*.swift "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Sharing/"*.swift "$STAGE/Sources/"
     for source in "$HERE/../Nodyssey/Native/Rendering/"*.swift; do

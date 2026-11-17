@@ -128,7 +128,7 @@ struct AccountSpaceScreen: View {
                 AccountPostPage(uid: uid, mode: tab).id("\(uid):\(tab):\(app.generation)")
             }
         }
-        .background(AccountSurface(canvas: true))
+        .nativePageCanvas()
         .navigationTitle(profile.value.nativeString("name") ?? String(localized: "space_tab_general"))
         .toolbar {
             Menu {
@@ -244,7 +244,7 @@ struct AccountPostPage: View {
                 }
             }
         }
-        .listStyle(.plain).scrollContentBackground(.hidden).background(AccountSurface(canvas: true))
+        .listStyle(.plain).scrollContentBackground(.hidden).nativePageCanvas()
         .searchable(text: $query)
         .task(id: "\(uid):\(mode):\(requested):\(refresh):\(app.generation)") { await load() }
         .refreshable { refresh += 1 }

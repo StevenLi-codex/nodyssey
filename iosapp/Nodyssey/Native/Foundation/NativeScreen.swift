@@ -14,6 +14,9 @@ struct NativeScreen: View {
     let destination: NativeDestination
     var body: some View {
         screen
+            // Own the entire destination canvas, including navigation safe areas.
+            // Individual Lists/Forms may still supply their native content surfaces.
+            .nativePageCanvas()
             .environment(\.nativeDestinationID, destination.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("native.screen.\(destination.route)")

@@ -14,7 +14,7 @@ outer = ["ssh", "-p", "18323", "-i", "/home/hermes/.ssh/n100_london_ed25519", "-
 inner = ["ssh", "-o", "Hostname=StevendeMacBook-Pro.local", "-o", "HostKeyAlias=192.168.31.128", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "macbook"]
 archive = io.BytesIO()
 with tarfile.open(fileobj=archive, mode="w") as tar:
-    for relative in ["iosapp/NativeAccountUITests", "iosapp/Nodyssey/Native/Account", "iosapp/NativeCore", "iosapp/Nodyssey/Native/Rendering"]:
+    for relative in ["iosapp/NativeAccountUITests", "iosapp/Nodyssey/Native/Account", "iosapp/NativeCore", "iosapp/Nodyssey/Native/Rendering", "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift"]:
         path = repo / relative
         if path.exists():
             tar.add(path, arcname=relative, filter=lambda item: None if "/.build" in item.name or "__pycache__" in item.name else item)

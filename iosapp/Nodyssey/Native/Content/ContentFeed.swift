@@ -18,30 +18,40 @@ struct ContentPostList: View {
         let ownerSort = sort
         let ownerGeneration = app.generation
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Button { app.open("Search") } label: {
-                    Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }.buttonStyle(.plain)
-                ContentSortPicker(selection: sortSelection).pickerStyle(.menu)
-                    .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
-            }.padding(.horizontal, 16).background(ContentSurface())
-            HStack(spacing: 0) {
-                ContentBoardTabs(categories: homeCategories, selection: $category)
-                Menu {
-                    ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
-                        Button(boardTitle(slug)) { category = slug }
+            NativeGlassContainer {
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        // This remains a route entry, not a second search input owner.
+                        Button { app.open("Search") } label: {
+                            Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        ContentSortPicker(selection: sortSelection).pickerStyle(.menu).tint(.primary)
+                            .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
+                    }.padding(.horizontal, 16)
+                        .background { NativeGlassSurface(opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, 8) }
+                    HStack(spacing: 0) {
+                        ContentBoardTabs(categories: homeCategories, selection: $category)
+                        Menu {
+                            ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
+                                Button(boardTitle(slug)) { category = slug }
+                            }
+                            Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
+                                .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
+                        }
+                        #if os(macOS)
+                        .menuStyle(.borderlessButton)
+                        #endif
+                        .menuIndicator(.hidden).fixedSize().tint(.primary)
                     }
-                    Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
-                        .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
+                    // One glass surface for the entire rail, never one per category.
+                    .background { NativeGlassSurface(opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, 8) }
                 }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
-                .menuIndicator(.hidden).fixedSize()
-            }.background(ContentBoardNavigationBackground())
+            }
             Divider()
 
             ContentStoreStatus(store: categories) { retry += 1 }
@@ -123,14 +133,6 @@ struct ContentPostList: View {
         do { _ = try await app.request("categories.refresh") }
         catch is CancellationError { }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
-    }
-}
-
-/// A translucent tint over the native surface keeps arbitrary custom seeds readable.
-private struct ContentBoardNavigationBackground: View {
-    @Environment(\.colorScheme) private var scheme
-    var body: some View {
-        ContentSurface().overlay { Rectangle().fill(.tint.opacity(scheme == .dark ? 0.16 : 0.08)) }
     }
 }
 
