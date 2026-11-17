@@ -1,43 +1,44 @@
-name: Glass71 disposable iOS integration (no archive)
+name: Glass72 short real iOS top regression (no archive)
 on:
   workflow_dispatch:
     inputs:
-      archive:
-        type: boolean
-        default: false
+      source:
+        type: choice
+        options: [baseline, candidate]
+        default: baseline
+      source_commit:
+        type: string
+        default: baede138d8bcef206ecc2d392c2038fd445633ec
 permissions:
   contents: read
 jobs:
   integration:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Baseline/full-theme original results retained under run 44053307368.
-        # Bounded custom light/dark search-submit-to-end footer regression.
-        source: [union]
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 25
     env:
-      DIAG_SOURCE: ${{ matrix.source }}
+      DIAG_SOURCE: ${{ inputs.source }}
+      DIAG_COMMIT: ${{ inputs.source_commit }}
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify installed SDK/runtime without downloads
+      - name: Verify installed ARM SDK and runtime only
         run: |
-          uname -m
+          test "$(uname -m)" = arm64
           xcodebuild -version
           xcrun simctl list runtimes
-          xcrun simctl list devices available
-      - run: python3 iosapp/Glass71Diagnostic/stage.py
-      - name: Compile smoke then actual iOS matrix
-        run: python3 iosapp/Glass71Diagnostic/run.py
+      - run: python3 iosapp/Glass72Diagnostic/stage.py
+      - name: Compile and run only three short top leaves
+        run: python3 iosapp/Glass72Diagnostic/run.py
+      - name: OCR original exported PNGs
+        if: always()
+        run: swift iosapp/Glass72Diagnostic/ocr.swift "${RUNNER_TEMP}/glass72-evidence"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: glass71-${{ matrix.source }}-ios
-          path: ${{ runner.temp }}/glass71-evidence
+          name: glass72-${{ inputs.source }}-ios
+          path: ${{ runner.temp }}/glass72-evidence
           retention-days: 7
           if-no-files-found: error
