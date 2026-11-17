@@ -112,7 +112,16 @@ struct RetentionGeometryProbe: UIViewRepresentable {
             output["settled"] = stableFrames >= 12
             output["frames"] = stableFrames
             output["history"] = samples
-            accessibilityValue = String(data: try! JSONSerialization.data(withJSONObject: output, options: .sortedKeys), encoding: .utf8)!
+            // Read-only transitional UIKit values may be NaN (e.g. extended/pattern
+            // UIColor or not-yet-mounted glass frame). Preserve them as null, never
+            // crash the fixture or manufacture a finite measurement.
+            func jsonSafe(_ value: Any) -> Any {
+                if let dict=value as? [String:Any] { return dict.mapValues(jsonSafe) }
+                if let array=value as? [Any] { return array.map(jsonSafe) }
+                if let number=value as? NSNumber, !number.doubleValue.isFinite { return NSNull() }
+                return value
+            }
+            accessibilityValue = String(data: try! JSONSerialization.data(withJSONObject: jsonSafe(output), options: .sortedKeys), encoding: .utf8)!
         }
     }
 }
