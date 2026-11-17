@@ -73,7 +73,7 @@ struct ContentPostRow: View {
         let summary = value["summary"] ?? value
         postAction {
             card(summary)
-                .padding(.horizontal, 12).padding(.vertical, 4)
+                .padding(.horizontal, NativeFeedLayout.horizontalInset).padding(.vertical, 4)
                 // The shape belongs to the action's label, including its padding.
                 .contentShape(Rectangle())
         }
@@ -175,7 +175,7 @@ struct ContentPostRow: View {
 /// Match the My-page group's continuous boundary/depth, but keep reading opaque.
 private struct ContentPostCardSurface: View {
     @Environment(\.colorSchemeContrast) private var contrast
-    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: NativeFeedLayout.cardCornerRadius, style: .continuous)
     var body: some View {
         ContentSurface()
             .overlay { shape.fill(.tint).opacity(0.025) }
