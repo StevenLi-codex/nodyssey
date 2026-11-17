@@ -1,211 +1,35 @@
-name: SwiftUI iOS build and native verification
-
+name: Glass71 disposable iOS integration (no archive)
 on:
   workflow_dispatch:
     inputs:
       archive:
-        description: Build and package the unsigned device archive
         type: boolean
-        default: true
-  push:
-    branches: [feat/ios-swiftui-liquid-glass]
-    paths:
-      - 'iosapp/**'
-      - 'shared/**'
-      - 'richtext/**'
-      - 'gradle/**'
-      - 'build.gradle.kts'
-      - '.github/workflows/ios-swiftui.yml'
-
+        default: false
 permissions:
   contents: read
-
-concurrency:
-  group: ios-swiftui-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  native:
-    runs-on: macos-26
-    timeout-minutes: 90
+  integration:
+    runs-on: macos-26-intel
+    timeout-minutes: 45
     env:
-      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -Dorg.gradle.workers.max=2
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Verify Apple toolchain and simulator availability
+      - name: Verify installed SDK/runtime without downloads
         run: |
           uname -m
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          xcrun simctl list runtimes
           xcrun simctl list devices available
-          swift --version
-          python3 iosapp/NativeNavigationUITests/validate-project.py
-          python3 -m unittest discover -s iosapp/scripts -p 'test_verify_native_results.py' -v
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@v4
-      - uses: actions/cache@v6
-        with:
-          path: ~/.konan
-          key: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: ios-swiftui-konan-${{ runner.os }}-${{ runner.arch }}-
-      - uses: gradle/actions/setup-gradle@v5
-        with:
-          cache-read-only: false
-      - name: Native core behavior tests
-        run: |
-          if test -f iosapp/NativeCore/Package.swift; then
-            swift test --package-path iosapp/NativeCore
-          else
-            printf '%s\n' 'Baseline toolchain run: SwiftUI core not introduced in this revision.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Native rich document behavior tests
-        run: sh iosapp/NativeRenderingTests/run-tests.sh
-      - name: Native SwiftUI domain behavior tests
-        if: ${{ !cancelled() }}
-        run: |
-          failed=0
-          for suite in NativeFoundationTests NativeContentUITests NativeEditorTests NativeAccountUITests NativeLibraryTests NativeMediaTests NativeSettingsUITests NativeSharingTests; do
-            sh "iosapp/$suite/run-tests.sh" || failed=1
-          done
-          exit "$failed"
-      - name: Compile Kotlin iOS bridge and native tests
-        id: native_compile
-        if: ${{ !cancelled() }}
-        run: ./gradlew :iosapp:compileKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
-      - name: Create shared disposable diagnostic simulator
-        id: simulator_device
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
-          phones = [(runtime, d) for runtime, entries in devices.items() if '.iOS-' in runtime for d in entries if d['isAvailable'] and 'iPhone' in d['name']]
-          if not phones:
-              raise SystemExit('No available iPhone simulator: runtime acceptance is blocked')
-          runtime, phone = phones[0]
-          device_type = phone.get('deviceTypeIdentifier')
-          if not device_type:
-              types = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devicetypes', '-j']))['devicetypes']
-              device_type = next(d['identifier'] for d in types if d['name'] == phone['name'])
-          udid = subprocess.check_output(['xcrun', 'simctl', 'create', 'Nodyssey-Native-Acceptance', device_type, runtime], text=True).strip()
-          with open(os.environ['GITHUB_ENV'], 'a') as env:
-              env.write('SIMULATOR_UDID=' + udid + '\n')
-              env.write('SIMULATOR_NAME=' + phone['name'] + '\n')
-          subprocess.run(['xcrun', 'simctl', 'boot', udid], check=True)
-          subprocess.run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], check=True)
-          PY
-      - name: Execute Kotlin simulator behavior tests
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
-        run: ./gradlew :iosapp:iosSimulatorArm64Test -PiosTestDevice="$SIMULATOR_UDID"
-      - name: Verify complete native XML even after a failing test
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
-        run: python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
-      - name: Build simulator app
-        id: simulator_build
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
-        run: |
-          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
-            build CODE_SIGNING_ALLOWED=NO
-      - name: Compare same Kotlin SVG renderer inside the app host
-        id: svg_host_tests
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
-        run: |
-          xcodebuild test -project iosapp/Nodyssey.xcodeproj -scheme NativeSvgHostTests \
-            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -destination-timeout 120 -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
-            -resultBundlePath "$RUNNER_TEMP/native-svg-host.xcresult" \
-            -only-testing:NativeSvgHostTests/NativeSvgHostTests/testSameKotlinRasterizerPreservesPixels \
-            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/native-svg-host.xcresult" > "$RUNNER_TEMP/native-svg-host-summary.json"
-          python3 - <<'PY'
-          import json, os
-          with open(os.environ['RUNNER_TEMP'] + '/native-svg-host-summary.json') as source:
-              report = json.load(source)
-          assert report['totalTestCount'] == 1, report
-          assert report['passedTests'] == 1 and report['failedTests'] == 0 and report['skippedTests'] == 0, report
-          assert report['result'] == 'Passed', report
-          print('Verified one executed same-Kotlin-renderer app-hosted pixel test')
-          PY
-      - name: Launch app in actual ARM simulator
-        id: simulator_launch
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
-        run: |
-          python3 - <<'PY'
-          import os, subprocess
-          udid = os.environ['SIMULATOR_UDID']
-          app = os.environ['RUNNER_TEMP'] + '/NodysseySimulator/Build/Products/Debug-iphonesimulator/Nodyssey.app'
-          subprocess.run(['xcrun', 'simctl', 'install', udid, app], check=True)
-          subprocess.run(['xcrun', 'simctl', 'launch', udid, 'io.github.nodyssey'], check=True)
-          subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', os.environ['RUNNER_TEMP'] + '/nodyssey-launch.png'], check=True)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as report:
-              report.write('\nInstalled and launched on ' + os.environ['SIMULATOR_NAME'] + '. Launch alone is not full interaction/login acceptance.\n')
-          PY
-      - name: Execute real native navigation tests
-        id: navigation_tests
-        if: ${{ !cancelled() && steps.simulator_launch.outcome == 'success' }}
-        run: |
-          xcodebuild test -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -destination-timeout 120 -derivedDataPath "$RUNNER_TEMP/NodysseySimulator" \
-            -resultBundlePath "$RUNNER_TEMP/NativeNavigation.xcresult" \
-            -only-testing:NativeNavigationUITests -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/NativeNavigation.xcresult" > "$RUNNER_TEMP/native-navigation-summary.json"
-          python3 - <<'PY'
-          import json, os
-          with open(os.environ['RUNNER_TEMP'] + '/native-navigation-summary.json') as source:
-              report = json.load(source)
-          assert report['totalTestCount'] == 3, report
-          assert report['passedTests'] == 3 and report['failedTests'] == 0 and report['skippedTests'] == 0, report
-          assert report['result'] == 'Passed', report
-          print('Verified actual native navigation tests:', report['passedTests'])
-          PY
-      - name: Build unsigned iPhone archive
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
-        run: |
-          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.22-swiftui.1" CURRENT_PROJECT_VERSION="54"
-      - name: Package unsigned test IPA
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
-        run: |
-          mkdir -p "$RUNNER_TEMP/Payload"
-          cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
-          (cd "$RUNNER_TEMP" && zip -qry nodyssey-swiftui-unsigned.ipa Payload)
-          shasum -a 256 "$RUNNER_TEMP/nodyssey-swiftui-unsigned.ipa"
+      - run: python3 iosapp/Glass71Diagnostic/stage.py
+      - name: Compile smoke then actual iOS matrix
+        run: python3 iosapp/Glass71Diagnostic/run.py
       - uses: actions/upload-artifact@v7
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
+        if: always()
         with:
-          name: nodyssey-swiftui-unsigned
-          path: ${{ runner.temp }}/nodyssey-swiftui-unsigned.ipa
+          name: glass71-ios
+          path: ${{ runner.temp }}/glass71-evidence
+          retention-days: 7
           if-no-files-found: error
-          retention-days: 14
-      - name: Upload verification evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nodyssey-swiftui-verification
-          path: |
-            ${{ runner.temp }}/nodyssey-launch.png
-            ${{ runner.temp }}/native-svg-host.xcresult
-            ${{ runner.temp }}/native-svg-host-summary.json
-            ${{ runner.temp }}/NativeNavigation.xcresult
-            ${{ runner.temp }}/native-navigation-summary.json
-            **/NodysseyShell.framework/Headers/NodysseyShell.h
-            **/NodysseyShell.framework/Modules/module.modulemap
-            **/build/reports/tests/
-            **/build/test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Stop Gradle daemons
-        if: always()
-        run: ./gradlew --stop
