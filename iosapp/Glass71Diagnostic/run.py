@@ -27,11 +27,11 @@ assert build==0,'Compile/link gate failed; no UI acceptance claimed'
 subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False,timeout=90)
 subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=600)
 results={}
-tests=['testLightCanvasAndNavigation'] # Bounded selector-fix verification; original full matrix preserved.
+tests=['testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation'] # One union-only four-theme run; no baseline/smoke repeat.
 for test in tests:
     dest=evidence/test; dest.mkdir(exist_ok=True)
     result=dest/'result.xcresult'
-    code=run(base+['test-without-building','-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests/NativeNavigationUITests/'+test],dest/'xcodebuild.log',240 if 'Smoke' in test else 420)
+    code=run(base+['test-without-building','-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests/NativeNavigationUITests/'+test,'-test-timeouts-enabled','YES','-default-test-execution-time-allowance','360','-maximum-test-execution-time-allowance','360'],dest/'xcodebuild.log',600)
     if result.exists():
         for name in ['summary','tests']:
             with (dest/(name+'.json')).open('w') as out: subprocess.run(['xcrun','xcresulttool','get','test-results',name,'--path',str(result)],stdout=out,check=False)

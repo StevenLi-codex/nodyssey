@@ -13,10 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         # Baseline/full-theme original results retained under run 44053307368.
-        # One bounded union leaf verifies the BackButton fixture correction.
+        # One union-only four-theme search-exit/end/native-layer acceptance run.
         source: [union]
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 40
     env:
       DIAG_SOURCE: ${{ matrix.source }}
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer

@@ -9,7 +9,7 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Opening body"].waitForExistence(timeout: 10), app.debugDescription)
         capture(app, "smoke-detail")
         XCTAssertEqual(app.tabBars.count, 0)
-        back(app)
+        guard back(app) else { return }
         XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout: 8))
     }
     @MainActor func testCanvasRouteSampling() {
@@ -19,7 +19,7 @@ final class NativeNavigationUITests: XCTestCase {
         app.staticTexts["Post 0"].tap()
         XCTAssertTrue(app.staticTexts["Opening body"].waitForExistence(timeout:8),app.debugDescription)
         capture(app,"sampling-detail"); verifyCanvas(app,"sampling-detail",detail:true)
-        back(app)
+        guard back(app) else { return }
         app.tabBars.buttons.element(boundBy:1).tap()
         XCTAssertTrue(app.staticTexts["Notification 0"].firstMatch.waitForExistence(timeout:8),app.debugDescription)
         capture(app,"sampling-notifications"); verifyCanvas(app,"sampling-notifications")
@@ -34,12 +34,55 @@ final class NativeNavigationUITests: XCTestCase {
     @MainActor private func launch(_ args: [String] = []) -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = args; app.launch(); return app
     }
-    @MainActor private func back(_ app: XCUIApplication) {
-        // iOS 26 can insert search's Close before the navigation back control.
-        // Match UIKit's actual back identifier, never the current button order.
+    @MainActor @discardableResult private func back(_ app: XCUIApplication) -> Bool {
         let button = app.navigationBars.buttons["BackButton"].firstMatch
-        XCTAssertTrue(button.waitForExistence(timeout: 8), app.debugDescription)
-        button.tap()
+        guard button.waitForExistence(timeout: 8) else {
+            XCTFail("Navigation BackButton missing: " + app.debugDescription); return false
+        }
+        button.tap(); return true
+    }
+    // Only Search owns this two-step exit; ordinary detail pops never dismiss search.
+    @MainActor private func exitSearch(_ app: XCUIApplication) -> Bool {
+        guard app.searchFields.firstMatch.waitForExistence(timeout: 8) else {
+            XCTFail("Search route missing before exit"); return false
+        }
+        let navBack = app.navigationBars.buttons["BackButton"].firstMatch
+        if !navBack.exists {
+            let close = app.navigationBars.buttons["Close"].firstMatch
+            guard close.waitForExistence(timeout: 5) else {
+                XCTFail("Active search has neither native Close nor BackButton"); return false
+            }
+            print("GLASS71_SEARCH_EXIT dismiss-native-search")
+            close.tap()
+        }
+        guard navBack.waitForExistence(timeout: 8) else {
+            XCTFail("Search dismissal did not expose navigation BackButton: " + app.debugDescription); return false
+        }
+        capture(app,"search-dismissed")
+        print("GLASS71_SEARCH_EXIT navigate-back")
+        guard back(app) else { return false }
+        guard app.staticTexts["life 0"].waitForExistence(timeout: 8) else {
+            XCTFail("Search Back did not return to Life feed: " + app.debugDescription); return false
+        }
+        return true
+    }
+    @MainActor private func reachEnd(_ app: XCUIApplication, _ name: String, lastRow: String) -> Bool {
+        for swipe in 0...24 {
+            let g = geometry(app)
+            guard let content = g["contentH"] as? NSNumber, let viewport = g["viewportH"] as? NSNumber,
+                  let inset = g["insetBottom"] as? NSNumber, let offset = g["offsetY"] as? NSNumber else {
+                XCTFail("Missing end-of-scroll geometry"); return false
+            }
+            let remaining = max(0,content.doubleValue - viewport.doubleValue + inset.doubleValue - offset.doubleValue)
+            print("GLASS71_END \(name) swipe=\(swipe) remaining=\(remaining)")
+            if remaining <= 1 && app.staticTexts[lastRow].exists {
+                capture(app,name); verifyCanvas(app,name); return true
+            }
+            guard swipe < 24 else { break }
+            app.swipeUp(velocity: .fast)
+        }
+        capture(app,name+"-unreached")
+        XCTFail("Bounded scroll failed to reach \(lastRow) within 1 point of maximum"); return false
     }
     @MainActor private func trace(_ app: XCUIApplication) -> [[String: Any]] {
         let text = app.staticTexts["glass71.transport"].label
@@ -68,6 +111,7 @@ final class NativeNavigationUITests: XCTestCase {
         let app=launch(args)
         XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout:15),app.debugDescription)
         let home=capture(app,"home-initial")
+        XCTAssertFalse((home["layerClasses"] as? [String:Int] ?? [:]).isEmpty,"Read-only native layer traversal must produce real records")
         verifyCanvas(app,"home-initial")
         for _ in 0..<3 { app.swipeUp() }
         let before=capture(app,"home-scrolled")
@@ -82,6 +126,7 @@ final class NativeNavigationUITests: XCTestCase {
         XCTAssertEqual(before["owner"] as? String,after["owner"] as? String,"Retained feed scroll owner")
         XCTAssertEqual((before["offsetY"] as? NSNumber)?.doubleValue ?? -999,(after["offsetY"] as? NSNumber)?.doubleValue ?? 999,accuracy:3,"Feed tab-return offset")
         XCTAssertEqual(starts,trace(app).filter { $0["kind"] as? String == "observe" && $0["operation"] as? String == "feed" }.count,"Tab return must not reopen feed observer")
+        guard reachEnd(app,"home-end",lastRow:"Post 59") else { return }
         // Different board means different data. Require canonical request/state, not same offset.
         app.buttons["Tech"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["tech 0"].waitForExistence(timeout:8),app.debugDescription)
@@ -105,8 +150,10 @@ final class NativeNavigationUITests: XCTestCase {
         for _ in 0..<5 { app.swipeUp() }
         XCTAssertTrue(app.staticTexts["Reply body 12"].exists,"Final reply reachable")
         capture(app,"detail-end"); verifyCanvas(app,"detail-end",detail:true)
-        back(app); XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout:8))
-        back(app); XCTAssertTrue(app.staticTexts["life 0"].waitForExistence(timeout:8))
+        guard back(app) else { return }
+        guard app.searchFields.firstMatch.waitForExistence(timeout:8) else { XCTFail("Search missing after detail pop"); return }
+        guard reachEnd(app,"search-end",lastRow:"Search 59") else { return }
+        guard exitSearch(app) else { return }
         capture(app,"home-after-search")
         app.tabBars.buttons.element(boundBy:1).tap()
         XCTAssertTrue(app.staticTexts["Notification 0"].firstMatch.waitForExistence(timeout:8),app.debugDescription)
@@ -114,13 +161,12 @@ final class NativeNavigationUITests: XCTestCase {
         app.staticTexts["Notification 0"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Opening body"].waitForExistence(timeout:8),app.debugDescription)
         capture(app,"detail-from-notification"); verifyCanvas(app,"detail-from-notification",detail:true)
-        back(app)
+        guard back(app) else { return }
         capture(app,"notifications-return")
         for _ in 0..<8 { app.swipeUp() }
         capture(app,"notifications-end"); verifyCanvas(app,"notifications-end")
-        XCTAssertNotNil(home["effects"])
-        // Actual UIKit effects inside the app, not a screenshot proxy. In final
-        // union inspect effect frames against real search/board native controls.
+        // Native classes/owners/frames are evidence, not an optional-array glass assertion.
+        // Empty glass candidates remain an explicit observation boundary.
     }
     @MainActor private func verifyCanvas(_ app: XCUIApplication,_ name:String,detail:Bool=false) {
         let image=app.screenshot().image.cgImage!,w=image.width,h=image.height

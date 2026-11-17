@@ -11,6 +11,35 @@ struct RetentionGeometryProbe: UIViewRepresentable {
         var last = ""
         var stableFrames = 0
         var samples: [[String: Any]] = []
+        var nativeSnapshot: [String: Any] = [:]
+        var nativeSampleTime: CFTimeInterval = 0
+        func nativeHierarchy(_ window: UIWindow) -> [String: Any] {
+            var views: [String:Int] = [:], layers: [String:Int] = [:]
+            var candidates: [[String:Any]] = []
+            func relevant(_ name: String) -> Bool {
+                ["glass","backdrop","material","visualeffect"].contains { name.lowercased().contains($0) }
+            }
+            func visitView(_ view: UIView) {
+                guard !view.isHidden, view.alpha > 0.01 else { return }
+                let name = String(reflecting: type(of:view))
+                views[name,default:0] += 1
+                if relevant(name) {
+                    candidates.append(["kind":"view","class":name,"owner":String(describing:ObjectIdentifier(view)),"frame":NSCoder.string(for:view.convert(view.bounds,to:window))])
+                }
+                view.subviews.forEach(visitView)
+            }
+            func visitLayer(_ layer: CALayer) {
+                guard !layer.isHidden, layer.opacity > 0.01 else { return }
+                let name = String(reflecting:type(of:layer))
+                layers[name,default:0] += 1
+                if relevant(name) {
+                    candidates.append(["kind":"layer","class":name,"owner":String(describing:ObjectIdentifier(layer)),"frame":NSCoder.string(for:layer.convert(layer.bounds,to:window.layer))])
+                }
+                layer.sublayers?.forEach(visitLayer)
+            }
+            visitView(window); visitLayer(window.layer)
+            return ["viewClasses":views,"layerClasses":layers,"nativeGlassCandidates":candidates]
+        }
         override init(frame: CGRect) {
             super.init(frame: frame)
             text = ""; isAccessibilityElement = true
@@ -57,6 +86,10 @@ struct RetentionGeometryProbe: UIViewRepresentable {
                 return own + view.subviews.flatMap(effects)
             }
             output["effects"] = effects(window)
+            if CACurrentMediaTime() - nativeSampleTime >= 1 {
+                nativeSnapshot = nativeHierarchy(window); nativeSampleTime = CACurrentMediaTime()
+            }
+            for (key,value) in nativeSnapshot { output[key] = value }
             output["settled"] = stableFrames >= 12
             output["frames"] = stableFrames
             output["history"] = samples
