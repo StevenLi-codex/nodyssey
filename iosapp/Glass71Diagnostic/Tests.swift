@@ -12,6 +12,21 @@ final class NativeNavigationUITests: XCTestCase {
         back(app)
         XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout: 8))
     }
+    @MainActor func testCanvasRouteSampling() {
+        let app=launch()
+        XCTAssertTrue(app.staticTexts["Post 0"].waitForExistence(timeout:15),app.debugDescription)
+        capture(app,"sampling-home"); verifyCanvas(app,"sampling-home")
+        app.staticTexts["Post 0"].tap()
+        XCTAssertTrue(app.staticTexts["Opening body"].waitForExistence(timeout:8),app.debugDescription)
+        capture(app,"sampling-detail"); verifyCanvas(app,"sampling-detail",detail:true)
+        back(app)
+        app.tabBars.buttons.element(boundBy:1).tap()
+        XCTAssertTrue(app.staticTexts["Notification 0"].firstMatch.waitForExistence(timeout:8),app.debugDescription)
+        capture(app,"sampling-notifications"); verifyCanvas(app,"sampling-notifications")
+        app.tabBars.buttons.element(boundBy:2).tap()
+        XCTAssertTrue(app.staticTexts["Retained reader"].waitForExistence(timeout:8))
+        capture(app,"sampling-profile"); verifyCanvas(app,"sampling-profile")
+    }
     @MainActor func testLightCanvasAndNavigation() { matrix([]) }
     @MainActor func testDarkCanvasAndNavigation() { matrix(["--dark"]) }
     @MainActor func testCustomCanvasAndNavigation() { matrix(["--custom"]) }

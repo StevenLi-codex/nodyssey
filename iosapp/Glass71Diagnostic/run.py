@@ -26,7 +26,7 @@ assert build==0,'Compile/link gate failed; no UI acceptance claimed'
 subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False)
 subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=180)
 results={}
-tests=['testSmokeRealRootAndDetail','testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation']
+tests=['testSmokeRealRootAndDetail','testCanvasRouteSampling','testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation']
 for test in tests:
     dest=evidence/test; dest.mkdir(exist_ok=True)
     result=dest/'result.xcresult'

@@ -12,8 +12,9 @@ for path in ['iosapp/Nodyssey.xcodeproj','iosapp/NativeCore']:
 app=stage/'iosapp/Nodyssey'; (app/'Native').mkdir(parents=True,exist_ok=True)
 base=source_repo/'iosapp/Nodyssey/Native'; hashes={}
 files=[]
-for module in ['Content','Editing','Rendering','Sharing','Foundation','Media']:
-    files += [p for p in (base/module).glob('*.swift') if p.name not in ['NativeClient.swift','NativeMediaScreens.swift']]
+for module in ['Content','Editing','Rendering','Sharing','Foundation']:
+    files += [p for p in (base/module).glob('*.swift') if p.name != 'NativeClient.swift']
+files += [base/'Media'/name for name in ['MediaDomain.swift','MediaSupport.swift','NativeStickerGroup.swift']]
 for name in ['AccountProfileDirectory','AccountSelfProfileState','AccountAttendanceState','AccountActionState','AccountMutationState','AccountProfileDate','AccountAuthorQuickCard','AccountAuthorQuickCardState']:
     files.append(base/'Account'/(name+'.swift'))
 for name in ['SettingsThemeScreen','SettingsComponents','SettingsBehavior']:
