@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// Feed cards and chrome share an edge without changing the controls' layout.
+enum NativeFeedLayout {
+    static let horizontalInset: CGFloat = 12
+    static let cardCornerRadius: CGFloat = 18
+    static let chromeCornerRadius: CGFloat = 22
+
+    // Use the platform's adaptive label color, not hierarchical/vibrant text
+    // or the user's accent, for actionable text over the glass background.
+    static var controlForeground: Color {
+        #if canImport(UIKit)
+        Color(uiColor: .label)
+        #elseif canImport(AppKit)
+        Color(nsColor: .labelColor)
+        #else
+        Color.primary
+        #endif
+    }
+}
+
 /// Decorative chrome only: keep controls and their state outside this view.
 /// iOS 16–25 use system material, not a hand-drawn Liquid Glass imitation.
 struct NativeGlassSurface: View {

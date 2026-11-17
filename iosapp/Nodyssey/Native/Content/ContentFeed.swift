@@ -24,14 +24,14 @@ struct ContentPostList: View {
                         // This remains a route entry, not a second search input owner.
                         Button { app.open("Search") } label: {
                             Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(NativeFeedLayout.controlForeground)
                                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
-                        ContentSortPicker(selection: sortSelection).pickerStyle(.menu).tint(.primary)
+                        ContentSortPicker(selection: sortSelection, readableLabel: true).pickerStyle(.menu)
                             .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
                     }.padding(.horizontal, 16)
-                        .background { NativeGlassSurface(opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, 8) }
+                        .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, NativeFeedLayout.horizontalInset) }
                     HStack(spacing: 0) {
                         ContentBoardTabs(categories: homeCategories, selection: $category)
                         Menu {
@@ -41,15 +41,16 @@ struct ContentPostList: View {
                             Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
                         } label: {
                             Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
+                                .foregroundStyle(NativeFeedLayout.controlForeground)
                                 .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
                         }
                         #if os(macOS)
                         .menuStyle(.borderlessButton)
                         #endif
-                        .menuIndicator(.hidden).fixedSize().tint(.primary)
+                        .menuIndicator(.hidden).fixedSize().tint(NativeFeedLayout.controlForeground)
                     }
                     // One glass surface for the entire rail, never one per category.
-                    .background { NativeGlassSurface(opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, 8) }
+                    .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, NativeFeedLayout.horizontalInset) }
                 }
             }
             Divider()
@@ -154,7 +155,7 @@ struct ContentBoardTabs: View {
     private func tab(_ title: String, slug: String) -> some View {
         Button { selection = slug } label: {
             Text(title).font(.subheadline.weight(selection == slug ? .semibold : .regular))
-                .foregroundStyle(selection == slug ? Color.primary : Color.secondary)
+                .foregroundStyle(NativeFeedLayout.controlForeground)
                 .frame(minWidth: 44, minHeight: 44)
                 .overlay(alignment: .bottom) {
                     if selection == slug { Capsule().fill(.tint).frame(height: 3) }
@@ -182,7 +183,42 @@ struct ContentCategoryPicker: View {
 
 struct ContentSortPicker: View {
     @Binding var selection: String
+    var readableLabel = false
+    @Environment(\.isEnabled) private var isEnabled
     var body: some View {
+        if readableLabel {
+            // Like SettingsChoice, keep the native Picker's selection/checkmarks
+            // but avoid its UIKit closed label retaining an earlier tint. Only
+            // the home glass row opts in; search keeps the automatic control.
+            Menu {
+                // The home caller uses .menu for the automatic variant; do not
+                // inherit that style here and accidentally add a submenu.
+                picker.pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedTitle)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                }
+                .foregroundStyle(isEnabled ? NativeFeedLayout.controlForeground : Color.secondary)
+                .padding(.horizontal, 5)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).menuIndicator(.hidden)
+            .accessibilityLabel(Text(String(localized: "content.sort", table: "Content")))
+            .accessibilityValue(Text(selectedTitle))
+        } else {
+            picker
+        }
+    }
+    private var selectedTitle: String {
+        switch selection {
+        case "LAST_REPLY": return String(localized: "content.lastReply", table: "Content")
+        case "POST_TIME": return String(localized: "content.postTime", table: "Content")
+        default: return selection
+        }
+    }
+    private var picker: some View {
         Picker(String(localized: "content.sort", table: "Content"), selection: $selection) {
             Text(String(localized: "content.lastReply", table: "Content")).tag("LAST_REPLY")
             Text(String(localized: "content.postTime", table: "Content")).tag("POST_TIME")

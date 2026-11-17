@@ -48,14 +48,14 @@ jobs:
           pinned = {
               "iosapp/Nodyssey/Native/Account/AccountSpaceScreens.swift": "3436788ddc6cc08e2345a249c5251c335b2324228a7944b4abb9c5b4972dffcc",
               "iosapp/Nodyssey/Native/Account/NativeAccountScreens.swift": "40b2ecd2f3c734cabfaf15b35c08aa2beed7dd4404c126540c725514afa7aaaa",
-              "iosapp/Nodyssey/Native/Content/ContentCommon.swift": "9a5c7d7400ba2148a0d3170e181929752ff263f24d1c987d0b0a9d61d34a7e8c",
-              "iosapp/Nodyssey/Native/Content/ContentFeed.swift": "ed6b19ca849d3fec296fd025265b99d874b67027aac1eeef50e5459106f12729",
+              "iosapp/Nodyssey/Native/Content/ContentCommon.swift": "eeed5364f356dce51ba3cdab1d68ddd0c20cb591ee7ad6703d3bb2d7b21a2638",
+              "iosapp/Nodyssey/Native/Content/ContentFeed.swift": "4a6129b7609db9a8c6342d158bd1b3204797a67beeef58b7520f69606e4b74d8",
               "iosapp/Nodyssey/Native/Content/ContentNotifications.swift": "e4f109bbbfa9a0499c618f604532c7bd216af5818ef7be24dab8b7f2711f8e5d",
               "iosapp/Nodyssey/Native/Content/ContentThread.swift": "d8ac4d3f9efc3d148b4a18401f814d9c932770f9063887e36d7243886c86af6c",
               "iosapp/Nodyssey/Native/Foundation/NativeRootView.swift": "803ca1f5be842619f5877bdd15de91529e62c0ac88c5d5ca376a638a567f4459",
               "iosapp/Nodyssey/Native/Foundation/NativeScreen.swift": "2bcf2ef2f425996922cc2372c7718ebbf4b2829c388f03b6386fa21f134cb3c5",
               "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift": "fc3ad8346371081ee77e493a135312096e376f48fe7b2dfe336169960a978141",
-              "iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift": "54cdd6604def2038ff0d6d4b5c30bf49c5aec7ad263fa327402cc89666a90df2",
+              "iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift": "345b35e4d8093b0547467f4f3d3698a82b8ef627069942788d8da5c9e4dea974",
               "iosapp/Nodyssey/Native/Editing/EditorThreadReply.swift": "6a29dd2460f2bdc9c6eaaa61d17ad04e53fccc1730c7098cb7155fba1edeb03c",
               "iosapp/Nodyssey/Native/Editing/Resources/Editor.xcstrings": "ccdbda37be1ca7bb0d44c290681c12f876e657b81433c905011b33bd161ef3e4"
           }
@@ -74,7 +74,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.29" CURRENT_PROJECT_VERSION="71" \
+            MARKETING_VERSION="1.2.30" CURRENT_PROJECT_VERSION="72" \
             | tee "$RUNNER_TEMP/ipa-archive.log"
       - name: Package actual device archive
         run: |
@@ -87,8 +87,8 @@ jobs:
           subprocess.run(['xcrun', 'lipo', str(executable), '-verify_arch', 'arm64'], check=True)
           subprocess.run(['xcrun', 'vtool', '-show-build', str(executable)], check=True)
           assert info['CFBundleIdentifier'] == 'io.github.nodyssey', info['CFBundleIdentifier']
-          assert info['CFBundleShortVersionString'] == '1.2.29'
-          assert info['CFBundleVersion'] == '71'
+          assert info['CFBundleShortVersionString'] == '1.2.30'
+          assert info['CFBundleVersion'] == '72'
           assert info['MinimumOSVersion'] == '16.0'
           assert info['CFBundleSupportedPlatforms'] == ['iPhoneOS']
           payload = root / 'Payload'
@@ -96,7 +96,7 @@ jobs:
               shutil.rmtree(payload)
           payload.mkdir()
           shutil.copytree(source, payload / 'Nodyssey.app', symlinks=True)
-          ipa = root / 'Nodyssey-1.2.29-build71-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.30-build72-unsigned.ipa'
           subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(payload), str(ipa)], check=True)
 
           def macho_info(data):
@@ -179,7 +179,7 @@ jobs:
         with:
           name: nodyssey-swiftui-full-unsigned
           path: |
-            ${{ runner.temp }}/Nodyssey-1.2.29-build71-unsigned.ipa
+            ${{ runner.temp }}/Nodyssey-1.2.30-build72-unsigned.ipa
             ${{ runner.temp }}/ipa-manifest.json
             ${{ runner.temp }}/shipping-source-manifest.json
           if-no-files-found: error
