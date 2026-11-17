@@ -121,7 +121,9 @@ struct RetentionGeometryProbe: UIViewRepresentable {
                 if let number=value as? NSNumber, !number.doubleValue.isFinite { return NSNull() }
                 return value
             }
-            accessibilityValue = String(data: try! JSONSerialization.data(withJSONObject: jsonSafe(output), options: .sortedKeys), encoding: .utf8)!
+            let encoded = String(data: try! JSONSerialization.data(withJSONObject: jsonSafe(output), options: .sortedKeys), encoding: .utf8)!
+            // Publishing identical AX values every display frame adds no evidence.
+            if accessibilityValue != encoded { accessibilityValue = encoded }
         }
     }
 }

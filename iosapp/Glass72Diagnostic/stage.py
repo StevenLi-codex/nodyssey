@@ -27,7 +27,13 @@ part=s[s.index('struct AccountInvalidRoute:'):s.index('struct AccountProfileHead
 (app/'Native/NativeAccountScreens.swift').write_text('import SwiftUI\nimport NodysseyNativeCore\n'+part)
 hashes['Account/NativeAccountScreens.swift']=hashlib.sha256(src.read_bytes()).hexdigest()
 hashes['Account/NativeAccountScreens.swift:extracted']=hashlib.sha256(part.encode()).hexdigest()
-for src in (repo/'iosapp/NativeCore/Sources').rglob('*.swift'): hashes[str(src.relative_to(repo))]=hashlib.sha256(src.read_bytes()).hexdigest()
+shipping_paths=subprocess.check_output(['git','ls-tree','-r','--name-only',source_commit,'iosapp/Nodyssey/Native','iosapp/NativeCore'],text=True).splitlines()
+shipping_hashes={p:hashlib.sha256((source_repo/p).read_bytes()).hexdigest() for p in shipping_paths}
+expected_path=repo/'iosapp/Glass72Diagnostic/expectedSources.json'
+expected=json.loads(expected_path.read_text())
+if os.environ.get('DIAG_SOURCE') == 'candidate':
+    assert shipping_hashes == expected['files'], 'Candidate shipping bytes differ from frozen 128-file snapshot'
+for src in (source_repo/'iosapp/NativeCore/Sources').rglob('*.swift'): hashes[str(src.relative_to(source_repo))]=hashlib.sha256(src.read_bytes()).hexdigest()
 for src in base.rglob('*.strings'):
     target=app/'Native'/src.parent.name/src.name; target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,target)
 for src in base.rglob('*.xcstrings'):
@@ -39,5 +45,5 @@ s=re.sub(r'\s*"EXCLUDED_ARCHS\[sdk=iphonesimulator\*\]" = x86_64;', '',s); proje
 shutil.copy2(repo/'iosapp/Glass72Diagnostic/Fixture.swift',app/'App.swift')
 shutil.copy2(repo/'iosapp/Glass72Diagnostic/Geometry.swift',app/'Native/Geometry.swift')
 test=stage/'iosapp/NativeNavigationUITests'; test.mkdir(exist_ok=True); shutil.copy2(repo/'iosapp/Glass72Diagnostic/Tests.swift',test/'NativeNavigationUITests.swift')
-(stage/'sources.json').write_text(json.dumps({'productionCommit':source_commit,'sourceCommit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), 'baseline':'baede138d8bcef206ecc2d392c2038fd445633ec','files':hashes,'boundaries':['Synthetic Kotlin/network NativeTransport','No remote images or external browser; fixture text only','Real Root/Feed/Search/Notifications/Profile/PostDetail/Reply and observers']},indent=2))
+(stage/'sources.json').write_text(json.dumps({'productionCommit':source_commit,'sourceCommit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), 'baseline':'baede138d8bcef206ecc2d392c2038fd445633ec','files':hashes,'shippingSources':shipping_hashes,'expectedSnapshotManifestSHA256':hashlib.sha256(expected_path.read_bytes()).hexdigest(),'boundaries':['Synthetic Kotlin/network NativeTransport','No remote images or external browser; fixture text only','Real Root/Feed/Search/Notifications/Profile/PostDetail/Reply and observers']},indent=2))
 print(stage)

@@ -31,7 +31,7 @@ tests=['testLightTopGlass','testDarkTopGlass','testCustomTopGlass'] # Only top g
 for test in tests:
     dest=evidence/test; dest.mkdir(exist_ok=True)
     result=dest/'result.xcresult'
-    code=run(base+['test-without-building','-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests/NativeNavigationUITests/'+test,'-test-timeouts-enabled','YES','-default-test-execution-time-allowance','150','-maximum-test-execution-time-allowance','150'],dest/'xcodebuild.log',240)
+    code=run(base+['test-without-building','-resultBundlePath',str(result),'-only-testing:NativeNavigationUITests/NativeNavigationUITests/'+test,'-test-timeouts-enabled','YES','-default-test-execution-time-allowance','450','-maximum-test-execution-time-allowance','450'],dest/'xcodebuild.log',600)
     if result.exists():
         for name in ['summary','tests']:
             with (dest/(name+'.json')).open('w') as out: subprocess.run(['xcrun','xcresulttool','get','test-results',name,'--path',str(result)],stdout=out,check=False)

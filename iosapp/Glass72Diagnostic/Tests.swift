@@ -10,22 +10,45 @@ final class NativeNavigationUITests: XCTestCase {
     }
     @MainActor private func geometry(_ app: XCUIApplication) -> [String:Any] {
         let probe=app.descendants(matching:.any)["retention.geometry"]
+        var result:[String:Any]=[:]
         let wait=XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
             guard let text=probe.value as? String,let g=try? JSONSerialization.jsonObject(with:Data(text.utf8)) as? [String:Any] else { return false }
+            result=g
             return g["settled"] as? Bool == true && !(g["nativeGlassCandidates"] as? [[String:Any]] ?? []).isEmpty
         },object:nil)
         XCTAssertEqual(XCTWaiter.wait(for:[wait],timeout:15),.completed,"Bounded settled geometry/native hierarchy")
-        return (try? JSONSerialization.jsonObject(with:Data((probe.value as? String ?? "{}").utf8))) as? [String:Any] ?? [:]
+        return result
     }
     @MainActor @discardableResult private func capture(_ app: XCUIApplication,_ name:String) -> [String:Any] {
         let g=geometry(app)
         let shot=XCTAttachment(screenshot:app.screenshot()); shot.name=name; shot.lifetime = .keepAlways; add(shot)
-        let controls=app.buttons.allElementsBoundByIndex.filter { $0.exists && $0.frame.minY < 360 }.map { ["label":$0.label,"value":String(describing:$0.value),"frame":NSCoder.string(for:$0.frame),"hittable":$0.isHittable] as [String:Any] }
-        let texts=app.staticTexts.allElementsBoundByIndex.filter { $0.exists && $0.frame.minY < 500 && !$0.identifier.contains("glass72") }.map { ["label":$0.label,"frame":NSCoder.string(for:$0.frame)] }
-        let record:[String:Any]=["name":name,"geometry":g,"transport":trace(app),"controls":controls,"texts":texts,"screen":NSCoder.string(for:app.frame)]
+        // Public XCUIElementSnapshotProviding API: one AX acquisition, then only
+        // local snapshot attributes/children. Never issue per-row AX RPCs here.
+        // https://developer.apple.com/documentation/xcuiautomation/xcuielementsnapshotproviding/snapshot()
+        let snapshot: any XCUIElementSnapshot
+        do { snapshot = try app.snapshot() }
+        catch { XCTFail("AX snapshot failed: \(error)"); return g }
+        var controls:[[String:Any]]=[], texts:[[String:Any]]=[], nodes:[[String:Any]]=[]
+        var transport:[[String:Any]]=[]
+        func visit(_ node:any XCUIElementSnapshot) {
+            let frame=node.frame
+            let finite=[frame.minX,frame.minY,frame.width,frame.height].allSatisfy { $0.isFinite }
+            if node.identifier == "glass72.transport" {
+                transport = ((try? JSONSerialization.jsonObject(with:Data(node.label.utf8))) as? [String:Any])?["events"] as? [[String:Any]] ?? []
+            }
+            if finite && frame.maxY > 0 && frame.minY < 500 && frame.width > 0 && frame.height > 0 && !node.identifier.contains("glass72") && node.identifier != "retention.geometry" {
+                let record:[String:Any]=["label":node.label,"identifier":node.identifier,"type":node.elementType.rawValue,"value":String(describing:node.value),"frame":NSCoder.string(for:frame),"enabled":node.isEnabled,"geometrySource":"public XCUIElementSnapshot.frame"]
+                nodes.append(record)
+                if node.elementType == .button && frame.minY < 360 { controls.append(record) }
+                if node.elementType == .staticText { texts.append(record) }
+            }
+            node.children.forEach(visit)
+        }
+        visit(snapshot)
+        let record:[String:Any]=["name":name,"geometry":g,"transport":transport,"controls":controls,"texts":texts,"screen":NSCoder.string(for:snapshot.frame),"axAcquisition":"one public app.snapshot(); local immutable attribute traversal; hittability remains in targeted interaction assertions"]
         let data=try! JSONSerialization.data(withJSONObject:record,options:.sortedKeys)
         let metrics=XCTAttachment(data:data,uniformTypeIdentifier:"public.json"); metrics.name=name+"-metrics"; metrics.lifetime = .keepAlways; add(metrics)
-        let tree=XCTAttachment(string:app.debugDescription); tree.name=name+"-ax"; tree.lifetime = .keepAlways; add(tree)
+        let tree=XCTAttachment(data:try! JSONSerialization.data(withJSONObject:nodes,options:.sortedKeys),uniformTypeIdentifier:"public.json"); tree.name=name+"-ax"; tree.lifetime = .keepAlways; add(tree)
         print("GLASS72 "+String(data:data,encoding:.utf8)!)
         return g
     }
