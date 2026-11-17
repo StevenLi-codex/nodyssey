@@ -1,10 +1,16 @@
 from pathlib import Path
 import shutil,re,hashlib,json,os,subprocess
 repo=Path.cwd(); stage=Path(os.environ['RUNNER_TEMP'])/'Glass71'; stage.mkdir(parents=True,exist_ok=True)
+source_repo=repo
+if os.environ.get('DIAG_SOURCE') == 'baseline':
+    import tarfile,io
+    source_repo=Path(os.environ['RUNNER_TEMP'])/'BaselineSource'; source_repo.mkdir(exist_ok=True)
+    data=subprocess.check_output(['git','archive','415a21d90e81029ea38fc82e1c6a1aefd62c54a8','iosapp/Nodyssey/Native'])
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive: archive.extractall(source_repo,filter='data')
 for path in ['iosapp/Nodyssey.xcodeproj','iosapp/NativeCore']:
     shutil.copytree(repo/path,stage/path,dirs_exist_ok=True)
 app=stage/'iosapp/Nodyssey'; (app/'Native').mkdir(parents=True,exist_ok=True)
-base=repo/'iosapp/Nodyssey/Native'; hashes={}
+base=source_repo/'iosapp/Nodyssey/Native'; hashes={}
 files=[]
 for module in ['Content','Editing','Rendering','Sharing','Foundation','Media']:
     files += [p for p in (base/module).glob('*.swift') if p.name not in ['NativeClient.swift','NativeMediaScreens.swift']]

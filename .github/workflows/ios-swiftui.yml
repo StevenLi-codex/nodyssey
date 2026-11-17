@@ -9,9 +9,14 @@ permissions:
   contents: read
 jobs:
   integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [baseline, union]
     runs-on: macos-26-intel
     timeout-minutes: 45
     env:
+      DIAG_SOURCE: ${{ matrix.source }}
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
@@ -29,7 +34,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: glass71-ios
+          name: glass71-${{ matrix.source }}-ios
           path: ${{ runner.temp }}/glass71-evidence
           retention-days: 7
           if-no-files-found: error

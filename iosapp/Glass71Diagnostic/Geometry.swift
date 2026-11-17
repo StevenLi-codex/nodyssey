@@ -52,7 +52,7 @@ struct RetentionGeometryProbe: UIViewRepresentable {
                 guard !view.isHidden, view.alpha > 0.01 else { return [] }
                 var own: [[String: Any]] = []
                 if let effect = view as? UIVisualEffectView {
-                    own = [["owner": String(describing: ObjectIdentifier(effect)), "class": String(describing: type(of: effect)), "effect": String(describing: effect.effect), "frame": NSStringFromCGRect(effect.convert(effect.bounds, to: window)), "alpha": effect.alpha]]
+                    own = [["owner": String(describing: ObjectIdentifier(effect)), "class": String(describing: type(of: effect)), "effect": String(describing: effect.effect), "frame": NSCoder.string(for: effect.convert(effect.bounds, to: window)), "alpha": effect.alpha]]
                 }
                 return own + view.subviews.flatMap(effects)
             }
