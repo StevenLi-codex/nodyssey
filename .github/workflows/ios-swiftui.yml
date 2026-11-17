@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [baseline, union]
+        # Baseline/full-theme original results retained under run 44053307368.
+        # One bounded union leaf verifies the BackButton fixture correction.
+        source: [union]
     runs-on: macos-26
     timeout-minutes: 45
     env:

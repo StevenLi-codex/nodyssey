@@ -34,7 +34,13 @@ final class NativeNavigationUITests: XCTestCase {
     @MainActor private func launch(_ args: [String] = []) -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = args; app.launch(); return app
     }
-    @MainActor private func back(_ app: XCUIApplication) { app.navigationBars.buttons.element(boundBy: 0).tap() }
+    @MainActor private func back(_ app: XCUIApplication) {
+        // iOS 26 can insert search's Close before the navigation back control.
+        // Match UIKit's actual back identifier, never the current button order.
+        let button = app.navigationBars.buttons["BackButton"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 8), app.debugDescription)
+        button.tap()
+    }
     @MainActor private func trace(_ app: XCUIApplication) -> [[String: Any]] {
         let text = app.staticTexts["glass71.transport"].label
         return ((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String:Any])?["events"] as? [[String:Any]] ?? []

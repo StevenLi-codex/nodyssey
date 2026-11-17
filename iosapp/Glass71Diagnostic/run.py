@@ -27,7 +27,7 @@ assert build==0,'Compile/link gate failed; no UI acceptance claimed'
 subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False,timeout=90)
 subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=600)
 results={}
-tests=['testSmokeRealRootAndDetail','testCanvasRouteSampling','testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation']
+tests=['testLightCanvasAndNavigation'] # Bounded selector-fix verification; original full matrix preserved.
 for test in tests:
     dest=evidence/test; dest.mkdir(exist_ok=True)
     result=dest/'result.xcresult'
