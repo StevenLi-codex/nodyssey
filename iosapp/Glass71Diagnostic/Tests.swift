@@ -31,6 +31,24 @@ final class NativeNavigationUITests: XCTestCase {
     @MainActor func testDarkCanvasAndNavigation() { matrix(["--dark"]) }
     @MainActor func testCustomCanvasAndNavigation() { matrix(["--custom"]) }
     @MainActor func testCustomDarkCanvasAndNavigation() { matrix(["--custom", "--dark"]) }
+    @MainActor func testCustomLightSearchEnd() { searchEnd(["--custom"]) }
+    @MainActor func testCustomDarkSearchEnd() { searchEnd(["--custom", "--dark"]) }
+    @MainActor private func searchEnd(_ args: [String]) {
+        let app = launch(args)
+        guard app.staticTexts["Post 0"].waitForExistence(timeout: 15) else { XCTFail("Initial feed missing"); return }
+        app.buttons["Search"].firstMatch.tap()
+        let search = app.searchFields.firstMatch
+        guard search.waitForExistence(timeout: 8) else { XCTFail("Search input missing"); return }
+        search.tap(); search.typeText("needle\n")
+        guard app.staticTexts["Search 0"].waitForExistence(timeout: 10) else { XCTFail("Submitted search missing"); return }
+        let searched = trace(app).last { $0["operation"] as? String == "search.feed" }
+        XCTAssertEqual((searched?["arguments"] as? [String:Any])?["query"] as? String, "needle")
+        guard reachEnd(app, "search-end", lastRow: "Search 59") else { return }
+        let footer = app.staticTexts["6"].firstMatch
+        XCTAssertTrue(footer.exists, "Pagination footer remains present")
+        let lastFrame = app.staticTexts["Search 59"].frame
+        print("GLASS71_FOOTER frame=\(NSCoder.string(for: footer.frame)) lastRow=\(NSCoder.string(for: lastFrame)) tab=\(NSCoder.string(for: app.tabBars.firstMatch.frame))")
+    }
     @MainActor private func launch(_ args: [String] = []) -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = args; app.launch(); return app
     }

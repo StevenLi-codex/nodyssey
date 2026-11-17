@@ -236,6 +236,8 @@ struct ContentPagedList: View {
         ScrollViewReader { proxy in
           GeometryReader { viewport in
             List {
+              // Status, empty and pagination rows share the same canvas as post gaps.
+              Group {
                 ContentStoreStatus(store: store, initialLoading: true, silentRefresh: true) { retry += 1 }
                 ContentCommandStatus(command: command)
                 loadState("prepend", proxy: proxy)
@@ -289,6 +291,8 @@ struct ContentPagedList: View {
                     Color.clear.frame(height: chromeHeight + 24)
                         .listRowSeparator(.hidden).listRowBackground(Color.clear).accessibilityHidden(true)
                 }
+              }
+              .listRowBackground(ContentSurface(canvas: true))
             }
             .listStyle(.plain).scrollContentBackground(.hidden)
             .background(ContentSurface(canvas: true))

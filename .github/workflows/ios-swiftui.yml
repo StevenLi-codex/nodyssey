@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         # Baseline/full-theme original results retained under run 44053307368.
-        # One union-only four-theme search-exit/end/native-layer acceptance run.
+        # Bounded custom light/dark search-submit-to-end footer regression.
         source: [union]
     runs-on: macos-26
     timeout-minutes: 40

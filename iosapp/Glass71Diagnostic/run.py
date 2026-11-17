@@ -27,7 +27,7 @@ assert build==0,'Compile/link gate failed; no UI acceptance claimed'
 subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False,timeout=90)
 subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=600)
 results={}
-tests=['testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation'] # One union-only four-theme run; no baseline/smoke repeat.
+tests=['testCustomLightSearchEnd','testCustomDarkSearchEnd'] # Bounded submit-to-real-end regression only; original failed matrix retained.
 for test in tests:
     dest=evidence/test; dest.mkdir(exist_ok=True)
     result=dest/'result.xcresult'
