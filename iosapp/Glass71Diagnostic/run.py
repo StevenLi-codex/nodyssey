@@ -21,10 +21,11 @@ def run(command,path,timeout):
     for line in path.read_text().splitlines():
         if any(x in line for x in ['error:','Test Case ','Executed ','TEST FAILED','TEST SUCCEEDED','GLASS71_SEAM','GLASS71_STRIP']): print(line,flush=True)
     return code
+subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False,timeout=90)
+# Boot concurrently with compilation; first-run migration is slow on Intel.
 build=run(base+['build-for-testing'],evidence/'build.log',600)
 assert build==0,'Compile/link gate failed; no UI acceptance claimed'
-subprocess.run(['xcrun','simctl','boot',phone['udid']],check=False)
-subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=180)
+subprocess.run(['xcrun','simctl','bootstatus',phone['udid'],'-b'],check=True,timeout=600)
 results={}
 tests=['testSmokeRealRootAndDetail','testCanvasRouteSampling','testLightCanvasAndNavigation','testDarkCanvasAndNavigation','testCustomCanvasAndNavigation','testCustomDarkCanvasAndNavigation']
 for test in tests:
