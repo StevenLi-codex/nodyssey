@@ -192,7 +192,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.32" CURRENT_PROJECT_VERSION="74" \
+            MARKETING_VERSION="1.2.33" CURRENT_PROJECT_VERSION="75" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
       - name: Package unsigned test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')

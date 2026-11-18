@@ -190,24 +190,33 @@ struct NativeStickerGroupScreen: View {
 /// Explicit editor picker: emits canonical shortcode/Unicode/Markdown, not preview URLs.
 struct NativeStickerPicker: View {
     let onSelect: (String) -> Void
+    var compactKeyboard = false
+    var onManage: (() -> Void)? = nil
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.dynamicTypeSize) private var typeSize
     @StateObject private var store = NativeStore()
     @State private var interaction = MediaStickerInteraction(mode: .picker)
     @State private var retry = 0
     @State private var key: String?
+    private func manage() { if let onManage { onManage() } else { app.open("StickerManage") } }
     private var groups: [MediaStickerGroup] { MediaStickerGroup.groups(store.value).filter { !$0.hidden } }
     private var entries: [MediaSticker] { groups.first(where: { $0.id == (key ?? groups.first?.id) })?.entries ?? [] }
     var body: some View {
         VStack {
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
             if store.isLoading { ProgressView() }
-            Picker(MediaL.text("groups"), selection: Binding(get: { key ?? groups.first?.id ?? "" }, set: { key = $0 })) {
-                ForEach(groups) { group in Text(MediaL.text(group.name)).tag(group.id) }
-            }.pickerStyle(.menu)
+            HStack {
+                Picker(MediaL.text("groups"), selection: Binding(get: { key ?? groups.first?.id ?? "" }, set: { key = $0 })) {
+                    ForEach(groups) { group in Text(MediaL.text(group.name)).tag(group.id) }
+                }.pickerStyle(.menu)
+                if compactKeyboard {
+                    Spacer(minLength: 0)
+                    Button(MediaL.text("manage"), action: manage).frame(minHeight: 44)
+                }
+            }.padding(.horizontal, compactKeyboard ? 12 : 0)
             ScrollView {
                 if entries.isEmpty && !store.isLoading && store.failure == nil { Text(MediaL.text("noStickers")) }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 144 : 76))]) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 144 : (compactKeyboard ? 80 : 76)))]) {
                     ForEach(entries) { sticker in
                         Button {
                             if case .insert(let text) = interaction.activate(sticker) { onSelect(text) }
@@ -216,8 +225,9 @@ struct NativeStickerPicker: View {
                     }
                 }.padding()
             }
-            Button(MediaL.text("manage")) { app.open("StickerManage") }
+            if !compactKeyboard { Button(MediaL.text("manage"), action: manage) }
         }
+        .frame(maxHeight: compactKeyboard ? .infinity : nil)
         .task(id: "\(app.generation)-\(retry)") { await store.observe(app, "stickers.observe") }
         .onChange(of: store.value) { _ in if !groups.contains(where: { $0.id == key }) { key = groups.first?.id } }
     }

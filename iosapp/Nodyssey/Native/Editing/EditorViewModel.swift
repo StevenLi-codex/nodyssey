@@ -4,6 +4,24 @@ import NodysseyNativeCore
 @MainActor final class EditorViewModel: ObservableObject {
     let session: EditorSession
     let focus = EditorFocus()
+    @Published private(set) var replyInputMode: EditorReplyInputMode = .hidden
+    private var requestedReplyInputMode: EditorReplyInputMode = .hidden
+    func setReplyInputMode(_ mode: EditorReplyInputMode) {
+        guard !isClosed, case .reply = session.mode else { return }
+        focus.handoff(preservingInput: mode != .hidden) {
+            requestedReplyInputMode = mode
+            replyInputMode = mode
+            focus.applyReplyInputMode(mode)
+        }
+    }
+    func toggleReplyInput() { setReplyInputMode(requestedReplyInputMode == .emoji ? .keyboard : .emoji) }
+    // Delegate observation must not request focus again after interactive dismissal.
+    func observedReplyInputMode(_ mode: EditorReplyInputMode) {
+        // A cold emoji request can temporarily display the system keyboard.
+        // Do not replace its target with that intermediate observation.
+        if mode != .keyboard || !focus.awaitingReplyEmojiMeasurement { requestedReplyInputMode = mode }
+        if replyInputMode != mode { replyInputMode = mode }
+    }
     @Published var failure: NativeFailure?
     @Published var ready = false
     @Published var preview: [NativeRichNode]?
@@ -254,11 +272,14 @@ import NodysseyNativeCore
             }
         }
     }
-    func insert(_ markdown: String) {
-        focus.handoff {
+    func insert(_ markdown: String, preservingInput: Bool = false) {
+        focus.handoff(preservingInput: preservingInput) {
             var buffer = session.body
             buffer.insert(markdown)
             session.changeBody(buffer)
+            // Handoff snapshots UIKit synchronously. Publish this edit there too,
+            // before another tap can snapshot an older SwiftUI-applied buffer.
+            focus.applyBody(buffer)
         }
     }
     func wrap(_ prefix: String, _ suffix: String) {
@@ -345,6 +366,7 @@ import NodysseyNativeCore
     }
     func invalidate() {
         guard !isClosed else { return }
+        setReplyInputMode(.hidden)
         preparedInput = nil
         isClosed = true
         epoch = UUID(); debounce?.cancel()
@@ -431,7 +453,7 @@ import NodysseyNativeCore
         closing = true
         let token = epoch
         defer { closing = false }
-        model.focus.handoff {}
+        model.setReplyInputMode(.hidden)
         do {
             try await model.prepareForDeparture()
             return token == epoch && !closed && !Task.isCancelled

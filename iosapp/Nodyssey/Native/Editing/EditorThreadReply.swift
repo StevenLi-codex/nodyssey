@@ -36,7 +36,7 @@ struct EditorThreadReplyPresentation: ViewModifier {
             #endif
             .onChange(of: covered) { value in
                 if value {
-                    owner.model?.focus.handoff {}
+                    owner.model?.setReplyInputMode(.hidden)
                     if let model = owner.model { Task { do { try await model.flush() } catch { model.report(error) } } }
                 }
             }
@@ -75,7 +75,6 @@ private struct EditorInlineReply: View {
     let onPublished: (JSONValue) -> Void
     @State private var panel: EditorPanel?
     @State private var photos = false
-    @State private var emoji = false
     @State private var tools = false
     @State private var expanded = false
     private var session: EditorSession { model.session }
@@ -111,21 +110,23 @@ private struct EditorInlineReply: View {
             }
             HStack(alignment: .bottom, spacing: 0) {
                 Menu {
-                    Button(EL("IMAGE")) { model.focus.handoff { emoji = false; photos = true } }
-                    Button(EL("preview")) { model.focus.handoff { owner.previewVisible = true; Task { await model.showPreview() } } }
+                    Button(EL("IMAGE")) { model.setReplyInputMode(.hidden); photos = true }
+                    Button(EL("preview")) { model.setReplyInputMode(.hidden); owner.previewVisible = true; Task { await model.showPreview() } }
                         .disabled(!model.ready || session.busy)
                     Button(EL(expanded ? "collapse" : "expand")) { expanded.toggle() }
                     Button(EL("toolbar")) { tools.toggle() }
                     Button(EL("close")) { close() }
                 } label: { Image(systemName: "plus.circle").frame(minWidth: 44, minHeight: 44) }
                 .accessibilityLabel(EL("IMAGE"))
-                Button { model.focus.handoff { emoji.toggle() } } label: { Image(systemName: "face.smiling").frame(minWidth: 44, minHeight: 44) }
-                    .accessibilityLabel(EL("EMOJI"))
+                Button { model.toggleReplyInput() } label: { Image(systemName: model.replyInputMode == .emoji ? "keyboard" : "face.smiling").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel(EL(model.replyInputMode == .emoji ? "keyboard" : "EMOJI"))
                 MarkedTextEditor(buffer: Binding(get: { session.body }, set: session.changeBody), focus: model.focus,
                                  accessibilityLabel: EL("body"), autofocus: model.ready && owner.initialFocusAllowed,
-                                 maximumVisibleLines: expanded ? 8 : 4)
+                                 maximumVisibleLines: expanded ? 8 : 4,
+                                 replyInputContent: replyInputContent,
+                                 onReplyInputMode: { [weak model] mode in model?.observedReplyInputMode(mode) })
                     .fixedSize(horizontal: false, vertical: true)
-                    .simultaneousGesture(TapGesture().onEnded { emoji = false; owner.visible = true })
+                    .simultaneousGesture(TapGesture().onEnded { model.setReplyInputMode(.keyboard); owner.visible = true })
                 Button {
                     model.focus.handoff { Task { if let result = await owner.publish() { onPublished(result) } } }
                 } label: { Image(systemName: "arrow.up.circle.fill").frame(minWidth: 44, minHeight: 44) }
@@ -133,11 +134,9 @@ private struct EditorInlineReply: View {
             }.padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 4)
             if tools {
                 EditorToolbar(model: model, onPanel: { selected in
-                    model.focus.handoff {
-                        if selected == .stickers { emoji.toggle() }
-                        else { emoji = false; panel = selected }
-                    }
-                }, onPhotos: { model.focus.handoff { emoji = false; photos = true } }, compact: true)
+                    if selected == .stickers { model.toggleReplyInput() }
+                    else { model.setReplyInputMode(.hidden); panel = selected }
+                }, onPhotos: { model.setReplyInputMode(.hidden); photos = true }, compact: true)
             }
             attachments
             if let failure = model.failure, model.ready { NativeFailureView(failure: failure) }
@@ -146,12 +145,20 @@ private struct EditorInlineReply: View {
         .disabled(owner.closing || app.departureRunning || session.busy)
         .sheet(item: $panel) { panel in NavigationStack { EditorPanelView(panel: panel, model: model) } }
         .sheet(isPresented: $photos) { EditorPhotoPicker(model: model) }
-        .sheet(isPresented: $emoji) { NavigationStack { EditorPanelView(panel: .stickers, model: model, embedded: true) } }
-        .onDisappear { model.focus.handoff {} }
+        .onDisappear { model.setReplyInputMode(.hidden) }
+    }
+    private var replyInputContent: AnyView {
+        let app = app
+        return AnyView(NativeStickerPicker(onSelect: { [weak model] text in
+            model?.insert(text, preservingInput: true)
+        }, compactKeyboard: true, onManage: { [weak model] in
+            model?.setReplyInputMode(.hidden)
+            app.open("StickerManage")
+        }).environmentObject(app))
     }
     private func close() {
-        if emoji { emoji = false; return }
-        model.focus.handoff { Task { await owner.hide() } }
+        if model.replyInputMode == .emoji { model.setReplyInputMode(.hidden); return }
+        model.setReplyInputMode(.hidden); Task { await owner.hide() }
     }
     @ViewBuilder private var attachments: some View {
         if !model.attachments.isEmpty {

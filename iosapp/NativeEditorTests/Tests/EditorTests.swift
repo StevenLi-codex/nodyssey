@@ -146,6 +146,14 @@ actor RecordingTransport: NativeTransport {
     EditorHandoff.perform([title, body]) { events.append("action") }
     #expect(events == ["title.commit", "body.commit", "title.snapshot", "body.snapshot", "title.blur", "body.blur", "action"])
 }
+// Reply input replacement must commit and snapshot without ending the input session.
+@Test @MainActor func replyInputReplacementKeepsResponderAfterMarkedSnapshot() {
+    var events: [String] = []
+    let input = TestInput(name: "body", record: { events.append($0) })
+    EditorHandoff.perform([input], preservingInput: true) { events.append("replaceInput") }
+    #expect(events == ["body.commit", "body.snapshot", "replaceInput"])
+}
+
 @MainActor final class TestInput: EditorInput {
     let name: String
     let record: (String) -> Void

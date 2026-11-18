@@ -296,6 +296,8 @@ enum EditorMarkup {
     }
 }
 
+enum EditorReplyInputMode: Equatable { case hidden, keyboard, emoji }
+
 /// One attempt per editor owner, not per SwiftUI update or picker presentation.
 struct EditorInitialFocus {
     private var pending = true
@@ -313,10 +315,10 @@ struct EditorInitialFocus {
     func blur()
 }
 @MainActor enum EditorHandoff {
-    static func perform(_ fields: [any EditorInput], action: () -> Void) {
+    static func perform(_ fields: [any EditorInput], preservingInput: Bool = false, action: () -> Void) {
         fields.forEach { $0.commitMarkedText() }
         fields.forEach { $0.snapshot() }
-        fields.forEach { $0.blur() }
+        if !preservingInput { fields.forEach { $0.blur() } }
         action()
     }
 }
