@@ -7,6 +7,10 @@ on:
         description: Build and package the unsigned device archive
         type: boolean
         default: true
+      archive_only:
+        description: Skip behavior and simulator tests and only produce the device archive
+        type: boolean
+        default: false
   push:
     branches: [feat/ios-swiftui-liquid-glass]
     paths:
@@ -57,6 +61,7 @@ jobs:
         with:
           cache-read-only: false
       - name: Native core behavior tests
+        if: ${{ !inputs.archive_only }}
         run: |
           if test -f iosapp/NativeCore/Package.swift; then
             swift test --package-path iosapp/NativeCore
@@ -64,9 +69,10 @@ jobs:
             printf '%s\n' 'Baseline toolchain run: SwiftUI core not introduced in this revision.' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Native rich document behavior tests
+        if: ${{ !inputs.archive_only }}
         run: sh iosapp/NativeRenderingTests/run-tests.sh
       - name: Native SwiftUI domain behavior tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.archive_only }}
         run: |
           failed=0
           for suite in NativeFoundationTests NativeContentUITests NativeEditorTests NativeAccountUITests NativeLibraryTests NativeMediaTests NativeSettingsUITests NativeSharingTests; do
@@ -75,11 +81,11 @@ jobs:
           exit "$failed"
       - name: Compile Kotlin iOS bridge and native tests
         id: native_compile
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.archive_only }}
         run: ./gradlew :iosapp:compileKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
       - name: Create shared disposable diagnostic simulator
         id: simulator_device
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.archive_only && steps.native_compile.outcome == 'success' }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess
@@ -107,7 +113,7 @@ jobs:
         run: python3 iosapp/scripts/verify_native_results.py iosapp/build/test-results/iosSimulatorArm64Test
       - name: Build simulator app
         id: simulator_build
-        if: ${{ !cancelled() && steps.native_compile.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.archive_only && steps.native_compile.outcome == 'success' }}
         run: |
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
             -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
@@ -115,7 +121,7 @@ jobs:
             build CODE_SIGNING_ALLOWED=NO
       - name: Compare same Kotlin SVG renderer inside the app host
         id: svg_host_tests
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.archive_only && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
         run: |
           xcodebuild test -project iosapp/Nodyssey.xcodeproj -scheme NativeSvgHostTests \
             -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
@@ -135,7 +141,7 @@ jobs:
           PY
       - name: Launch app in actual ARM simulator
         id: simulator_launch
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.archive_only && steps.simulator_build.outcome == 'success' && steps.simulator_device.outcome == 'success' }}
         run: |
           python3 - <<'PY'
           import os, subprocess
@@ -149,7 +155,7 @@ jobs:
           PY
       - name: Execute real native navigation tests
         id: navigation_tests
-        if: ${{ !cancelled() && steps.simulator_launch.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.archive_only && steps.simulator_launch.outcome == 'success' }}
         run: |
           xcodebuild test -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
             -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
@@ -168,22 +174,39 @@ jobs:
           print('Verified actual native navigation tests:', report['passedTests'])
           PY
       - name: Build unsigned iPhone archive
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
+        if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         run: |
+          set -o pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          paths = [pathlib.Path('iosapp/Nodyssey/App.swift')]
+          paths += sorted(pathlib.Path('iosapp/Nodyssey/Native').rglob('*'))
+          paths += sorted(pathlib.Path('iosapp/NativeCore/Sources').rglob('*'))
+          manifest = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'shipping-source-manifest.json').write_text(json.dumps({'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'files': manifest}, indent=2))
+          PY
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.22-swiftui.1" CURRENT_PROJECT_VERSION="54"
+            MARKETING_VERSION="1.2.31" CURRENT_PROJECT_VERSION="73" \
+            | tee "$RUNNER_TEMP/xcodebuild-archive.log"
       - name: Package unsigned test IPA
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
+        if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
           (cd "$RUNNER_TEMP" && zip -qry nodyssey-swiftui-unsigned.ipa Payload)
           shasum -a 256 "$RUNNER_TEMP/nodyssey-swiftui-unsigned.ipa"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, plistlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          ipa = root / 'nodyssey-swiftui-unsigned.ipa'
+          info = plistlib.loads((root / 'Payload/Nodyssey.app/Info.plist').read_bytes())
+          (root / 'ipa-manifest.json').write_text(json.dumps({'filename': ipa.name, 'bytes': ipa.stat().st_size, 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(), 'bundleIdentifier': info['CFBundleIdentifier'], 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'configuration': 'Debug', 'testsRun': False}, indent=2))
+          PY
       - uses: actions/upload-artifact@v7
-        if: github.event_name == 'workflow_dispatch' && inputs.archive
+        if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         with:
           name: nodyssey-swiftui-unsigned
           path: ${{ runner.temp }}/nodyssey-swiftui-unsigned.ipa
@@ -195,6 +218,9 @@ jobs:
         with:
           name: nodyssey-swiftui-verification
           path: |
+            ${{ runner.temp }}/xcodebuild-archive.log
+            ${{ runner.temp }}/shipping-source-manifest.json
+            ${{ runner.temp }}/ipa-manifest.json
             ${{ runner.temp }}/nodyssey-launch.png
             ${{ runner.temp }}/native-svg-host.xcresult
             ${{ runner.temp }}/native-svg-host-summary.json
