@@ -38,6 +38,8 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     @Published var settings: JSONValue = .null
     @Published var generation: Int = 0
     @Published var selectedTab: NativeTab = .home
+    // An ephemeral UI command, not feed/paging state. No replay on tab return.
+    let homeScrollToTop = PassthroughSubject<Void, Never>()
     @Published private(set) var homePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
     @Published private(set) var notificationsPath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
     @Published private(set) var profilePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }

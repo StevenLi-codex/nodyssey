@@ -38,6 +38,27 @@ import NodysseyNativeCore
     func cancel() { task?.cancel() }
 }
 
+/// Presentation fence only; NativeStore owns acknowledgement/list completion and coalescing.
+@MainActor final class ContentNotificationRefresh: ObservableObject {
+    @Published private(set) var succeeded = false
+    private(set) var group: String?
+    private var ticket = UUID()
+
+    func invalidate() { ticket = UUID(); succeeded = false }
+
+    func perform(_ app: any ContentCommandContext, group: String,
+                 completion: @MainActor () async -> Bool) async {
+        invalidate()
+        guard !Task.isCancelled else { return }
+        let token = ticket
+        let generation = app.generation
+        self.group = group
+        let completed = await completion()
+        guard token == ticket, !Task.isCancelled, generation == app.generation else { return }
+        succeeded = completed
+    }
+}
+
 /// Thread-specific reaction and refresh paths, shared by the UI and behavioral tests.
 @MainActor final class ContentThreadCommand: ContentCommand {
     @Published private(set) var reactionsBlocked = false
@@ -98,19 +119,85 @@ import NodysseyNativeCore
         }
     }
 
-    func loadThread(_ app: any ContentCommandContext, postID: Int64, page: Int64, extend: Bool) async {
-        let generation = app.generation
-        do {
-            _ = try await app.request("thread.load", ["postId": .integer(postID), "page": .integer(page), "extend": .bool(extend)])
-            try Task.checkCancellation()
-            guard generation == app.generation else { return }
-            // This path supports offline fallback and partial-window merging. It is never
-            // evidence that an uncertain reaction's affected floor was read from the server.
-            failure = nil
-        } catch is CancellationError { }
-        catch {
-            guard !Task.isCancelled, generation == app.generation else { return }
-            failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.")
+    private struct LoadKey: Hashable {
+        let app: ObjectIdentifier
+        let generation: Int
+        let postID: Int64
+        let page: Int64
+        let extend: Bool
+    }
+    @MainActor private final class Load {
+        let id = UUID()
+        var task: Task<Void, Never>?
+        var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+        func finish(_ success: Bool) {
+            let pending = waiters.values
+            waiters.removeAll()
+            for waiter in pending { waiter.resume(returning: success) }
         }
+    }
+    private var loads: [LoadKey: Load] = [:]
+    private var latestLoad = UUID()
+    private var loadFailure: NativeFailure?
+
+    /// Join the actual repository/DB completion, not a busy refusal or toolbar acknowledgement.
+    /// Different pages and replacement/extension policies remain distinct operations.
+    @discardableResult
+    func loadThread(_ app: any ContentCommandContext, postID: Int64, page: Int64, extend: Bool) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let key = LoadKey(app: ObjectIdentifier(app), generation: app.generation, postID: postID, page: page, extend: extend)
+        let load: Load
+        if let existing = loads[key] {
+            guard existing.task?.isCancelled != true else { return false }
+            load = existing
+        }
+        else {
+            load = Load()
+            let id = load.id
+            latestLoad = id
+            if let loadFailure, failure == loadFailure { failure = nil }
+            loadFailure = nil
+            loads[key] = load
+            load.task = Task { @MainActor in
+                var success = false
+                defer {
+                    load.finish(success)
+                    if self.loads[key]?.id == id { self.loads.removeValue(forKey: key) }
+                }
+                do {
+                    try Task.checkCancellation()
+                    guard key.generation == app.generation else { return }
+                    let value = try await app.request("thread.load", ["postId": .integer(postID), "page": .integer(page), "extend": .bool(extend)])
+                    try Task.checkCancellation()
+                    guard key.generation == app.generation, self.latestLoad == id else { return }
+                    // The existing repository can accept offline fallback. This is accepted
+                    // cached/network completion, never proof of fresh reaction reconciliation.
+                    success = value["postId"]?.int == postID
+                } catch is CancellationError { }
+                catch {
+                    guard !Task.isCancelled, key.generation == app.generation, self.latestLoad == id else { return }
+                    let failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.")
+                    self.loadFailure = failure
+                    self.failure = failure
+                }
+            }
+        }
+        let waiter = UUID()
+        let success = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume(returning: false) }
+                else { load.waiters[waiter] = continuation }
+            }
+        } onCancel: {
+            Task { @MainActor in load.waiters.removeValue(forKey: waiter)?.resume(returning: false) }
+        }
+        return success && !Task.isCancelled && key.generation == app.generation && latestLoad == load.id
+    }
+
+    override func cancel() {
+        super.cancel()
+        latestLoad = UUID()
+        for load in loads.values { load.task?.cancel(); load.finish(false) }
+        // Keep cancelled, uncooperative transports registered until they drain.
     }
 }

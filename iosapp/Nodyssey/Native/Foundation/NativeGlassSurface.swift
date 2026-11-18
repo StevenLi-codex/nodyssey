@@ -25,8 +25,11 @@ struct NativeGlassSurface: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
+    enum Role { case regular, homeSearch }
+
     var cornerRadius: CGFloat = 16
     var opaque = false
+    var role: Role = .regular
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -43,9 +46,16 @@ struct NativeGlassSurface: View {
         } else {
             #if os(iOS) && compiler(>=6.2)
             if #available(iOS 26.0, *) {
-                Color.clear
-                    .overlay { shape.fill(.tint).opacity(0.035) }
-                    .glassEffect(.regular, in: shape)
+                if role == .homeSearch {
+                    // Clear glass has no public blur/brightness tuning. This role
+                    // stays over the opaque neutral feed canvas (never moving rows),
+                    // with adaptive label foregrounds and no added tint or rim.
+                    Color.clear.glassEffect(.clear, in: shape)
+                } else {
+                    Color.clear
+                        .overlay { shape.fill(.tint).opacity(0.035) }
+                        .glassEffect(.regular, in: shape)
+                }
             } else {
                 materialSurface
             }
@@ -55,10 +65,14 @@ struct NativeGlassSurface: View {
         }
     }
 
-    private var materialSurface: some View {
-        shape.fill(.regularMaterial)
-            .overlay { shape.fill(.tint).opacity(0.035) }
-            .overlay { shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
+    @ViewBuilder private var materialSurface: some View {
+        if role == .homeSearch {
+            shape.fill(.ultraThinMaterial)
+        } else {
+            shape.fill(.regularMaterial)
+                .overlay { shape.fill(.tint).opacity(0.035) }
+                .overlay { shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5) }
+        }
     }
 }
 
@@ -74,7 +88,7 @@ struct NativeGlassContainer<Content: View>: View {
     var body: some View {
         #if os(iOS) && compiler(>=6.2)
         if #available(iOS 26.0, *) {
-            // The two homepage rows stay separate; zero avoids early merging.
+            // Availability-only grouping leaves the controls structurally stable.
             GlassEffectContainer(spacing: 0) { content }
         } else {
             content

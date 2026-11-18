@@ -16,6 +16,7 @@ final class AccountSelfProfileState: ObservableObject {
     var isLoading: Bool { isCurrent?() == true && loading }
     private let observed = NativeRequestState()
     private let fetched = NativeRequestState()
+    private let refreshFlight = AccountReadFlightState()
     private var transport: (any NativeTransport)?
     private var isCurrent: (() -> Bool)?
     private var lifecycle = UUID()
@@ -38,7 +39,7 @@ final class AccountSelfProfileState: ObservableObject {
     func run(using transport: any NativeTransport, currentGeneration: @escaping () -> Int) async {
         guard !Task.isCancelled else { return }
         if isCurrent?() != true { invalidate() }
-        else { observed.cancel(); fetched.cancel() }
+        else { observed.cancel(); fetched.cancel(); refreshFlight.cancel() }
         lifecycle = UUID()
         self.transport = transport
         let token = lifecycle
@@ -50,23 +51,28 @@ final class AccountSelfProfileState: ObservableObject {
         if fetchedAt.map({ now() - $0 >= 60 }) ?? true { await refresh() }
         await observation
         if token == lifecycle, Task.isCancelled {
-            observed.cancel(); fetched.cancel()
+            observed.cancel(); fetched.cancel(); refreshFlight.cancel()
         }
     }
 
-    func refresh() async {
-        guard !Task.isCancelled, let transport, isCurrent?() == true, !fetched.isLoading else { return }
+    @discardableResult func refresh() async -> Bool {
+        guard !Task.isCancelled, let transport, isCurrent?() == true else { return false }
         let token = lifecycle
-        let revision = fetched.valueRevision
-        await fetched.load(using: transport, operation: "profile.self", arguments: ["refresh": .bool(true)])
-        guard token == lifecycle, isCurrent?() == true, !Task.isCancelled else { return }
-        if fetched.valueRevision != revision { fetchedAt = now() }
-        else if fetched.failure != nil { fetchedAt = nil }
+        return await refreshFlight.run(key: token.uuidString, current: { [weak self] in
+            self?.lifecycle == token && self?.isCurrent?() == true
+        }) { [self] accepted in
+            let revision = fetched.valueRevision
+            await fetched.load(using: transport, operation: "profile.self", arguments: ["refresh": .bool(true)])
+            guard accepted() else { return false }
+            if fetched.valueRevision != revision { fetchedAt = now(); return true }
+            if fetched.failure != nil { fetchedAt = nil }
+            return false
+        }
     }
 
     func invalidate() {
         lifecycle = UUID(); isCurrent = nil; transport = nil; fetchedAt = nil
-        observed.invalidate(); fetched.invalidate()
+        refreshFlight.cancel(); observed.invalidate(); fetched.invalidate()
         snapshot = .null; snapshotFailure = nil; loading = false
     }
 

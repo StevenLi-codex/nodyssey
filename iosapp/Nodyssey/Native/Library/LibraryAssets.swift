@@ -10,6 +10,7 @@ struct LibraryAssetsScreen: View {
     @State private var confirm = false
     @State private var boardPage: Int64 = 1
     @State private var showBoard = false
+    @State private var refreshSucceeded = false
     var body: some View {
         List {
             LibraryStoreStatus(store: growth) { action.run { await growth.load(app, "assets.growth") } }
@@ -57,7 +58,17 @@ struct LibraryAssetsScreen: View {
             await libraryRead(attendance, app, "attendance.status")
         }
         .task(id: app.generation) { await attendance.observe(app, "attendance.status") }
-        .refreshable { await growth.load(app, "assets.growth"); await libraryRead(attendance, app, "attendance.status"); if showBoard { await loadBoard() } }
+        .nativeRefreshable(generation: app.generation, failure: { growth.failure != nil || attendance.failure != nil || (showBoard && board.failure != nil) }, completion: { refreshSucceeded }) {
+            refreshSucceeded = false
+            let generation = app.generation
+            let includesBoard = showBoard
+            await growth.load(app, "assets.growth")
+            let growthSucceeded = growth.failure == nil && generation == app.generation && !Task.isCancelled
+            let attendanceSucceeded = await libraryRead(attendance, app, "attendance.status")
+            if includesBoard { await loadBoard() }
+            refreshSucceeded = growthSucceeded && attendanceSucceeded && (!includesBoard || board.failure == nil)
+                && generation == app.generation && !Task.isCancelled
+        }
         .confirmationDialog(libraryL("signConfirm"), isPresented: $confirm, titleVisibility: .visible) {
             ForEach(["FIXED_FIVE", "RANDOM"], id: \.self) { selectedMode in
             Button(libraryL(selectedMode == "FIXED_FIVE" ? "fixedFive" : "random")) {
@@ -129,7 +140,7 @@ struct LibraryLedgerScreen: View {
         .navigationTitle(libraryL(stardust ? "stardust" : "credit"))
         .task(id: "\(app.generation)-\(page)-\(before.map(String.init) ?? "first")-\(attempt)") { await load() }
         .task(id: "\(app.generation)-\(attempt)") { await growth.load(app, "assets.growth") }
-        .refreshable { await load(); await growth.load(app, "assets.growth") }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil || growth.failure != nil }) { await load(); await growth.load(app, "assets.growth") }
     }
     // The endpoint has no type filter; page-local filtering would hide unloaded matches.
     private var rows: [JSONValue] { store.value["items"]?.array ?? [] }

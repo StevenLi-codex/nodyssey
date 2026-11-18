@@ -33,7 +33,7 @@ struct AccountFollowScreen: View {
         .navigationTitle("follow_title")
         .searchable(text: $query, prompt: "search_user_hint")
         .task(id: operation + String(app.generation)) { store.invalidate(); await store.load(app, operation) }
-        .refreshable { await store.load(app, operation) }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }) { await store.load(app, operation) }
     }
 }
 
@@ -123,7 +123,7 @@ struct AccountSpaceScreen: View {
                     AccountActionStatus(action: action)
                 }
                 .listStyle(.plain).scrollContentBackground(.hidden).background(AccountSurface(canvas: true))
-                .refreshable { await profile.load(app, "profile.user", ["uid": .integer(uid)]) }
+                .nativeRefreshable(generation: app.generation, failure: { profile.failure != nil }) { await profile.load(app, "profile.user", ["uid": .integer(uid)]) }
             } else {
                 AccountPostPage(uid: uid, mode: tab).id("\(uid):\(tab):\(app.generation)")
             }
@@ -202,9 +202,11 @@ struct AccountPostPage: View {
     @State private var query = ""
     @State private var board = ""
     @State private var newestFirst = true
-    @State private var loading = false
+    private var loading: Bool { readFlight.isLoading }
     @State private var failure: NativeFailure?
-    @State private var refresh = 0
+    @StateObject private var readFlight = AccountReadFlightState()
+    @State private var refreshSucceeded = false
+    private var requestKey: String { "\(uid):\(mode):\(requested):\(app.generation)" }
     private var operation: String { mode == "collections" ? "space.collections" : mode == "comments" ? "space.comments" : "space.topics" }
     var body: some View {
         List {
@@ -219,7 +221,7 @@ struct AccountPostPage: View {
                 Toggle(String(localized: "native.account.server_order", table: "Account"), isOn: $newestFirst)
             }
             if loading { ProgressView() }
-            if let failure { NativeFailureView(failure: failure, retry: { refresh += 1 }) }
+            if let failure { NativeFailureView(failure: failure, retry: { Task { await load() } }) }
             let rows = visibleRows
             if rows.isEmpty && !loading && failure == nil {
                 if !query.isEmpty || !board.isEmpty { Text("native.account.no_matches", tableName: "Account") }
@@ -240,16 +242,19 @@ struct AccountPostPage: View {
                 }
                 HStack {
                     TextField(String(localized: "native.account.page", table: "Account"), text: $jump).keyboardType(.numberPad)
-                    Button("action_done") { if let value = Int64(jump), value > 0 { requested = value; refresh += 1 } }.disabled(Int64(jump).map { $0 <= 0 } ?? true)
+                    Button("action_done") { if let value = Int64(jump), value > 0 { if requested == value { Task { await load() } } else { requested = value } } }.disabled(Int64(jump).map { $0 <= 0 } ?? true)
                 }
             }
         }
         .listStyle(.plain).scrollContentBackground(.hidden).nativePageCanvas()
         .searchable(text: $query)
-        .task(id: "\(uid):\(mode):\(requested):\(refresh):\(app.generation)") { await load() }
-        .refreshable { refresh += 1 }
-        .onChange(of: app.generation) { _ in page.invalidate(); requested = 1; query = ""; board = "" }
-        .onDisappear { page.suspend() }
+        .task(id: requestKey) { await load() }
+        .nativeRefreshable(generation: app.generation, failure: { failure != nil }, completion: { refreshSucceeded }) {
+            refreshSucceeded = false
+            refreshSucceeded = await load()
+        }
+        .onChange(of: app.generation) { _ in readFlight.cancel(); failure = nil; page.invalidate(); requested = 1; query = ""; board = "" }
+        .onDisappear { readFlight.cancel(); page.suspend() }
     }
     private var visibleRows: [AccountPostRow] {
         var seen = Set<String>()
@@ -258,16 +263,25 @@ struct AccountPostPage: View {
             return seen.insert(id).inserted ? AccountPostRow(id: id, value: value) : nil
         }
     }
-    private func load() async {
-        loading = true; failure = nil
-        let ticket = page.begin(page: requested)
-        var args: [String: JSONValue] = ["page": .integer(requested)]
-        if mode != "collections" { args["uid"] = .integer(uid) }
-        do {
-            let result = try await app.request(operation, args)
-            try Task.checkCancellation()
-            try page.accept(result, ticket: ticket); loading = false
-        } catch { if !Task.isCancelled { failure = accountFailure(error); loading = false } }
+    @discardableResult private func load() async -> Bool {
+        let key = requestKey
+        let generation = app.generation
+        let requestedPage = requested
+        let readOperation = operation
+        return await readFlight.run(key: key, current: { app.generation == generation && requestKey == key }) { accepted in
+            failure = nil
+            let ticket = page.begin(page: requestedPage)
+            var args: [String: JSONValue] = ["page": .integer(requestedPage)]
+            if mode != "collections" { args["uid"] = .integer(uid) }
+            do {
+                let result = try await app.request(readOperation, args)
+                guard accepted() else { return false }
+                return try page.accept(result, ticket: ticket)
+            } catch {
+                guard accepted() else { return false }
+                failure = accountFailure(error); return false
+            }
+        }
     }
     private func open(_ value: JSONValue) {
         guard let id = value.nativeInt("postId") else { return }

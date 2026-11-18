@@ -28,24 +28,24 @@ import NodysseyNativeCore
     private var retainedObservation: Task<Void, Never>?
     private var retainedRestart = 0
     private var retainedRefresh: Task<Void, Never>?
-    private var refreshRequestedAt: TimeInterval?
-    private var refreshRevision: UInt64?
+    private var refreshCompletion: NativeRefreshCompletion?
+    private var refreshWatchdog: Task<Void, Never>?
+    private let refreshTimeout: TimeInterval
     private var hasPagingValue = false
     private var observing = false
     private var isPaging: Bool { key?.operation == "feed" || key?.operation == "search.feed" }
     var hasValue: Bool { isPaging ? hasPagingValue : state.value != nil }
 
-    deinit { retainedObservation?.cancel(); retainedRefresh?.cancel() }
+    deinit { retainedObservation?.cancel(); retainedRefresh?.cancel(); refreshWatchdog?.cancel() }
 
-    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, refreshTimeout: TimeInterval = 30) {
         self.now = now
+        self.refreshTimeout = refreshTimeout
         state.onChange = { [weak self] in
             guard let self else { return }
             if self.valueRevision != self.state.valueRevision {
                 self.valueRevision = self.state.valueRevision
                 self.receivedAt = self.now()
-                self.refreshRevision = nil
-                self.refreshRequestedAt = nil
             }
             var next = self.state.value ?? .null
             if self.isReplacingPagingWindow, !self.value.nativeArray("items").isEmpty {
@@ -76,6 +76,7 @@ import NodysseyNativeCore
             let refreshing = self.state.isLoading && self.hasValue
             if self.isLoading != loading { self.isLoading = loading }
             if self.isRefreshing != refreshing { self.isRefreshing = refreshing }
+            self.acceptRefreshObservation()
         }
     }
 
@@ -125,6 +126,7 @@ import NodysseyNativeCore
                 self.failure = NativeFailure(code: "OBSERVATION_ENDED", message: "Observation ended")
             }
             if self.failure != nil { self.receivedAt = nil }
+            self.finishRetainedRefresh(false)
         }
         return true
     }
@@ -138,36 +140,115 @@ import NodysseyNativeCore
         case "messages.list": refresh = "messages.refresh"
         default: return
         }
-        guard hasValue, freshnessRemaining(maximumAge) <= 0, retainedRefresh == nil else { return }
-        // The refresh receipt only advances Kotlin's revision. Wait for accepted
-        // list data, bounded by the same TTL if that revision never produces it.
-        if refreshRevision == valueRevision, let requested = refreshRequestedAt,
-           now() - requested < maximumAge { return }
-        refreshRevision = valueRevision
-        refreshRequestedAt = now()
+        guard hasValue, freshnessRemaining(maximumAge) <= 0 else { return }
+        _ = beginRetainedRefresh(app, refresh, [:], mode: .revision)
+    }
+
+    /// Subscribe before dispatch and join TTL/toolbar/pull work through its actual
+    /// observation terminal, not the command receipt. Each visual waiter owns only
+    /// its continuation; cancelling it must not cancel another owner's request.
+    @discardableResult
+    func refreshRetained(_ app: NativeAppModel, _ operationName: String,
+                         _ arguments: [String: JSONValue] = [:], mode: NativeRefreshCompletionMode) async -> Bool {
+        guard !Task.isCancelled,
+              let flight = beginRetainedRefresh(app, operationName, arguments, mode: mode) else { return false }
+        let waiter = UUID()
         let token = operation
-        let revision = valueRevision
+        let generation = app.generation
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume(returning: false) }
+                else if let result = flight.result { continuation.resume(returning: result) }
+                else { flight.waiters[waiter] = continuation }
+            }
+        } onCancel: {
+            Task { @MainActor in flight.waiters.removeValue(forKey: waiter)?.resume(returning: false) }
+        }
+        return result && !Task.isCancelled && operation == token && app.generation == generation
+    }
+
+    private func beginRetainedRefresh(_ app: NativeAppModel, _ name: String,
+                                      _ arguments: [String: JSONValue], mode: NativeRefreshCompletionMode) -> NativeRefreshCompletion? {
+        guard let key, key.app == ObjectIdentifier(app), key.generation == app.generation,
+              observing, retainedObservation != nil || state.value != nil else { return nil }
+        let pager = arguments["pagerId"]?.string
+        switch mode {
+        case .paging:
+            guard isPaging, name == "paging.refresh", let pager, pager == pagingHandle,
+                  state.value?.nativeString("pagerId") == pager else { return nil }
+        case .revision:
+            guard (key.operation == "messages.list" && name == "messages.refresh") ||
+                  (key.operation == "notifications.list" && name == "notifications.refresh") else { return nil }
+        }
+        if let flight = refreshCompletion {
+            guard flight.operation == name, flight.arguments == arguments, flight.mode == mode else { return nil }
+            return flight
+        }
+        // A completed observer cannot recover by refreshing its revision.
+        guard state.failure == nil else { return nil }
+        failure = nil
+        let flight = NativeRefreshCompletion(operation: name, arguments: arguments, mode: mode,
+                                             revision: state.valueRevision, pager: pager)
+        refreshCompletion = flight
+        let token = operation
         let transport = app.transport
         retainedRefresh = Task { [weak self] in
             do {
-                // A refresh is read-only; call the same Kotlin graph directly so
-                // app mutation invalidation cannot erase a newer list timestamp.
-                _ = try await transport.request(refresh, [:])
+                // Read-only: bypass app mutation timestamp invalidation.
+                _ = try await transport.request(name, arguments)
                 try Task.checkCancellation()
-                guard let self, self.operation == token else { return }
-                self.retainedRefresh = nil
+                guard let self, self.operation == token, self.refreshCompletion === flight else { return }
+                flight.acknowledged = true
+                self.finishRefreshIfReady(flight)
             } catch {
-                guard let self, self.operation == token else { return }
-                self.retainedRefresh = nil
-                self.refreshRevision = nil
-                self.refreshRequestedAt = nil
-                // An intervening authoritative value supersedes a late failure.
-                if !(error is CancellationError), self.valueRevision == revision {
-                    self.receivedAt = nil
-                    self.failure = error as? NativeFailure ?? .init(code: "TRANSPORT", message: "Refresh failed")
-                }
+                guard let self, self.operation == token, self.refreshCompletion === flight else { return }
+                self.finishRetainedRefresh(false, failure: error is CancellationError ? nil :
+                    (error as? NativeFailure ?? .init(code: "TRANSPORT", message: "Refresh failed")))
             }
         }
+        let timeout = max(0.001, min(refreshTimeout, 86_400))
+        refreshWatchdog = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) }
+            catch { return }
+            guard let self, self.operation == token, self.refreshCompletion === flight else { return }
+            self.finishRetainedRefresh(false, failure: .init(code: "REFRESH_TIMEOUT", message: "Refresh timed out"))
+        }
+        return flight
+    }
+
+    private func acceptRefreshObservation() {
+        guard let flight = refreshCompletion else { return }
+        if let error = state.failure { finishRetainedRefresh(false, failure: error); return }
+        guard state.valueRevision != flight.revision else { return }
+        switch flight.mode {
+        case .revision: flight.acceptedTerminal = true
+        case .paging:
+            guard let snapshot = state.value, snapshot.nativeString("pagerId") == flight.pager else { return }
+            switch snapshot["refresh"]?.nativeString("status") {
+            case "Loading": flight.sawLoading = true; flight.acceptedTerminal = false
+            case "NotLoading": if flight.sawLoading { flight.acceptedTerminal = true }
+            case "Error":
+                let detail = snapshot["refresh"]?["error"]
+                finishRetainedRefresh(false, failure: .init(code: detail?.nativeString("code") ?? "PAGING_REFRESH",
+                    message: detail?.nativeString("message") ?? "Refresh failed"))
+                return
+            default: break
+            }
+        }
+        finishRefreshIfReady(flight)
+    }
+
+    private func finishRefreshIfReady(_ flight: NativeRefreshCompletion) {
+        if flight.acknowledged && flight.acceptedTerminal { finishRetainedRefresh(true) }
+    }
+
+    private func finishRetainedRefresh(_ success: Bool, failure error: NativeFailure? = nil) {
+        guard let flight = refreshCompletion else { return }
+        refreshCompletion = nil
+        refreshWatchdog?.cancel(); refreshWatchdog = nil
+        retainedRefresh?.cancel(); retainedRefresh = nil
+        if let error { failure = error; receivedAt = nil }
+        flight.resolve(success)
     }
 
     /// Explicit user refresh/readback remains authoritative, regardless of age.
@@ -249,6 +330,7 @@ import NodysseyNativeCore
             failure = NativeFailure(code: "OBSERVATION_ENDED", message: "Observation ended")
         }
         if failure != nil { receivedAt = nil }
+        finishRetainedRefresh(false)
     }
 
     func markStale() {
@@ -276,8 +358,9 @@ import NodysseyNativeCore
         operation = UUID()
         observing = false
         retainedObservation?.cancel(); retainedObservation = nil
+        finishRetainedRefresh(false)
         retainedRefresh?.cancel(); retainedRefresh = nil
-        refreshRevision = nil; refreshRequestedAt = nil
+        refreshWatchdog?.cancel(); refreshWatchdog = nil
         freshnessWait?.cancel(); freshnessWait = nil
         loadingTask?.cancel(); loadingTask = nil
         state.cancel()

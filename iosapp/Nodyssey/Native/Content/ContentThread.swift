@@ -26,6 +26,7 @@ struct ContentPostDetail: View {
     @State private var firstNewFloor: Int64?
     @State private var pageLoad = ContentThreadPageLoad()
     private var loadingPage: Bool { pageLoad.loading }
+    @State private var refreshSucceeded = false
     @State private var loadRequest: PageRequest?
     @State private var expanded = Set<String>()
     @State private var reaction: PendingReaction?
@@ -137,7 +138,14 @@ struct ContentPostDetail: View {
                 } label: { Image(systemName: "ellipsis") }
             }
         }
-        .refreshable { await loadPage(firstPage, extend: true) }
+        .nativeRefreshable(generation: app.generation,
+            failure: { thread.failure != nil }, completion: { refreshSucceeded }) {
+                refreshSucceeded = false
+                let generation = app.generation
+                let completed = await loadPage(firstPage, extend: true)
+                guard !Task.isCancelled, generation == app.generation else { return }
+                refreshSucceeded = completed
+            }
         .task(id: "\(app.generation)|\(retry)") { await thread.observe(app, "thread", args) }
         .task(id: "\(app.generation)|\(retry)") { await tracked.observe(app, "tracked.observe") }
         .task(id: "\(app.generation)|\(loadRetry)") { await openThread() }
@@ -508,10 +516,13 @@ struct ContentPostDetail: View {
         _ = pageLoad.begin()
         loadRequest = PageRequest(page: page, extend: extend)
     }
-    private func loadPage(_ page: Int64, extend: Bool) async {
+    @discardableResult
+    private func loadPage(_ page: Int64, extend: Bool) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let token = pageLoad.begin()
-        await command.loadThread(app, postID: postID, page: page, extend: extend)
+        let completed = await command.loadThread(app, postID: postID, page: page, extend: extend)
         pageLoad.finish(token, cancelled: Task.isCancelled)
+        return completed
     }
     private func openThread() async {
         do {

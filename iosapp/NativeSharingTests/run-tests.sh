@@ -11,6 +11,7 @@ cp "$HERE/../Nodyssey/Native/Rendering/RichDocument.swift" "$STAGE/Sources/"
 cp "$HERE/../Nodyssey/Native/Content/ContentShareLink.swift" "$STAGE/Sources/"
 # Signature-only dependencies trap if invoked; no native bridge or site request runs.
 cp "$HERE/../NativeContentUITests/Typecheck/Contracts.swift" "$STAGE/Sources/"
+cp "$HERE/../Nodyssey/Native/Foundation/NativeRefreshCompletion.swift" "$STAGE/Sources/"
 python3 "$HERE/stage-floor-entry.py" "$STAGE/Sources/ActualFloorEntry.swift"
 for file in "$HERE/../Nodyssey/Native/Sharing/"*.swift; do
     [ ! -f "$file" ] || cp "$file" "$STAGE/Sources/"

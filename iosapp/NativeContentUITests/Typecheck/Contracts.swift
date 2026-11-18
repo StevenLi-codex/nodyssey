@@ -1,8 +1,10 @@
 // Signature-only fixtures for macOS SwiftUI typechecking. Never linked into the app.
 import SwiftUI
+import Combine
 import NodysseyNativeCore
 struct NativeDestination { let route: String; let arguments: [String: JSONValue] }
 @MainActor final class NativeAppModel: ObservableObject {
+    let homeScrollToTop = PassthroughSubject<Void, Never>()
     @Published var generation = 0
     @Published var session: JSONValue = .null
     @Published var settings: JSONValue = .null
@@ -20,6 +22,7 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
     var isRefreshing: Bool { false }
     var hasValue: Bool { false }
     @discardableResult func observeRetained(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], restart: Int = 0) -> Bool { fatalError("Signature fixture") }
+    @discardableResult func refreshRetained(_ app: NativeAppModel, _ operationName: String, _ arguments: [String: JSONValue] = [:], mode: NativeRefreshCompletionMode) async -> Bool { fatalError("Signature fixture") }
     func cancel() { fatalError("Signature fixture") }
     func observeCached(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError("Signature fixture") }
     func load(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async { fatalError("Signature fixture") }

@@ -100,9 +100,13 @@ import NodysseyNativeCore
     let returned = Task { await profile.run(using: fixture.transport, currentGeneration: { 1 }) }
     await eventually { fixture.requests.count == 2 && fixture.observations.count == 2 }
     #expect(profile.value["uid"]?.int == 123)
-    await profile.refresh()
+    var joinedCompleted = false
+    let joined = Task { await profile.refresh(); joinedCompleted = true }
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect(!joinedCompleted, "A pull must join the stale appearance read, not finish immediately")
     #expect(fixture.requests.count == 2)
     fixture.requests[1](ProfileFixture.offline)
+    await joined.value
     await eventually { profile.failure?.code == "NETWORK" }
     #expect(profile.value["uid"]?.int == 123)
     fixture.observations[1](ProfileFixture.changed)

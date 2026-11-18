@@ -16,11 +16,21 @@ cp "$HERE/../Nodyssey/Native/Content/ContentPreferences.swift" "$STAGE/Sources/C
 if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
     cp "$HERE/../Nodyssey/Native/Foundation/NativePageCanvas.swift" "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Foundation/NativeGlassSurface.swift" "$STAGE/Sources/"
+    for file in NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion NativeRefreshable; do
+        cp "$HERE/../Nodyssey/Native/Foundation/$file.swift" "$STAGE/Sources/"
+    done
     cp "$HERE/../Nodyssey/Native/Content/"*.swift "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Sharing/"*.swift "$STAGE/Sources/"
     for source in "$HERE/../Nodyssey/Native/Rendering/"*.swift; do
         [ "$(basename "$source")" = NativeCodeBlock.swift ] || cp "$source" "$STAGE/Sources/"
     done
+    for file in EditorState EditorViewModel NativeEditorScreens NativePostComposerPresentation EditorPanels EditorMessageThread EditorRichPreview EditorThreadReply; do
+        cp "$HERE/../Nodyssey/Native/Editing/$file.swift" "$STAGE/Sources/"
+    done
+    for file in AccountAuthorQuickCard AccountAuthorQuickCardState AccountProfileDate; do
+        cp "$HERE/../Nodyssey/Native/Account/$file.swift" "$STAGE/Sources/"
+    done
+    cp "$HERE/Typecheck/ThreadEditorContracts.swift" "$STAGE/Sources/"
     cp "$HERE/CompositionSupport/"*.swift "$STAGE/Sources/"
     cp "$HERE/Composition/"*.swift "$STAGE/Tests/"
 fi

@@ -19,7 +19,7 @@ struct ContentPostList: View {
         let ownerGeneration = app.generation
         VStack(spacing: 0) {
             NativeGlassContainer {
-                VStack(spacing: 0) {
+                VStack(spacing: 2) {
                     HStack(spacing: 8) {
                         // This remains a route entry, not a second search input owner.
                         Button { app.open("Search") } label: {
@@ -30,8 +30,10 @@ struct ContentPostList: View {
                         }.buttonStyle(.plain)
                         ContentSortPicker(selection: sortSelection, readableLabel: true).pickerStyle(.menu)
                             .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
-                    }.padding(.horizontal, 16)
-                        .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, NativeFeedLayout.horizontalInset) }
+                    }.padding(.horizontal, 12)
+                        .padding(.vertical, 2)
+                        .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true, role: .homeSearch) }
+                        .padding(.horizontal, NativeFeedLayout.horizontalInset)
                     HStack(spacing: 0) {
                         ContentBoardTabs(categories: homeCategories, selection: $category)
                         Menu {
@@ -49,11 +51,11 @@ struct ContentPostList: View {
                         #endif
                         .menuIndicator(.hidden).fixedSize().tint(NativeFeedLayout.controlForeground)
                     }
-                    // One glass surface for the entire rail, never one per category.
-                    .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true).padding(.horizontal, NativeFeedLayout.horizontalInset) }
+                    // Secondary text rail sits directly on the page canvas.
+                    .padding(.horizontal, NativeFeedLayout.horizontalInset)
                 }
+                .padding(.bottom, 6)
             }
-            Divider()
 
             ContentStoreStatus(store: categories) { retry += 1 }
             ContentCommandStatus(command: command)
@@ -143,23 +145,25 @@ struct ContentBoardTabs: View {
     @Binding var selection: String
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 22) {
+            HStack(spacing: 16) {
                 tab(String(localized: "content.all", table: "Content"), slug: "")
                 ForEach((categories.array ?? []).compactMap { value -> Board? in
                     guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
                     return Board(id: slug, title: value.nativeString("title") ?? slug)
                 }) { board in tab(board.title, slug: board.id) }
-            }.padding(.horizontal, 16)
+            }.padding(.horizontal, 4)
         }
     }
     private func tab(_ title: String, slug: String) -> some View {
         Button { selection = slug } label: {
             Text(title).font(.subheadline.weight(selection == slug ? .semibold : .regular))
                 .foregroundStyle(NativeFeedLayout.controlForeground)
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: 44, minHeight: 32)
                 .overlay(alignment: .bottom) {
-                    if selection == slug { Capsule().fill(.tint).frame(height: 3) }
+                    if selection == slug { Capsule().fill(.tint).frame(height: 2) }
                 }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
     }
@@ -258,6 +262,9 @@ struct ContentPagedList: View {
     @State private var direction = ContentFeedDirection()
     @GestureState private var feedDragging = false
     @State private var chromeHeight: CGFloat = 0
+    @State private var homeTopPosition: (ticket: ContentFeedTicket, id: Int64, atTop: Bool)?
+    @State private var homeTopHintSuppression: ContentFeedTicket?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isHome: Bool { operation == "feed" && replacePage != nil }
     private var totalPages: Int64 { max(1, store.value.nativeInt("totalPages") ?? 1) }
     private var showRail: Bool {
@@ -302,9 +309,10 @@ struct ContentPagedList: View {
                             }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                             .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
-                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)|\(store.isReplacingPagingWindow)") {
+                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)|\(store.isReplacingPagingWindow)|\(homeTopHintSuppression == owner)") {
                                 // Row tasks are prefetch hints, never visibility observations.
-                                guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return }
+                                guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
+                                      homeTopHintSuppression != ticket else { return }
                                 guard let arguments = window.accessArguments(for: row.id) else { return }
                                 do { _ = try await app.request("paging.access", arguments) }
                                 catch is CancellationError { }
@@ -338,6 +346,9 @@ struct ContentPagedList: View {
                 .updating($feedDragging) { _, dragging, _ in dragging = true }
                 .onChanged { gesture in
                     guard isHome, let ticket = owner, owns(ticket) else { return }
+                    // Programmatic return cannot prefetch a page; genuine new
+                    // finger travel restores the existing Paging access hints.
+                    homeTopHintSuppression = nil
                     direction.record(translation: gesture.translation.height)
                 }
                 .onEnded { _ in direction.endGesture() })
@@ -345,6 +356,11 @@ struct ContentPagedList: View {
                 if !dragging { direction.endGesture() } // Includes system cancellation.
             }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
+                if isHome, let ticket = owner, owns(ticket), case .success(let window) = window, let first = window.rows.first {
+                    let frame = rows.first { $0.ticket == ticket && $0.id == first.id }?.frame
+                    homeTopPosition = (ticket, first.id, NativeHomeTabInteraction.isAtTop(firstMinY: frame.map { Double($0.minY) },
+                                                                                       viewportMinY: Double(viewport.frame(in: .global).minY)))
+                } else { homeTopPosition = nil }
                 guard isVisible, restored, let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
                       let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
                       case .success(let window) = window,
@@ -352,6 +368,21 @@ struct ContentPagedList: View {
                 visible(row.id, row.page)
                 restoreID = row.id
                 if let page = row.page, page > 0 { visiblePage = page }
+            }
+            .onReceive(app.homeScrollToTop) { _ in
+                guard isHome, isVisible, app.selectedTab == .home, app.homePath.isEmpty, app.sheet == nil,
+                      let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
+                      case .success(let window) = window, let first = window.rows.first else { return }
+                guard !(homeTopPosition.map { $0.ticket == ticket && $0.id == first.id && $0.atTop } ?? false) else { return }
+                // No jump.request, replacePage, refresh or page-one fetch. Paging
+                // may expose only a cached window: its earliest loaded item is
+                // the furthest possible network-free destination.
+                jump.cancel()
+                homeTopHintSuppression = ticket
+                restored = true
+                withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                    proxy.scrollTo(first.id, anchor: .top)
+                }
             }
             .onChange(of: store.value) { _ in
                 guard let ticket = owner, owns(ticket) else { return }
@@ -413,17 +444,15 @@ struct ContentPagedList: View {
             }
           }
         }
-        .refreshable {
-            guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }, completion: {
+            guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return false }
             jump.cancel()
-            guard let id = store.value.nativeString("pagerId") else { retry += 1; return }
-            do { _ = try await app.request("paging.refresh", ["pagerId": .string(id)]) }
-            catch is CancellationError { }
-            catch {
-                guard owns(ticket), !Task.isCancelled else { return }
-                command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.")
-            }
-        }
+            guard let id = store.value.nativeString("pagerId") else { retry += 1; return false }
+            // A Paging command receipt precedes its new window. Keep the ring
+            // running until this pager's observed refresh actually terminates.
+            let succeeded = await store.refreshRetained(app, "paging.refresh", ["pagerId": .string(id)], mode: .paging)
+            return succeeded && owns(ticket) && !Task.isCancelled
+        }, action: {})
         .task(id: JSONValue.object(["generation": .integer(Int64(app.generation)), "operation": .string(operation), "arguments": .object(arguments), "retry": .integer(Int64(retry))])) {
             guard !Task.isCancelled else { return }
             // Explicit board/sort/page changes replace only the request, not the
@@ -434,6 +463,7 @@ struct ContentPagedList: View {
                 restored = requestedRestoreID == nil && observedArguments == nil
                 visiblePage = max(1, arguments["page"]?.int ?? 1)
                 direction = ContentFeedDirection()
+                homeTopPosition = nil; homeTopHintSuppression = nil
                 authorNavigation = nil; authorCard = nil
             }
             var args = arguments
@@ -468,6 +498,7 @@ struct ContentPagedList: View {
     }
     private func goToPage(_ page: Int64, proxy: ScrollViewProxy) {
         guard let ticket = owner, owns(ticket), !command.busy, !store.isReplacingPagingWindow else { return }
+        homeTopHintSuppression = nil
         restored = true // Explicit travel wins over an old restoration anchor.
         do { perform(try jump.request(page, snapshot: store.value), ticket: ticket, proxy: proxy) }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INVALID_DATA", message: "Invalid paging window") }

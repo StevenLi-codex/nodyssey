@@ -47,18 +47,14 @@ func libraryL(_ key: String) -> String {
     func cancel() { task?.cancel(); task = nil }
 }
 
-@MainActor func libraryRead(_ store: NativeStore, _ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async {
+@MainActor @discardableResult func libraryRead(_ store: NativeStore, _ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async -> Bool {
     // A read-back must NOT call NativeStore.load on an observing store: load cancels its subscription.
     let generation = app.generation
-    do {
-        let value = try await app.request(operation, arguments)
-        try Task.checkCancellation()
-        guard generation == app.generation else { return }
+    return await LibraryRefreshReadState.read(current: { generation == app.generation }, request: {
+        try await app.request(operation, arguments)
+    }, publish: { value in
         store.value = value; store.failure = nil
-    }
-    catch is CancellationError { }
-    catch let failure as NativeFailure { store.failure = failure }
-    catch { store.failure = NativeFailure(code: "INTERNAL", message: "") }
+    }, fail: { store.failure = $0 })
 }
 
 struct LibraryActionStatus: View {

@@ -1,9 +1,11 @@
 // Executable test boundaries only. Not shipping code, not a Kotlin parser or platform test.
 import SwiftUI
+import Combine
 import NodysseyNativeCore
 
 struct NativeDestination { let route: String; let arguments: [String: JSONValue] }
 @MainActor final class NativeAppModel: ObservableObject {
+    let homeScrollToTop = PassthroughSubject<Void, Never>()
     @Published var generation = 0
     @Published var session: JSONValue = .null
     @Published var settings: JSONValue = .null
@@ -35,6 +37,7 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
     var isRefreshing: Bool { false }
     var hasValue: Bool { value != .null }
     @discardableResult func observeRetained(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], restart: Int = 0) -> Bool { fatalError("Unexpected retained observation") }
+    @discardableResult func refreshRetained(_ app: NativeAppModel, _ operationName: String, _ arguments: [String: JSONValue] = [:], mode: NativeRefreshCompletionMode) async -> Bool { fatalError("Unexpected retained refresh: this fixture does not implement Store behavior") }
     func cancel() { fatalError("Unexpected cancellation") }
     func observeCached(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:], maximumAge: TimeInterval = 60) async { fatalError("Unexpected cached observation") }
     func load(_ app: NativeAppModel, _ operation: String, _ args: [String: JSONValue] = [:]) async {

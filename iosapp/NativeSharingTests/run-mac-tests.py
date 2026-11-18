@@ -7,14 +7,15 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import uuid
 
 repo = pathlib.Path(__file__).resolve().parents[2]
-stage = os.environ.get("SHARING_MAC_STAGE", "/Users/steven/.cache/hermes-build/nodyssey-sharing")
+stage = os.environ.get("SHARING_MAC_STAGE", "/Users/steven/.cache/hermes-build/nodyssey-sharing-" + uuid.uuid4().hex)
 outer = ["ssh", "-p", "18323", "-i", "/home/hermes/.ssh/n100_london_ed25519", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/home/hermes/.ssh/known_hosts_n100_service", "steven@127.0.0.1"]
 inner = ["ssh", "-o", "Hostname=StevendeMacBook-Pro.local", "-o", "HostKeyAlias=192.168.31.128", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "macbook"]
 archive = io.BytesIO()
 with tarfile.open(fileobj=archive, mode="w") as tar:
-    for relative in ["iosapp/NativeSharingTests", "iosapp/Nodyssey/Native/Sharing", "iosapp/NativeCore/Sources", "iosapp/Nodyssey/Native/Content", "iosapp/Nodyssey/Native/Rendering", "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift", "iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift", "iosapp/NativeContentUITests/Typecheck/Contracts.swift"]:
+    for relative in ["iosapp/NativeSharingTests", "iosapp/Nodyssey/Native/Sharing", "iosapp/NativeCore/Sources", "iosapp/Nodyssey/Native/Content", "iosapp/Nodyssey/Native/Rendering", "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift", "iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift", "iosapp/Nodyssey/Native/Foundation/NativeHomeTabInteraction.swift", "iosapp/Nodyssey/Native/Foundation/NativeRefreshState.swift", "iosapp/Nodyssey/Native/Foundation/NativeRefreshCompletion.swift", "iosapp/Nodyssey/Native/Foundation/NativeRefreshable.swift", "iosapp/NativeContentUITests/Typecheck", "iosapp/Nodyssey/Native/Editing", "iosapp/Nodyssey/Native/Account/AccountAuthorQuickCard.swift", "iosapp/Nodyssey/Native/Account/AccountAuthorQuickCardState.swift", "iosapp/Nodyssey/Native/Account/AccountProfileDate.swift"]:
         path = repo / relative
         if path.exists():
             tar.add(path, arcname=relative, filter=lambda item: None if "/.build" in item.name or "__pycache__" in item.name else item)
@@ -23,7 +24,9 @@ render_env = f"SHARING_RENDER_OUTPUT={qstage}/scratch/renders " if "--render-art
 command = f"mkdir -p {qstage}/scratch && tar xf - -C {qstage} && cd {qstage} && swift --version && {render_env}TMPDIR={qstage}/scratch sh iosapp/NativeSharingTests/run-tests.sh"
 if "--typecheck-entry" in sys.argv or "--typecheck-content" in sys.argv:
     flags = f"-swift-version 6 -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -target arm64-apple-macos13.0 -module-cache-path {qstage}/scratch/module-cache"
-    sources = "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift iosapp/Nodyssey/Native/Rendering/*.swift iosapp/Nodyssey/Native/Content/*.swift" if "--typecheck-content" in sys.argv else "iosapp/Nodyssey/Native/Rendering/RichDocument.swift iosapp/Nodyssey/Native/Content/ContentShareLink.swift"
+    sources = "iosapp/Nodyssey/Native/Foundation/NativePageCanvas.swift iosapp/Nodyssey/Native/Foundation/NativeGlassSurface.swift iosapp/Nodyssey/Native/Foundation/NativeHomeTabInteraction.swift iosapp/Nodyssey/Native/Foundation/NativeRefreshState.swift iosapp/Nodyssey/Native/Foundation/NativeRefreshCompletion.swift iosapp/Nodyssey/Native/Foundation/NativeRefreshable.swift iosapp/Nodyssey/Native/Rendering/*.swift iosapp/Nodyssey/Native/Content/*.swift" if "--typecheck-content" in sys.argv else "iosapp/Nodyssey/Native/Foundation/NativeRefreshCompletion.swift iosapp/Nodyssey/Native/Rendering/RichDocument.swift iosapp/Nodyssey/Native/Content/ContentShareLink.swift"
+    if "--typecheck-content" in sys.argv:
+        sources += " iosapp/Nodyssey/Native/Editing/EditorState.swift iosapp/Nodyssey/Native/Editing/EditorViewModel.swift iosapp/Nodyssey/Native/Editing/NativeEditorScreens.swift iosapp/Nodyssey/Native/Editing/NativePostComposerPresentation.swift iosapp/Nodyssey/Native/Editing/EditorPanels.swift iosapp/Nodyssey/Native/Editing/EditorMessageThread.swift iosapp/Nodyssey/Native/Editing/EditorRichPreview.swift iosapp/Nodyssey/Native/Editing/EditorThreadReply.swift iosapp/Nodyssey/Native/Account/AccountAuthorQuickCard.swift iosapp/Nodyssey/Native/Account/AccountAuthorQuickCardState.swift iosapp/Nodyssey/Native/Account/AccountProfileDate.swift iosapp/NativeContentUITests/Typecheck/ThreadEditorContracts.swift"
     command = f"mkdir -p {qstage}/scratch && tar xf - -C {qstage} && cd {qstage} && swiftc {flags} -emit-module -module-name NodysseyNativeCore iosapp/NativeCore/Sources/NodysseyNativeCore/*.swift -emit-module-path {qstage}/scratch/NodysseyNativeCore.swiftmodule && swiftc {flags} -I {qstage}/scratch -typecheck {sources} iosapp/Nodyssey/Native/Sharing/*.swift iosapp/NativeContentUITests/Typecheck/Contracts.swift"
 result = subprocess.run(outer + [shlex.join(inner + [command])], input=archive.getvalue())
 if result.returncode == 0 and "--render-artifacts" in sys.argv:

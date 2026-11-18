@@ -4,6 +4,58 @@ import NodysseyNativeCore
 
 typealias LibraryRequest = @MainActor (String, [String: JSONValue]) async throws -> JSONValue
 
+/// Read-only publication lifetime, independent of an observing store's subscription.
+@MainActor final class LibraryRefreshReadState: ObservableObject {
+    @Published private(set) var isLoading = false
+    private var flight: (key: String, token: UUID, task: Task<Bool, Never>)?
+
+    static func read(current: @escaping @MainActor () -> Bool,
+                     request: @MainActor () async throws -> JSONValue,
+                     publish: @MainActor (JSONValue) -> Void,
+                     fail: @MainActor (NativeFailure) -> Void) async -> Bool {
+        guard !Task.isCancelled, current() else { return false }
+        do {
+            let value = try await request()
+            guard !Task.isCancelled, current() else { return false }
+            publish(value); return true
+        } catch {
+            guard !Task.isCancelled, current(), !(error is CancellationError) else { return false }
+            fail((error as? NativeFailure) ?? NativeFailure(code: "INTERNAL", message: ""))
+            return false
+        }
+    }
+
+    func run(key: String, current: @escaping @MainActor () -> Bool,
+             request: @escaping @MainActor () async throws -> JSONValue,
+             publish: @escaping @MainActor (JSONValue) -> Void,
+             fail: @escaping @MainActor (NativeFailure) -> Void) async -> Bool {
+        guard !Task.isCancelled, current() else { return false }
+        if let flight, flight.key == key {
+            let result = await flight.task.value
+            return !Task.isCancelled && current() && result
+        }
+        cancel()
+        let token = UUID()
+        isLoading = true
+        let task = Task { @MainActor [weak self] in
+            let result = await Self.read(current: { [weak self] in
+                self?.flight?.token == token && current()
+            }, request: request, publish: publish, fail: fail)
+            if self?.flight?.token == token { self?.flight = nil; self?.isLoading = false }
+            return result
+        }
+        flight = (key, token, task)
+        let result = await withTaskCancellationHandler { await task.value } onCancel: {
+            task.cancel()
+            Task { @MainActor [weak self] in if self?.flight?.token == token { self?.cancel() } }
+        }
+        return !Task.isCancelled && current() && result
+    }
+
+    func cancel() { flight?.task.cancel(); flight = nil; isLoading = false }
+}
+
+
 struct LibraryBatchResult {
     var succeeded: Set<Int64> = []
     var failures: [Int64: NativeFailure] = [:]

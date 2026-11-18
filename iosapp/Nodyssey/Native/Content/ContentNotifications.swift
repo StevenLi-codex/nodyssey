@@ -9,6 +9,7 @@ struct ContentNotifications: View {
     @StateObject private var command = ContentCommand()
     @State private var selection = "INTERACTIONS"
     @State private var retry = 0
+    @StateObject private var refreshState = ContentNotificationRefresh()
     @State private var compose = false
     @State private var confirmReadAll = false
     init(initialGroup: String? = nil) {
@@ -51,7 +52,9 @@ struct ContentNotifications: View {
                     }
                     .scrollContentBackground(.hidden)
                     .background(ContentSurface(canvas: true))
-                    .refreshable { await refresh() }
+                    .nativeRefreshable(generation: app.generation,
+                        failure: { refreshState.group == "MESSAGES" ? messages.failure != nil : interactions.failure != nil },
+                        completion: { refreshState.succeeded }) { await refresh() }
                 }
             }
         }
@@ -82,7 +85,8 @@ struct ContentNotifications: View {
             guard app.isSignedIn else { counts.invalidate(); return }
             counts.observeRetained(app, "notifications.counts", restart: retry)
         }
-        .onDisappear { command.cancel() }
+        .onChange(of: selection) { _ in refreshState.invalidate() }
+        .onDisappear { command.cancel(); refreshState.invalidate() }
     }
     private struct Row: Identifiable { let id: String; let value: JSONValue }
     private var notificationRows: [Row] {
@@ -140,11 +144,14 @@ struct ContentNotifications: View {
         }
     }
     private func refresh() async {
-        do {
-            if selection == "MESSAGES" { _ = try await app.request("messages.refresh") }
-            else { _ = try await app.request("notifications.refresh") }
-        } catch is CancellationError { }
-        catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
+        refreshState.invalidate()
+        guard app.isSignedIn, !Task.isCancelled else { return }
+        let group = selection
+        let store = group == "MESSAGES" ? messages : interactions
+        await refreshState.perform(app, group: group) {
+            await store.refreshRetained(app,
+                group == "MESSAGES" ? "messages.refresh" : "notifications.refresh", mode: .revision)
+        }
     }
 }
 

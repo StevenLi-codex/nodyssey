@@ -147,6 +147,7 @@ struct AccountProfileStatus: View {
 struct AccountProfileScreen: View {
     @EnvironmentObject private var app: NativeAppModel
     @StateObject private var profile = AccountSelfProfileState()
+    @State private var refreshSucceeded = false
     var body: some View {
         // Own the card gaps on iOS 16 too; grouped List inserts platform section
         // margins and listSectionSpacing is only available starting with iOS 17.
@@ -250,7 +251,10 @@ struct AccountProfileScreen: View {
             if app.isSignedIn { await profile.run(using: app.transport, currentGeneration: { app.generation }) }
             else { profile.invalidate() }
         }
-        .refreshable { await profile.refresh() }
+        .nativeRefreshable(generation: app.generation, failure: { profile.failure != nil }, completion: { refreshSucceeded }) {
+            refreshSucceeded = false
+            refreshSucceeded = await profile.refresh()
+        }
     }
     private var webEntries: [AccountProfileDirectory.Entry] {
         guard let origin = app.siteOrigin else { return [] }
@@ -287,7 +291,7 @@ struct AccountSettingsScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: app.generation) { action.cancel(); await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
-        .refreshable { await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
+        .nativeRefreshable(generation: app.generation, failure: { profile.failure != nil }) { await profile.load(app, "profile.self", ["refresh": .bool(true)]) }
         .confirmationDialog("action_sign_out", isPresented: $signOut, titleVisibility: .visible) {
             Button("action_sign_out", role: .destructive) {
                 action.perform(app, operation: "session.signOut", arguments: ["confirmed": .bool(true)], read: {

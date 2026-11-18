@@ -7,6 +7,8 @@ struct LibraryBookmarksScreen: View {
     @StateObject private var offline = NativeStore()
     @StateObject private var capabilities = NativeStore()
     @StateObject private var action = LibraryAction()
+    @StateObject private var refreshRead = LibraryRefreshReadState()
+    @State private var refreshSucceeded = false
     @State private var selection = LibrarySelection()
     @State private var query = ""
     @State private var filter = "all"
@@ -99,7 +101,10 @@ struct LibraryBookmarksScreen: View {
         }
         .navigationTitle(libraryL("bookmarks"))
         .searchable(text: $query, prompt: libraryL("search"))
-        .refreshable { await refresh() }
+        .nativeRefreshable(generation: app.generation, failure: { snapshot.failure != nil }, completion: { refreshSucceeded }) {
+            refreshSucceeded = false
+            refreshSucceeded = await refresh()
+        }
         .toolbar {
             ToolbarItemGroup {
                 Menu(libraryL("sort")) {
@@ -117,13 +122,14 @@ struct LibraryBookmarksScreen: View {
                 if available {
                     Button(libraryL("offlineManage")) { managingOffline = true }
                 }
-                Button(libraryL("refresh")) { action.run { await refresh() } }.disabled(action.busy)
+                Button(libraryL("refresh")) { action.run { await refresh() } }.disabled(action.busy || refreshRead.isLoading)
             }
         }
         .confirmationDialog(libraryL("deleteConfirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(libraryL("delete"), role: .destructive) { changeCollection(selectedIDs, collected: false) }
         }
         .task(id: "\(app.generation)-\(watchAttempt)") {
+            let generation = app.generation
             selection = LibrarySelection(); failures = [:]; truncated = false
             // Explicit disk snapshot first; observing the same SSOT then triggers remote refresh.
             await snapshot.load(app, "bookmarks.snapshot")
@@ -131,19 +137,20 @@ struct LibraryBookmarksScreen: View {
                 var first = true
                 for try await value in app.transport.observe("bookmarks.snapshot", [:]) {
                     try Task.checkCancellation()
+                    guard generation == app.generation else { return }
                     snapshot.value = value
                     if value == .null { selection = LibrarySelection(); failures = [:] }
                     if first { first = false; action.run { await refresh() } }
                 }
             } catch is CancellationError { }
-            catch let error as NativeFailure { snapshot.failure = error }
-            catch { snapshot.failure = NativeFailure(code: "INTERNAL", message: "") }
+            catch let error as NativeFailure { if !Task.isCancelled, generation == app.generation { snapshot.failure = error } }
+            catch { if !Task.isCancelled, generation == app.generation { snapshot.failure = NativeFailure(code: "INTERNAL", message: "") } }
         }
         .task(id: app.generation) { await offline.observe(app, "offline.observe") }
         .task(id: app.generation) { await capabilities.load(app, "settings.capabilities") }
         .onChange(of: selection.selected) { _ in estimate = nil }
         .onChange(of: available) { value in if !value { filter = "all" } }
-        .onDisappear { action.cancel() }
+        .onDisappear { refreshRead.cancel(); action.cancel() }
         .sheet(isPresented: $managingOffline) {
             NavigationStack {
                 List { LibraryActionStatus(action: action); offlineManagement }
@@ -217,15 +224,15 @@ struct LibraryBookmarksScreen: View {
         guard !ids.isEmpty else { return }
         action.run { offline.value = try await app.request("offline.download", ["postIds": .array(ids.map(JSONValue.integer))]) }
     }
-    private func refresh() async {
-        do {
-            let result = try await app.request("bookmarks.refresh")
+    @discardableResult private func refresh() async -> Bool {
+        let generation = app.generation
+        return await refreshRead.run(key: String(generation), current: { app.generation == generation }, request: {
+            try await app.request("bookmarks.refresh")
+        }, publish: { result in
             truncated = result["truncated"]?.bool == true
             snapshot.value = result["items"] ?? .null
             snapshot.failure = nil
-        } catch is CancellationError { }
-        catch let error as NativeFailure { snapshot.failure = error }
-        catch { snapshot.failure = NativeFailure(code: "INTERNAL", message: "") }
+        }, fail: { snapshot.failure = $0 })
     }
     private func changeCollection(_ ids: [Int64], collected: Bool) {
         action.run {
@@ -259,6 +266,7 @@ struct LibraryHistoryScreen: View {
     @State private var clear = false
     @State private var attempt = 0
     @State private var managing = false
+    @State private var refreshSucceeded = false
     private var groups: [(Int, [JSONValue])] {
         let grouped = Dictionary(grouping: store.value.array ?? []) { LibraryRows.historyBucket($0) }
         return grouped.keys.sorted().map { ($0, (grouped[$0] ?? []).sorted { ($0["lastReadAtMillis"]?.int ?? 0) > ($1["lastReadAtMillis"]?.int ?? 0) }) }
@@ -309,7 +317,10 @@ struct LibraryHistoryScreen: View {
         }
         .task(id: "\(app.generation)-\(attempt)") { undo.reset(); await store.observe(app, "history.list") }
         .task(id: app.generation) { await settings.load(app, "settings.get") }
-        .refreshable { await libraryRead(store, app, "history.list") }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }, completion: { refreshSucceeded }) {
+            refreshSucceeded = false
+            refreshSucceeded = await libraryRead(store, app, "history.list")
+        }
         .confirmationDialog(libraryL("deleteConfirm"), isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
             Button(libraryL("delete"), role: .destructive) {
                 guard let id = removing else { return }; removing = nil

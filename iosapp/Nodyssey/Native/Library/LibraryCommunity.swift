@@ -64,7 +64,7 @@ struct LibraryCommunityPage: View {
         }
         .navigationTitle(libraryL(ruling ? "ruling" : "award"))
         .task(id: "\(app.generation)-\(page)-\(attempt)") { await load() }
-        .refreshable { await load() }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }) { await load() }
     }
     private var hasNext: Bool { store.value["hasNextPage"]?.bool ?? (store.value["totalPages"]?.int.map { page < $0 } ?? false) }
     private func load() async { await store.load(app, ruling ? "community.ruling" : "community.award", ["page": .integer(page)]) }
@@ -170,7 +170,7 @@ struct LibraryInviteScreen: View {
         }
         .navigationTitle(libraryL("invite"))
         .task(id: "\(app.generation)-\(attempt)") { await store.load(app, "community.invite") }
-        .refreshable { await store.load(app, "community.invite") }
+        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }) { await store.load(app, "community.invite") }
         .confirmationDialog(libraryL("inviteConfirm"), isPresented: $confirm, titleVisibility: .visible) {
             Button(libraryL("continue")) {
                 if let url = store.value["url"]?.string { app.open("Web", ["url": .string(url), "goal": .string("MANAGE"), "title": .string(libraryL("invite"))]) }
@@ -225,7 +225,7 @@ struct LibraryAboutScreen: View {
         .navigationTitle(libraryL("aboutCommunity"))
         .task(id: app.generation) { await site.load(app, "site.get") }
         .task(id: "\(app.generation)-\(attempt)") { await stats.load(app, "community.memberCount") }
-        .refreshable { await stats.load(app, "community.memberCount") }
+        .nativeRefreshable(generation: app.generation, failure: { stats.failure != nil }) { await stats.load(app, "community.memberCount") }
     }
     private var currentSite: JSONValue? {
         site.value["sites"]?.array?.first { $0["id"] == site.value["current"] }
