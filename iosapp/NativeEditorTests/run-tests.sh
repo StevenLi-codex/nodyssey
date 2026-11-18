@@ -6,6 +6,7 @@ trap 'rm -rf "$HERE/Sources"' EXIT HUP INT TERM
 cp "$HERE/../Nodyssey/Native/Editing/EditorState.swift" "$HERE/Sources/"
 cp "$HERE/../Nodyssey/Native/Editing/EditorViewModel.swift" "$HERE/Sources/"
 cp "$HERE/../Nodyssey/Native/Rendering/RichDocument.swift" "$HERE/Sources/"
+cp "$HERE/../Nodyssey/Native/Media/MediaDomain.swift" "$HERE/Sources/"
 cp "$HERE/TestSupport/Focus.swift" "$HERE/Sources/"
 if [ "$(xcode-select -p)" != /Library/Developer/CommandLineTools ]; then
     swift test --disable-xctest --package-path "$HERE"

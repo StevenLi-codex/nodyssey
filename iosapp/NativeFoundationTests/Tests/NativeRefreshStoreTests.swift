@@ -7,16 +7,75 @@ import NodysseyNativeCore
     var requests: [(@Sendable (String) -> Void)] = []
     var observations: [(@Sendable (String) -> Void)] = []
     var cancellations = 0
-    lazy var transport = CallbackNativeTransport(request: { [weak self] _, _, reply in
+    var requestMetadata: [(name: String, arguments: String)] = []
+    var observationMetadata: [(name: String, arguments: String)] = []
+    lazy var transport = CallbackNativeTransport(request: { [weak self] name, arguments, reply in
+        self?.requestMetadata.append((name, arguments))
         self?.requests.append(reply)
         return NativeCancellation { [weak self] in Task { @MainActor in self?.cancellations += 1 } }
-    }, observe: { [weak self] _, _, reply in
+    }, observe: { [weak self] name, arguments, reply in
+        self?.observationMetadata.append((name, arguments))
         self?.observations.append(reply)
         return NativeCancellation { }
     })
 }
 
 @Suite @MainActor struct NativeRefreshStoreTests {
+    // Captured by executing the unchanged nativePagingFlow/NativePagingSessions
+    // region with pinned Paging 3.5.1 and real Pager/PagingSource refreshes.
+    // Only FeedPost/DTO mapping and the data source are fixture boundaries.
+    private static let pagingTrace = #"""
+    [{"pagerId":"all","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Idle"},"append":{"status":"Idle"},"prepend":{"status":"Idle"}},{"pagerId":"all","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"all","items":["all-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"all","items":["all-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}},{"pagerId":"all","items":["all-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"all","items":["all-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"all","items":["all-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}},{"pagerId":"tech","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Idle"},"append":{"status":"Idle"},"prepend":{"status":"Idle"}},{"pagerId":"tech","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"tech","items":["tech-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"tech","items":["tech-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}},{"pagerId":"tech","items":["tech-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"tech","items":["tech-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"tech","items":["tech-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}},{"pagerId":"daily","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Idle"},"append":{"status":"Idle"},"prepend":{"status":"Idle"}},{"pagerId":"daily","items":[],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":0,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"daily","items":["daily-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"daily","items":["daily-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}},{"pagerId":"daily","items":["daily-0"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"daily","items":["daily-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"Loading"},"append":{"status":"NotLoading","endOfPaginationReached":false},"prepend":{"status":"NotLoading","endOfPaginationReached":false}},{"pagerId":"daily","items":["daily-1"],"placeholdersBefore":0,"placeholdersAfter":0,"itemCount":1,"page":1,"totalPages":null,"refresh":{"status":"NotLoading","endOfPaginationReached":false},"append":{"status":"NotLoading","endOfPaginationReached":true},"prepend":{"status":"NotLoading","endOfPaginationReached":true}}]
+    """#
+
+    @Test func categorySwitchesRefreshTheirOwnPagerAndAcceptChangedTerminal() async throws {
+        let trace = try JSONDecoder().decode(JSONValue.self, from: Data(Self.pagingTrace.utf8)).array ?? []
+        let probe = RefreshCallbackProbe()
+        let app = NativeAppModel(transport: probe.transport)
+        let store = NativeStore(refreshTimeout: 1)
+        for (index, board) in ["all", "tech", "daily"].enumerated() {
+            let events = trace.filter { $0.nativeString("pagerId") == board }
+            #expect(events.count == 7)
+            var arguments: [String: JSONValue] = ["pagerId": .string(board), "sort": .string("LAST_REPLY"), "page": .integer(1)]
+            if board != "all" { arguments["categorySlug"] = .string(board) }
+            #expect(store.observeRetained(app, "feed", arguments))
+            try await eventually { probe.observations.count == index + 1 }
+            #expect(store.value == .null, "Changing board cannot retain another board's rows")
+            let sent = try JSONDecoder().decode(JSONValue.self, from: Data(probe.observationMetadata[index].arguments.utf8))
+            #expect(sent == .object(arguments))
+            func emit(_ event: JSONValue) throws {
+                let envelope = JSONValue.object(["ok": .bool(true), "data": event])
+                probe.observations[index](String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self))
+            }
+            for event in events.prefix(4) { try emit(event) }
+            try await eventually { store.value == events[3] }
+            #expect(!store.isReplacingPagingWindow)
+            // Appearance invents another candidate UUID; retained observation must
+            // keep its actual live pager rather than changing dispatch ownership.
+            var appearance = arguments
+            appearance["pagerId"] = .string("unused-" + board)
+            #expect(!store.observeRetained(app, "feed", appearance))
+            var result: Bool?
+            let refresh = Task { result = await store.refreshRetained(app, "paging.refresh", ["pagerId": .string(board)], mode: .paging) }
+            try await eventually { probe.requests.count == index + 1 }
+            #expect(probe.requestMetadata[index].name == "paging.refresh")
+            let request = try JSONDecoder().decode(JSONValue.self, from: Data(probe.requestMetadata[index].arguments.utf8))
+            #expect(request == .object(["pagerId": .string(board)]))
+            probe.requests[index](#"{"ok":true,"data":null}"#)
+            for _ in 0..<30 { await Task.yield() }
+            #expect(result == nil, "Receipt cannot complete before the board's changed window")
+            for event in events.suffix(3) { try emit(event) }
+            await refresh.value
+            #expect(result == true)
+            #expect(store.value == events[6])
+            #expect(store.value.nativeArray("items") == [.string(board + "-1")])
+            #expect(store.failure == nil && !store.isReplacingPagingWindow)
+        }
+        #expect(probe.requests.count == 3)
+        #expect(probe.observations.count == 3)
+        store.cancel()
+    }
+
     @Test func callbackTransportCancellationIsPerWaiterAndLateReceiptCannotReviveIdentity() async throws {
         let probe = RefreshCallbackProbe()
         let app = NativeAppModel(transport: probe.transport)

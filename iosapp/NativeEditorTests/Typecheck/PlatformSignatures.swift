@@ -40,6 +40,7 @@ struct MarkedTextEditor: View {
     var isTitle = false
     var accessibilityLabel: String
     var autofocus = false
+    var maximumVisibleLines: Int? = nil
     var body: some View { EmptyView() }
 }
 struct EditorPhotoPicker: View {

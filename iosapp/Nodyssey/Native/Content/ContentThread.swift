@@ -101,6 +101,7 @@ struct ContentPostDetail: View {
                     }
                 }
                 .coordinateSpace(name: "thread.viewport")
+                .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(ContentThreadFrames.self) { frames in updateViewport(frames, height: viewport.size.height) }
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in hasRead = true; railExpanded = false })
                 .overlay(alignment: .bottomTrailing) {
@@ -173,7 +174,7 @@ struct ContentPostDetail: View {
         .sheet(item: $author, onDismiss: navigateFromAuthor) { selected in
             AccountAuthorQuickCard(uid: selected.id, onNavigate: { destination in authorNavigation = destination; author = nil })
         }
-        .modifier(EditorThreadReplyPresentation(owner: replyOwner, covered: covered, onPublished: published))
+        .modifier(EditorThreadReplyPresentation(owner: replyOwner, covered: covered, onPublished: published, onOpen: { reply(nil) }))
         .confirmationDialog(CT("reactionConfirm"), isPresented: Binding(get: { reaction != nil }, set: { if !$0 { reaction = nil } })) {
             Button(CT("confirm")) { if let reaction { self.reaction = nil; sendReaction(reaction) } }
             Button(CT("cancel"), role: .cancel) { reaction = nil }

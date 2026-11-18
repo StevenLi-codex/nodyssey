@@ -18,7 +18,9 @@ struct ContentPostList: View {
         let ownerSort = sort
         let ownerGeneration = app.generation
         VStack(spacing: 0) {
-            NativeGlassContainer {
+            // This is now a single glass background. A container around the
+            // foreground hoists its backdrop above the search label on iOS 26.
+            Group {
                 VStack(spacing: 2) {
                     HStack(spacing: 8) {
                         // This remains a route entry, not a second search input owner.
@@ -264,6 +266,12 @@ struct ContentPagedList: View {
     @State private var chromeHeight: CGFloat = 0
     @State private var homeTopPosition: (ticket: ContentFeedTicket, id: Int64, atTop: Bool)?
     @State private var homeTopHintSuppression: ContentFeedTicket?
+    @State private var homeRefreshRequest: UInt64 = 0
+    @State private var pagerRestart = 0
+    @State private var observedRetry = 0
+    @State private var homeRefreshCompleted: UInt64 = 0
+    @State private var homeRefreshCompletedOwner: ContentFeedTicket?
+    @State private var topRefreshFlight = ContentFeedTopRefreshFlight()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isHome: Bool { operation == "feed" && replacePage != nil }
     private var totalPages: Int64 { max(1, store.value.nativeInt("totalPages") ?? 1) }
@@ -371,21 +379,38 @@ struct ContentPagedList: View {
             }
             .onReceive(app.homeScrollToTop) { _ in
                 guard isHome, isVisible, app.selectedTab == .home, app.homePath.isEmpty, app.sheet == nil,
-                      let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
-                      case .success(let window) = window, let first = window.rows.first else { return }
-                guard !(homeTopPosition.map { $0.ticket == ticket && $0.id == first.id && $0.atTop } ?? false) else { return }
-                // No jump.request, replacePage, refresh or page-one fetch. Paging
-                // may expose only a cached window: its earliest loaded item is
-                // the furthest possible network-free destination.
+                      let ticket = owner, owns(ticket) else { return }
+                // Top and loaded-empty still enter the same refresh coordinator.
+                // Only a real page-one window is an immediate scroll destination.
                 jump.cancel()
-                homeTopHintSuppression = ticket
-                restored = true
-                withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
-                    proxy.scrollTo(first.id, anchor: .top)
+                if !store.isReplacingPagingWindow,
+                   case .refresh(let target) = try? ContentFeedTopRefresh.plan(store.value, atTop:
+                    homeTopPosition.map { $0.ticket == ticket && $0.atTop } ?? false), let target {
+                    homeTopHintSuppression = ticket
+                    restored = true
+                    withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
                 }
+                homeRefreshRequest &+= 1
             }
             .onChange(of: store.value) { _ in
                 guard let ticket = owner, owns(ticket) else { return }
+                let wasReplacingTop = topRefreshFlight.pending
+                topRefreshFlight.update(store.value, current: ticket, failed: store.failure != nil)
+                if wasReplacingTop, !topRefreshFlight.pending, !store.isReplacingPagingWindow,
+                   store.failure == nil, store.value["refresh"]?.nativeString("status") == "NotLoading",
+                   store.value["page"]?.int == 1, case .success(let window) = window {
+                    // Replacement is the page-one read itself, not a precursor to
+                    // paging.refresh. Never scroll a retained page-N placeholder.
+                    restoreID = window.rows.first?.id
+                    restored = true
+                    if let target = restoreID {
+                        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                            proxy.scrollTo(target, anchor: .top)
+                        }
+                    }
+                }
                 do {
                     if let action = try jump.update(snapshot: store.value, current: ticket) {
                         perform(action, ticket: ticket, proxy: proxy)
@@ -400,6 +425,17 @@ struct ContentPagedList: View {
                     if let target { proxy.scrollTo(target, anchor: .top) }
                     restoreID = target
                     restored = true
+                }
+            }
+            .onChange(of: homeRefreshCompleted) { _ in
+                guard isVisible, let ticket = homeRefreshCompletedOwner, owns(ticket),
+                      !store.isReplacingPagingWindow, case .success(let window) = window,
+                      store.value["page"]?.int == 1, let first = window.rows.first, first.page == 1,
+                      !(homeTopPosition.map { $0.ticket == ticket && $0.id == first.id && $0.atTop } ?? false) else { return }
+                homeTopHintSuppression = ticket
+                restored = true; restoreID = first.id
+                withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                    proxy.scrollTo(first.id, anchor: .top)
                 }
             }
             .onChange(of: isVisible) { visible in
@@ -444,21 +480,37 @@ struct ContentPagedList: View {
             }
           }
         }
-        .nativeRefreshable(generation: app.generation, failure: { store.failure != nil }, completion: {
-            guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow else { return false }
+        .nativeRefreshable(generation: app.generation,
+                           scope: String(data: (try? JSONEncoder().encode([operation, arguments["categorySlug"]?.string ?? "", arguments["sort"]?.string ?? ""])) ?? Data(), encoding: .utf8) ?? "",
+                           requestID: homeRefreshRequest, failure: { store.failure != nil }, completion: {
+            guard let ticket = owner, owns(ticket), isVisible else { return false }
             jump.cancel()
-            guard let id = store.value.nativeString("pagerId") else { retry += 1; return false }
-            // A Paging command receipt precedes its new window. Keep the ring
-            // running until this pager's observed refresh actually terminates.
+            if isHome {
+                // Both entries choose the same destination before dispatch; a
+                // pull racing a tab pair cannot first refresh page N then page 1.
+                if case .replace = try? ContentFeedTopRefresh.plan(store.value, atTop: true) {
+                    return await refreshHomeFromPageOne(ticket)
+                }
+            }
+            guard !store.isReplacingPagingWindow, let id = store.value.nativeString("pagerId") else { return false }
+            // Pull and programmatic entry share the retained Store single-flight.
             let succeeded = await store.refreshRetained(app, "paging.refresh", ["pagerId": .string(id)], mode: .paging)
-            return succeeded && owns(ticket) && !Task.isCancelled
+            guard succeeded, owns(ticket), !Task.isCancelled else { return false }
+            if isHome { homeRefreshCompletedOwner = ticket; homeRefreshCompleted &+= 1 }
+            return true
         }, action: {})
         .task(id: JSONValue.object(["generation": .integer(Int64(app.generation)), "operation": .string(operation), "arguments": .object(arguments), "retry": .integer(Int64(retry))])) {
             guard !Task.isCancelled else { return }
             // Explicit board/sort/page changes replace only the request, not the
             // List subtree. A repeated appearance keeps every presentation owner.
-            if observedArguments != arguments || owner?.generation != app.generation {
-                store.invalidate()
+            let requestChanged = observedArguments != arguments
+            let identityChanged = owner?.generation != app.generation ||
+                owner?.board != (arguments["categorySlug"]?.string ?? "") || owner?.sort != (arguments["sort"]?.string ?? "")
+            if requestChanged || identityChanged {
+                topRefreshFlight.cancel()
+                // A same-board page jump replaces its pager, never the old rows.
+                // Board/sort/generation changes still revoke the old identity.
+                if identityChanged { store.invalidate() }
                 restoreID = requestedRestoreID
                 restored = requestedRestoreID == nil && observedArguments == nil
                 visiblePage = max(1, arguments["page"]?.int ?? 1)
@@ -467,11 +519,13 @@ struct ContentPagedList: View {
                 authorNavigation = nil; authorCard = nil
             }
             var args = arguments
-            if isHome, store.value != .null { args["page"] = .integer(visiblePage) }
+            if isHome, store.value != .null, !requestChanged, !identityChanged { args["page"] = .integer(visiblePage) }
             args["pagerId"] = .string(UUID().uuidString)
+            if requestChanged || identityChanged || observedRetry != retry { pagerRestart += 1 }
+            observedRetry = retry
             // A tab appearance is not a new feed. Keep the actual Kotlin pager,
             // loaded window and navigation ticket owned by this StateObject.
-            guard store.observeRetained(app, operation, args, restart: retry) else { return }
+            guard store.observeRetained(app, operation, args, restart: pagerRestart) else { return }
             observedArguments = arguments
             command.cancel()
             let ticket = ContentFeedTicket(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
@@ -491,10 +545,36 @@ struct ContentPagedList: View {
         }
         .onChange(of: app.generation) { generation in
             authorNavigation = nil; authorCard = nil; pageSheet.cancel()
-            if owner?.generation != generation { owner = nil; jump.cancel() }
+            if owner?.generation != generation { owner = nil; jump.cancel(); topRefreshFlight.cancel() }
         }
-        .onDisappear { command.cancel(); isVisible = false; direction.endGesture() }
+        .onChange(of: store.failure) { failure in
+            if failure != nil { topRefreshFlight.cancel() }
+        }
+        .onDisappear { command.cancel(); isVisible = false; direction.endGesture(); topRefreshFlight.cancel() }
         .onAppear { isVisible = true }
+    }
+    private func refreshHomeFromPageOne(_ ticket: ContentFeedTicket) async -> Bool {
+        guard owns(ticket), isVisible else { return false }
+        command.cancel(); jump.cancel(); pageSheet.cancel()
+        restored = true; restoreID = nil; visiblePage = 1
+        homeTopHintSuppression = ticket
+        var args = arguments
+        args["page"] = .integer(1)
+        args["forceInitialRefresh"] = .bool(true)
+        let pager = UUID().uuidString
+        args["pagerId"] = .string(pager)
+        let succeeded = await topRefreshFlight.wait(owner: ticket, pager: pager, start: {
+            // Install the replacement before parent page binding reruns .task.
+            // Its matching observedArguments/restart make that task a no-op.
+            var identity = args; identity.removeValue(forKey: "pagerId"); identity.removeValue(forKey: "forceInitialRefresh")
+            observedArguments = identity
+            pagerRestart += 1
+            guard store.observeRetained(app, operation, args, restart: pagerRestart) else {
+                topRefreshFlight.cancel(); return
+            }
+            replacePage?(1)
+        })
+        return succeeded && owns(ticket) && isVisible && !Task.isCancelled
     }
     private func goToPage(_ page: Int64, proxy: ScrollViewProxy) {
         guard let ticket = owner, owns(ticket), !command.busy, !store.isReplacingPagingWindow else { return }

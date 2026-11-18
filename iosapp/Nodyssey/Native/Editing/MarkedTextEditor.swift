@@ -60,6 +60,17 @@ struct MarkedTextEditor: UIViewRepresentable {
     var isTitle = false
     var accessibilityLabel: String
     var autofocus = false
+    // Opt-in for the inline reply only; the full editors keep their existing sizing.
+    var maximumVisibleLines: Int? = nil
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: NativeEditorTextView, context: Context) -> CGSize? {
+        guard let maximumVisibleLines, let width = proposal.width, width > 0 else { return nil }
+        let insets = uiView.textContainerInset.top + uiView.textContainerInset.bottom
+        let line = uiView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
+        let natural = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        let limit = line * CGFloat(maximumVisibleLines) + insets
+        return CGSize(width: width, height: min(max(line + insets, natural), limit))
+    }
 
     func makeUIView(context: Context) -> NativeEditorTextView {
         let view = NativeEditorTextView()

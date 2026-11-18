@@ -5,24 +5,37 @@ extension View {
     /// can await a revision-backed store after its command merely acknowledges.
     @MainActor func nativeRefreshable(
         generation: Int = 0,
+        scope: String = "",
+        requestID: UInt64 = 0,
         failure: @escaping @MainActor () -> Bool = { false },
         completion: @escaping @MainActor () async -> Bool = { true },
         action: @escaping @MainActor () async -> Void
     ) -> some View {
-        modifier(NativeRefreshModifier(generation: generation, failure: failure, completion: completion, action: action))
+        modifier(NativeRefreshModifier(generation: generation, scope: scope, requestID: requestID, failure: failure, completion: completion, action: action))
     }
 }
 
 @MainActor private final class NativeRefreshPresentation: ObservableObject {
     @Published private(set) var state = NativeRefreshState()
+    var ownerScope = ""
+    var ownerGeneration = 0
+    var lastRequestID: UInt64 = 0
     let coordinator = NativeRefreshCoordinator()
     init() {
         coordinator.onChange = { [weak self] in self?.state = $0 }
     }
 }
 
+private struct NativeRefreshInput: Equatable {
+    let generation: Int
+    let scope: String
+    let requestID: UInt64
+}
+
 private struct NativeRefreshModifier: ViewModifier {
     let generation: Int
+    let scope: String
+    let requestID: UInt64
     let failure: @MainActor () -> Bool
     let completion: @MainActor () async -> Bool
     let action: @MainActor () async -> Void
@@ -43,15 +56,31 @@ private struct NativeRefreshModifier: ViewModifier {
             }
             .background {
                 #if os(iOS) && canImport(UIKit)
-                NativeRefreshScrollBridge(presentation: presentation, environment: environment)
+                NativeRefreshScrollBridge(presentation: presentation, state: presentation.state, environment: environment)
                     .allowsHitTesting(false).accessibilityHidden(true)
                 #endif
             }
-            .onAppear { presentation.coordinator.appear() }
+            .onAppear { presentation.ownerScope = scope; presentation.ownerGeneration = generation; presentation.lastRequestID = requestID; presentation.coordinator.appear() }
             .onDisappear { presentation.coordinator.cancel() }
-            .onChange(of: generation) { _ in
-                presentation.coordinator.cancel()
-                presentation.coordinator.appear()
+            .task(id: NativeRefreshInput(generation: generation, scope: scope, requestID: requestID)) {
+                let input = NativeRefreshInput(generation: generation, scope: scope, requestID: requestID)
+                if presentation.ownerScope != input.scope || presentation.ownerGeneration != input.generation {
+                    presentation.coordinator.invalidate()
+                    presentation.ownerScope = input.scope
+                    presentation.ownerGeneration = input.generation
+                }
+                guard presentation.lastRequestID != input.requestID else { return }
+                presentation.lastRequestID = input.requestID
+                guard !Task.isCancelled else { return }
+                // The keyed task captures current closures; its replacement must
+                // not cancel a same-scope flight that the next tap should join.
+                Task { @MainActor in
+                    guard presentation.ownerScope == scope, presentation.ownerGeneration == generation else { return }
+                    await presentation.coordinator.refresh(failure: failure, completion: completion, settle: {
+                        do { try await Task.sleep(nanoseconds: reduceMotion ? 180_000_000 : 340_000_000) }
+                        catch { }
+                    }, action: action)
+                }
             }
     }
 }
@@ -59,6 +88,7 @@ private struct NativeRefreshModifier: ViewModifier {
 /// All rendering lives in SwiftUI, including custom accent, contrast and motion
 /// environments copied from the owning page into the refresh-control host.
 private struct NativeRefreshRing: View {
+    let background: Color
     let state: NativeRefreshState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rotating = false
@@ -87,6 +117,14 @@ private struct NativeRefreshRing: View {
         .animation(reduceMotion || state.phase == .pulling ? nil : .spring(response: 0.28, dampingFraction: 0.8), value: state.phase)
         .onChange(of: state.phase) { phase in rotating = phase == .refreshing }
         .onAppear { rotating = state.phase == .refreshing }
+        // UIRefreshControl can draw semantic-label spokes despite clear tint.
+        // Keep only this drawing area opaque, independent of ring progress and
+        // animation; never inspect or mutate implementation subviews.
+        .background {
+            if state.phase != .idle {
+                Circle().fill(background).frame(width: 32, height: 32)
+            }
+        }
         .accessibilityHidden(true)
     }
 }
@@ -101,6 +139,7 @@ import UIKit
 // Remove this bridge if SwiftUI exposes native pull progress and indicator slots.
 private struct NativeRefreshScrollBridge: UIViewRepresentable {
     let presentation: NativeRefreshPresentation
+    let state: NativeRefreshState
     let environment: EnvironmentValues
 
     func makeUIView(context: Context) -> NativeRefreshAnchor {
@@ -135,6 +174,12 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
         self.presentation = presentation; self.environment = environment
         if presentation.state.phase == .idle, lastPhase == .refreshing || lastPhase == .success {
             control?.endRefreshing()
+        }
+        if presentation.state.phase == .refreshing, control?.isRefreshing == false {
+            // SwiftUI's control can remain hidden after public beginRefreshing.
+            // Reveal the existing owner; do not invent a second spinner or inset.
+            control?.beginRefreshing()
+            control?.isHidden = false
         }
         lastPhase = presentation.state.phase
         // Keep the host's environment current even when the state is unchanged.
@@ -212,6 +257,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
 
     private func attachControl() {
         guard let scroll, control !== scroll.refreshControl else { return }
+        if let control, control.isRefreshing { control.endRefreshing() }
         restoreControl()
         guard let refresh = scroll.refreshControl else { return }
         control = refresh
@@ -242,6 +288,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
         controlObservation = refresh.observe(\.isRefreshing, options: [.new]) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.sample() }
         }
+        if presentation?.state.phase == .refreshing { refresh.beginRefreshing(); refresh.isHidden = false }
         render(presentation?.state ?? NativeRefreshState())
     }
 
@@ -269,7 +316,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
     }
     private func render(_ state: NativeRefreshState) {
         guard let environment, let host else { return }
-        host.rootView = AnyView(NativeRefreshRing(state: state).environment(\.self, environment))
+        host.rootView = AnyView(NativeRefreshRing(background: Color(uiColor: UIColor.systemBackground.resolvedColor(with: control?.traitCollection ?? traitCollection)), state: state).environment(\.self, environment))
     }
     private func restoreControl() {
         controlObservation?.invalidate(); controlObservation = nil
@@ -289,7 +336,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
         if control != nil, lastPhase == .refreshing || lastPhase == .success ||
             presentation?.state.phase == .refreshing || presentation?.state.phase == .success {
             control?.endRefreshing()
-            presentation?.coordinator.cancel()
+            presentation?.coordinator.invalidate()
         }
         restoreControl()
         scroll = nil

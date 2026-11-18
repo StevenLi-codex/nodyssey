@@ -182,6 +182,8 @@ jobs:
           paths = [pathlib.Path('iosapp/Nodyssey/App.swift')]
           paths += sorted(pathlib.Path('iosapp/Nodyssey/Native').rglob('*'))
           paths += sorted(pathlib.Path('iosapp/NativeCore/Sources').rglob('*'))
+          paths += sorted(pathlib.Path('iosapp/src/iosMain/kotlin').rglob('*'))
+          paths += sorted(pathlib.Path('shared/src/commonMain/kotlin').rglob('*'))
           manifest = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
           pathlib.Path(os.environ['RUNNER_TEMP'], 'shipping-source-manifest.json').write_text(json.dumps({'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'files': manifest}, indent=2))
           PY
@@ -189,7 +191,7 @@ jobs:
             -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.31" CURRENT_PROJECT_VERSION="73" \
+            MARKETING_VERSION="1.2.32" CURRENT_PROJECT_VERSION="74" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
       - name: Package unsigned test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')

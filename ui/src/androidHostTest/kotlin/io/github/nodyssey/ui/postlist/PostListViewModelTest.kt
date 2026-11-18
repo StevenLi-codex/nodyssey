@@ -266,8 +266,9 @@ private class RecordingFeedRepository(
         categorySlug: String?,
         sort: FeedSort,
         startPage: Int,
+        forceInitialRefresh: Boolean,
     ): Flow<PagingData<FeedPost>> {
         feedSorts += sort
-        return delegate.feed(categorySlug, sort, startPage)
+        return delegate.feed(categorySlug, sort, startPage, forceInitialRefresh)
     }
 }

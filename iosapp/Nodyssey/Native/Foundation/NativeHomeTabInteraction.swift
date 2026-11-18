@@ -11,7 +11,7 @@ struct NativeHomeTabInteraction {
             return false
         }
         lastTime = uptime
-        guard wasHome, isHome, isRoot, !atTop else {
+        guard wasHome, isHome, isRoot else {
             firstTap = nil
             return false
         }

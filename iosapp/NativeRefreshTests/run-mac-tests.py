@@ -12,7 +12,7 @@ import uuid
 
 repo = pathlib.Path(__file__).resolve().parents[2]
 run_id = "native-refresh-" + uuid.uuid4().hex[:12]
-stage = "/Users/steven/.cache/hermes-build/" + run_id
+stage = os.environ.get("REFRESH_MAC_STAGE", "/Volumes/Development/hermes-build/" + run_id)
 artifacts = pathlib.Path(os.environ.get("TMPDIR", str(pathlib.Path.home() / ".cache"))) / run_id
 artifacts.mkdir(parents=True, exist_ok=True)
 outer = ["ssh", "-p", "18323", "-i", "/home/hermes/.ssh/n100_london_ed25519", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/home/hermes/.ssh/known_hosts_n100_service", "steven@127.0.0.1"]
@@ -38,17 +38,29 @@ with tarfile.open(fileobj=archive, mode="a") as tar:
     info = tarfile.TarInfo("ScrollResolutionTests.swift")
     info.size = len(data)
     tar.addfile(info, io.BytesIO(data))
-manifest = {"stage": stage, "sha256": hashes, "topology_fixture_sha256": hashlib.sha256(fixture.encode()).hexdigest(), "ios_target": "arm64-apple-ios16.0", "developer_dir": "/Volumes/Development/Applications/Xcode.app/Contents/Developer"}
+root_path = "iosapp/Nodyssey/Native/Foundation/NativeRootView.swift"
+root_source = (repo / root_path).read_text()
+root_start = root_source.index("private struct NativeTabTapObserver:")
+root_observer = "import SwiftUI\nimport UIKit\n" + root_source[root_start:root_source.index("\n#endif", root_start)]
+archive.seek(0)
+with tarfile.open(fileobj=archive, mode="a") as tar:
+    data = root_observer.encode()
+    info = tarfile.TarInfo("RootObserver.swift")
+    info.size = len(data)
+    tar.addfile(info, io.BytesIO(data))
+manifest = {"root_source_sha256": hashlib.sha256(root_source.encode()).hexdigest(), "root_observer_sha256": hashlib.sha256(root_observer.encode()).hexdigest(), "stage": stage, "sha256": hashes, "topology_fixture_sha256": hashlib.sha256(fixture.encode()).hexdigest(), "ios_target": "arm64-apple-ios16.0", "developer_dir": "/Volumes/Development/Applications/Xcode.app/Contents/Developer"}
 (artifacts / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 state, view = files[1:]
 command = f"set -eu; mkdir -p {stage}/scratch; tar xf - -C {stage}; cd {stage}; "
 command += "export TMPDIR=" + shlex.quote(stage + "/scratch") + "; "
+command += "export CLANG_MODULE_CACHE_PATH=" + shlex.quote(stage + "/scratch/module-cache") + "; export SWIFT_MODULECACHE_PATH=" + shlex.quote(stage + "/scratch/module-cache") + "; "
 command += "export DEVELOPER_DIR=" + shlex.quote(manifest["developer_dir"]) + "; "
 command += "xcrun swift --version; xcrun --sdk iphoneos --show-sdk-path; xcrun --sdk iphoneos --show-sdk-version; "
 command += "shasum -a 256 " + shlex.join(files) + "; "
 command += f"xcrun swiftc -swift-version 6 -warnings-as-errors -parse-as-library {state} {files[0]} -o scratch/tests; scratch/tests; "
 command += "xcrun swiftc -swift-version 6 -warnings-as-errors -parse-as-library ScrollResolutionTests.swift -o scratch/topology-tests; scratch/topology-tests; "
 command += f"xcrun swiftc -swift-version 6 -warnings-as-errors -sdk $(xcrun --sdk iphoneos --show-sdk-path) -target arm64-apple-ios16.0 -typecheck {state} {view}; printf 'PASS actual iPhoneOS UIKit + SwiftUI typecheck\\n'; "
+command += "xcrun swiftc -swift-version 6 -warnings-as-errors -sdk $(xcrun --sdk iphoneos --show-sdk-path) -target arm64-apple-ios16.0 -typecheck RootObserver.swift; printf 'PASS exact production Root observer iOS16 typecheck\\n'; "
 command += f"xcrun swiftc -swift-version 6 -warnings-as-errors -sdk $(xcrun --sdk macosx --show-sdk-path) -target arm64-apple-macos13.0 -typecheck {state} {view}; printf 'PASS actual macOS SwiftUI typecheck\\n'"
 manifest["command"] = command
 result = subprocess.run(outer + [shlex.join(inner + [command])], input=archive.getvalue(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

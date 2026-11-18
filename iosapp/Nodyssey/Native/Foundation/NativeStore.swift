@@ -84,7 +84,10 @@ import NodysseyNativeCore
         var identity = arguments
         // A transport handle changes on reattachment; board/sort/query/page do not.
         if name == "feed" || name == "search.feed" { identity.removeValue(forKey: "pagerId") }
-        if name == "feed" { identity.removeValue(forKey: "page") } // Resume page, not board/sort identity.
+        if name == "feed" {
+            identity.removeValue(forKey: "page") // Resume page, not board/sort identity.
+            identity.removeValue(forKey: "forceInitialRefresh") // One-shot transport policy, not feed identity.
+        }
         let next = Key(app: ObjectIdentifier(app), generation: app.generation, operation: name, arguments: identity)
         if key != next { invalidate(); key = next }
         app.register(self)

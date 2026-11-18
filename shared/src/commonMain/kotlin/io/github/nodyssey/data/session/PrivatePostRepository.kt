@@ -7,7 +7,12 @@ import kotlinx.coroutines.flow.Flow
 
 /** iOS opt-in. Control-plane cleanup uses the raw repository only after joined revocation. */
 class PrivatePostRepository(private val delegate: PostRepository, private val boundary: PrivateSessionBoundary) : PostRepository {
-    override fun feed(categorySlug: String?, sort: FeedSort, startPage: Int): Flow<PagingData<FeedPost>> = boundary.protect(delegate.feed(categorySlug, sort, startPage))
+    override fun feed(categorySlug: String?, sort: FeedSort, startPage: Int, forceInitialRefresh: Boolean): Flow<PagingData<FeedPost>> {
+        val flow = delegate.feed(categorySlug, sort, startPage, forceInitialRefresh)
+        return if (flow is io.github.nodyssey.data.FeedPagingFlow) {
+            io.github.nodyssey.data.FeedPagingFlow(boundary.protect(flow.generations))
+        } else boundary.protect(flow)
+    }
     override fun feedTotalPages(categorySlug: String?, sort: FeedSort): Flow<Int> = boundary.protect(delegate.feedTotalPages(categorySlug, sort))
     override suspend fun feedRowIndexOfPage(categorySlug: String?, sort: FeedSort, page: Int): Int? = boundary.protect { delegate.feedRowIndexOfPage(categorySlug, sort, page) }
     override fun searchFeed(query: String, categorySlug: String?, sort: FeedSort): Flow<PagingData<FeedPost>> = boundary.protect(delegate.searchFeed(query, categorySlug, sort))

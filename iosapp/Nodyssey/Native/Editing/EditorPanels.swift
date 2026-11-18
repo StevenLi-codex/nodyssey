@@ -9,11 +9,11 @@ struct EditorToolbar: View {
     let onPanel: (EditorPanel) -> Void
     let onPhotos: () -> Void
     var compact = false
-    static let all = ["IMAGE", "HOSTED_IMAGE", "EMOJI", "MENTION", "BOLD", "LINK", "QUOTE", "CODE", "LIST", "HEADING", "STRIKETHROUGH", "ITALIC"]
-    static func defaults(_ surface: String) -> [String] { surface == "MESSAGE" ? ["BOLD", "CODE", "LINK", "HOSTED_IMAGE", "EMOJI"] : all }
+    static let all = EditorToolbarLayout.all
+    static func defaults(_ surface: String) -> [String] { EditorToolbarLayout.defaults(surface) }
     private var actions: [String] {
         let key = model.session.mode.surface.lowercased() + "ToolbarActions"
-        return app.settings[key]?.array?.compactMap(\.string).filter { Self.all.contains($0) } ?? Self.defaults(model.session.mode.surface)
+        return EditorToolbarLayout.actions(app.settings[key]?.array?.compactMap(\.string), surface: model.session.mode.surface)
     }
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -115,7 +115,7 @@ struct EditorPanelView: View {
             case .receive: await store.load(app, "profile.self")
             case .toolbar:
                 let key = model.session.mode.surface.lowercased() + "ToolbarActions"
-                toolbar = app.settings[key]?.array?.compactMap(\.string) ?? EditorToolbar.defaults(model.session.mode.surface)
+                toolbar = EditorToolbarLayout.actions(app.settings[key]?.array?.compactMap(\.string), surface: model.session.mode.surface)
             default: break
             }
         }
@@ -215,9 +215,11 @@ struct EditorPanelView: View {
     private var toolbarList: some View {
         List {
             Section(EL("visible")) {
-                ForEach(toolbar, id: \.self) { key in Text(EL(key)) }
+                ForEach(toolbar, id: \.self) { key in
+                    Text(EL(key)).deleteDisabled(toolbar.count <= 1)
+                }
                     .onMove { source, target in toolbar.move(fromOffsets: source, toOffset: target) }
-                    .onDelete { toolbar.remove(atOffsets: $0) }
+                    .onDelete { toolbar = EditorToolbarLayout.removing($0, from: toolbar) }
             }
             Section(EL("available")) {
                 ForEach(EditorToolbar.all.filter { !toolbar.contains($0) }, id: \.self) { key in
@@ -226,7 +228,7 @@ struct EditorPanelView: View {
             }
             Button(EL("reset")) { toolbar = EditorToolbar.defaults(model.session.mode.surface) }
             Button(EL("save")) {
-                guard !busy else { return }
+                guard !busy, !toolbar.isEmpty else { return }
                 busy = true
                 Task {
                     defer { busy = false }
@@ -235,7 +237,7 @@ struct EditorPanelView: View {
                         dismiss()
                     } catch { model.report(error) }
                 }
-            }.disabled(busy)
+            }.disabled(busy || toolbar.isEmpty)
         }
         #if os(iOS)
         .environment(\.editMode, .constant(.active))

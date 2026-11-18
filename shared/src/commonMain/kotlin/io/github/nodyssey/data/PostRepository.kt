@@ -6,6 +6,7 @@ import androidx.paging.LoadStates
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.paging.PagingSource
 import androidx.paging.map
 import io.github.nodyssey.data.local.CacheSessionEntity
 import io.github.nodyssey.data.local.CommentEntity
@@ -28,15 +29,22 @@ import io.github.plaza.core.AppClock
 import io.github.plaza.core.net.SiteError
 import io.github.plaza.core.net.SiteException
 import io.github.plaza.core.runCatchingExceptCancellation
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * One row as the list renders it: the post, plus what the user has already seen of it.
@@ -55,6 +63,12 @@ data class FeedPost(
      */
     val page: Int? = null,
 )
+
+/** Observation-local provenance; a generation is eligible only after a successful Room commit. */
+class FeedPagingGeneration(val data: PagingData<FeedPost>, val afterRemoteRefresh: kotlinx.coroutines.flow.StateFlow<Boolean>)
+
+/** Preserved through the private boundary; no row IDs, clocks or load-state latches are receipts. */
+class FeedPagingFlow(val generations: Flow<FeedPagingGeneration>) : Flow<PagingData<FeedPost>> by generations.map({ it.data })
 
 /**
  * One line of the browsing history.
@@ -111,11 +125,16 @@ interface PostRepository {
      * @param startPage where the window begins. Callers that simply want the feed leave it alone; it
      * is 首页翻页栏 that asks for anything else, and asking for a different one is what replaces the
      * stored window rather than appending to it.
+     * @param forceInitialRefresh explicit user intent to fetch even a fresh cached window. Applies
+     * only to the initial refresh in each collection; reveal changes retain that same mediator.
+     * Do not also issue a
+     * paging refresh; clear this one-shot argument before a later ordinary observation.
      */
     fun feed(
         categorySlug: String?,
         sort: FeedSort,
         startPage: Int = FeedRemoteMediator.FIRST_PAGE,
+        forceInitialRefresh: Boolean = false,
     ): Flow<PagingData<FeedPost>>
 
     /**
@@ -397,9 +416,10 @@ class OfflineFirstPostRepository(
         categorySlug: String?,
         sort: FeedSort,
         startPage: Int,
+        forceInitialRefresh: Boolean,
     ): Flow<PagingData<FeedPost>> {
         val feedKey = feedKeyFor(categorySlug, sort)
-        return pagedFeed(feedKey, startPage) { page -> remote.loadList(categorySlug, page, sort) }
+        return pagedFeed(feedKey, startPage, forceInitialRefresh) { page -> remote.loadList(categorySlug, page, sort) }
     }
 
     override fun feedTotalPages(
@@ -449,32 +469,103 @@ class OfflineFirstPostRepository(
     }
 
     /**
-     * One pager shape for every list of posts, so a feed and a search can never drift apart.
-     *
-     * Flipping 临时显示被屏蔽内容 builds a new pager rather than filtering an existing one, because the
-     * paging window is what the query decides: reveal has to change which rows exist, not which of
-     * the loaded ones are drawn. The rows themselves are already in Room either way, so the reveal
-     * costs a re-query and not a request.
+     * Reveal changes invalidate only the Room source, not the Pager/mediator. SQL filtering must
+     * retain its row-count/placeholder semantics (PagingData.filter cannot express that).
      */
     private fun pagedFeed(
         feedKey: String,
         startPage: Int = FeedRemoteMediator.FIRST_PAGE,
+        forceInitialRefresh: Boolean = false,
         loadPage: suspend (page: Int) -> PostListPage,
-    ): Flow<PagingData<FeedPost>> =
-        showBlockedContent.distinctUntilChanged().flatMapLatest { includeBlocked ->
-            Pager(
-                config = FEED_PAGING_CONFIG,
-                remoteMediator =
-                FeedRemoteMediator(
-                    feedKey = feedKey,
-                    database = database,
-                    clock = clock,
-                    startPage = startPage,
-                    loadPage = loadPage,
-                ),
-                pagingSourceFactory = { database.feedDao().pagingSource(feedKey, includeBlocked) },
-            ).flow
-        }.map { pagingData -> pagingData.map(FeedPostRow::toFeedPost) }
+    ): Flow<PagingData<FeedPost>> {
+        // Keep ordinary/search paging unchanged; only explicit observation refreshes need receipts.
+        if (!forceInitialRefresh) {
+            return showBlockedContent.distinctUntilChanged().flatMapLatest { includeBlocked ->
+                Pager(
+                    config = FEED_PAGING_CONFIG,
+                    remoteMediator = FeedRemoteMediator(feedKey, database, clock, startPage, loadPage = loadPage),
+                    pagingSourceFactory = { database.feedDao().pagingSource(feedKey, includeBlocked) },
+                ).flow
+            }.map { it.map(FeedPostRow::toFeedPost) }
+        }
+        return FeedPagingFlow(
+            channelFlow {
+                val transaction = Mutex()
+                var committed = false
+                var includeBlocked = false
+                var activeSource: PagingSource<Int, FeedPostRow>? = null
+                val ready = CompletableDeferred<Unit>()
+                val generations = Channel<kotlinx.coroutines.flow.StateFlow<Boolean>>(Channel.UNLIMITED)
+                val settings = launch(start = CoroutineStart.UNDISPATCHED) {
+                    showBlockedContent.distinctUntilChanged().collect { reveal ->
+                        transaction.withLock {
+                            includeBlocked = reveal
+                            activeSource?.invalidate()
+                            ready.complete(Unit)
+                        }
+                    }
+                }
+                ready.await()
+                try {
+                    Pager(
+                        config = FEED_PAGING_CONFIG,
+                        remoteMediator = FeedRemoteMediator(
+                            feedKey = feedKey,
+                            database = database,
+                            clock = clock,
+                            startPage = startPage,
+                            forceInitialRefresh = forceInitialRefresh,
+                            refreshTransaction = { write ->
+                                transaction.withLock {
+                                    write()
+                                    committed = true
+                                    // Also forces a post-commit read for identical/empty transactions.
+                                    activeSource?.invalidate()
+                                }
+                            },
+                            loadPage = loadPage,
+                        ),
+                        pagingSourceFactory = {
+                            val receipt = kotlinx.coroutines.flow.MutableStateFlow(false)
+                            // Factory itself does not suspend. The REFRESH load serializes its Room query
+                            // with commit/settings, so its immutable result has unambiguous provenance.
+                            val source = object : PagingSource<Int, FeedPostRow>() {
+                                // Paging asks the NEW source for its key before its first load. Create
+                                // Room's delegate now to retain its clipped-anchor calculation; queries
+                                // still run only inside the transaction/settings barrier below.
+                                private val room = database.feedDao().pagingSource(feedKey, includeBlocked)
+                                init {
+                                    room.registerInvalidatedCallback { invalidate() }
+                                    registerInvalidatedCallback { room.invalidate() }
+                                }
+                                override val jumpingSupported get() = room.jumpingSupported
+                                override fun getRefreshKey(state: androidx.paging.PagingState<Int, FeedPostRow>): Int? =
+                                    room.getRefreshKey(state)
+                                override suspend fun load(params: LoadParams<Int>): LoadResult<Int, FeedPostRow> = transaction.withLock {
+                                    if (invalid) return@withLock LoadResult.Invalid()
+                                    val result = room.load(params)
+                                    if (params is LoadParams.Refresh && result is LoadResult.Page && !invalid) {
+                                        receipt.value = committed
+                                    }
+                                    result
+                                }
+                            }
+                            activeSource = source
+                            check(generations.trySend(receipt).isSuccess)
+                            source
+                        },
+                    ).flow.collect { data ->
+                        send(FeedPagingGeneration(data.map(FeedPostRow::toFeedPost), generations.receive()))
+                    }
+                } finally {
+                    settings.cancel()
+                    // The eager Room delegate owns an invalidation observer even before load().
+                    activeSource?.invalidate()
+                    generations.close()
+                }
+            },
+        )
+    }
 
     override fun search(query: String): Flow<List<FeedPost>> {
         val escaped = query.trim().escapeLikePattern()

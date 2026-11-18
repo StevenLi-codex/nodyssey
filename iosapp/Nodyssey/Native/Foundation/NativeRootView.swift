@@ -144,6 +144,7 @@ private struct NativeTabTapObserver: UIViewControllerRepresentable {
             DispatchQueue.main.async { [weak self] in self?.install() }
         }
         override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); install() }
+        override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); install() }
         func install() {
             var child: UIViewController = self
             while let parent = child.parent {
@@ -151,6 +152,9 @@ private struct NativeTabTapObserver: UIViewControllerRepresentable {
                     if proxy.tabs !== tabs { detach() }
                     proxy.tabs = tabs
                     proxy.home = child
+                    if #available(iOS 18.0, *), tabs.selectedViewController === child {
+                        proxy.homeTab = tabs.selectedTab
+                    }
                     proxy.isHomeRoot = { [weak self] in self?.isHomeRoot() ?? false }
                     proxy.selected = { [weak self] in self?.selected($0, $1, $2) }
                     if tabs.delegate !== proxy {
@@ -165,12 +169,18 @@ private struct NativeTabTapObserver: UIViewControllerRepresentable {
         func detach() {
             if let tabs = proxy.tabs, tabs.delegate === proxy { tabs.delegate = proxy.original }
             proxy.tabs = nil; proxy.home = nil; proxy.original = nil
+            if #available(iOS 18.0, *) { proxy.homeTab = nil }
         }
     }
 
     final class DelegateProxy: NSObject, UITabBarControllerDelegate {
         weak var tabs: UITabBarController?
         weak var home: UIViewController?
+        private weak var homeTabObject: NSObject?
+        @available(iOS 18.0, *) var homeTab: UITab? {
+            get { homeTabObject as? UITab }
+            set { homeTabObject = newValue }
+        }
         // NSObject forwarding is nonisolated; UIKit owns all delegate access on
         // the main thread. Store the weak reference without crossing Any through
         // assumeIsolated's Sendable return requirement.
@@ -178,6 +188,25 @@ private struct NativeTabTapObserver: UIViewControllerRepresentable {
         var isHomeRoot: () -> Bool = { false }
         var selected: (Bool, Bool, Bool) -> Void = { _, _, _ in }
         private var before: (wasHome: Bool, wasRoot: Bool)?
+
+        // SwiftUI uses UITab on iOS 18+: forwarding these selectors directly to
+        // SwiftUI bypassed our legacy UIViewController callbacks entirely.
+        @available(iOS 18.0, *)
+        func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+            before = (homeTab != nil && tabBarController.selectedTab === homeTab, isHomeRoot())
+            let allowed = original?.tabBarController?(tabBarController, shouldSelectTab: tab) ?? true
+            if !allowed { before = nil }
+            return allowed
+        }
+        @available(iOS 18.0, *)
+        func tabBarController(_ tabBarController: UITabBarController, didSelectTab tab: UITab, previousTab: UITab?) {
+            // previousTab is authoritative even when shouldSelect is omitted for
+            // reselect; capture root before forwarding a possible pop-to-root.
+            let captured = before ?? (homeTab != nil && previousTab === homeTab, isHomeRoot())
+            before = nil
+            original?.tabBarController?(tabBarController, didSelectTab: tab, previousTab: previousTab)
+            selected(captured.wasHome, homeTab != nil && tab === homeTab, captured.wasRoot)
+        }
 
         func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
             // Capture before forwarding: SwiftUI's delegate may mutate selection

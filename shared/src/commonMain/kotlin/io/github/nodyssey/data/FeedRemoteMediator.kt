@@ -42,6 +42,10 @@ class FeedRemoteMediator(
      * same way switching board or sort order does.
      */
     private val startPage: Int = FIRST_PAGE,
+    // Explicit user refresh of a newly opened pager; ordinary navigation keeps the TTL policy.
+    private val forceInitialRefresh: Boolean = false,
+    // Serializes source reads with a successful refresh commit, when provenance is requested.
+    private val refreshTransaction: suspend (suspend () -> Unit) -> Unit = { it() },
     /**
      * How one page of this feed is fetched.
      *
@@ -65,6 +69,7 @@ class FeedRemoteMediator(
      * reader leaves page 40 and asks for page 1 again.
      */
     override suspend fun initialize(): InitializeAction {
+        if (forceInitialRefresh) return InitializeAction.LAUNCH_INITIAL_REFRESH
         if (database.feedDao().firstLoadedPage(feedKey) != startPage) {
             return InitializeAction.LAUNCH_INITIAL_REFRESH
         }
@@ -108,45 +113,48 @@ class FeedRemoteMediator(
             val result = loadPage(page)
             val now = clock.nowMillis()
 
-            database.writeTransaction {
-                val feedDao = database.feedDao()
-                if (loadType == LoadType.REFRESH) feedDao.clearFeed(feedKey)
+            val write: suspend () -> Unit = {
+                database.writeTransaction {
+                    val feedDao = database.feedDao()
+                    if (loadType == LoadType.REFRESH) feedDao.clearFeed(feedKey)
 
-                val baseSortIndex = feedDao.nextSortIndex(feedKey)
-                feedDao.upsertPosts(result.posts.map { it.toEntity(now) })
-                database.titleKeywordDao().matchRegexHits(result.posts.map { PostTitle(it.postId, it.title) })
-                feedDao.insertPositions(
-                    result.posts.mapIndexed { offset, post ->
-                        FeedPositionEntity(
-                            feedKey = feedKey,
-                            postId = post.postId,
-                            sortIndex = baseSortIndex + offset,
-                            page = page,
-                        )
-                    },
-                )
-                feedDao.upsertRemoteKey(
-                    FeedRemoteKeyEntity(
-                        feedKey = feedKey,
-                        nextPage = if (result.hasNextPage) page + 1 else null,
-                        // The pager's own highest number, which only 首页翻页栏 reads. A page that
-                        // renders no pager reports itself as the total, so a one-page feed stays 1.
-                        totalPages = maxOf(result.totalPages, page),
-                        // Only a refresh resets the clock. If appending bumped it, scrolling a long
-                        // list would keep pushing the staleness window out and the feed would never
-                        // refresh again.
-                        refreshedAtMillis =
-                        if (loadType == LoadType.REFRESH) {
-                            now
-                        } else {
-                            previousKey?.refreshedAtMillis ?: now
+                    val baseSortIndex = feedDao.nextSortIndex(feedKey)
+                    feedDao.upsertPosts(result.posts.map { it.toEntity(now) })
+                    database.titleKeywordDao().matchRegexHits(result.posts.map { PostTitle(it.postId, it.title) })
+                    feedDao.insertPositions(
+                        result.posts.mapIndexed { offset, post ->
+                            FeedPositionEntity(
+                                feedKey = feedKey,
+                                postId = post.postId,
+                                sortIndex = baseSortIndex + offset,
+                                page = page,
+                            )
                         },
-                    ),
-                )
-                // Rows the cleared feed left behind are dropped here, inside the same transaction,
-                // so the table cannot grow without bound across refreshes.
-                if (loadType == LoadType.REFRESH) feedDao.deleteOrphanedPosts()
+                    )
+                    feedDao.upsertRemoteKey(
+                        FeedRemoteKeyEntity(
+                            feedKey = feedKey,
+                            nextPage = if (result.hasNextPage) page + 1 else null,
+                            // The pager's own highest number, which only 首页翻页栏 reads. A page that
+                            // renders no pager reports itself as the total, so a one-page feed stays 1.
+                            totalPages = maxOf(result.totalPages, page),
+                            // Only a refresh resets the clock. If appending bumped it, scrolling a long
+                            // list would keep pushing the staleness window out and the feed would never
+                            // refresh again.
+                            refreshedAtMillis =
+                            if (loadType == LoadType.REFRESH) {
+                                now
+                            } else {
+                                previousKey?.refreshedAtMillis ?: now
+                            },
+                        ),
+                    )
+                    // Rows the cleared feed left behind are dropped here, inside the same transaction,
+                    // so the table cannot grow without bound across refreshes.
+                    if (loadType == LoadType.REFRESH) feedDao.deleteOrphanedPosts()
+                }
             }
+            if (loadType == LoadType.REFRESH) refreshTransaction(write) else write()
 
             MediatorResult.Success(endOfPaginationReached = !result.hasNextPage)
         } catch (e: CancellationException) {

@@ -1,6 +1,26 @@
 import Foundation
 import NodysseyNativeCore
 
+/// Match the shared toolbarLayout contract: empty means never customised.
+enum EditorToolbarLayout {
+    static let all = ["IMAGE", "HOSTED_IMAGE", "EMOJI", "MENTION", "BOLD", "LINK", "QUOTE", "CODE", "LIST", "HEADING", "STRIKETHROUGH", "ITALIC"]
+    static func defaults(_ surface: String) -> [String] {
+        surface == "MESSAGE" ? ["BOLD", "CODE", "LINK", "HOSTED_IMAGE", "EMOJI"] : all
+    }
+    /// Reject an entire deletion that would reset a custom layout to defaults.
+    static func removing(_ offsets: IndexSet, from actions: [String]) -> [String] {
+        guard offsets.count < actions.count else { return actions }
+        var remaining = actions
+        for index in offsets.reversed() { remaining.remove(at: index) }
+        return remaining
+    }
+    static func actions(_ stored: [String]?, surface: String) -> [String] {
+        var seen: Set<String> = []
+        let enabled = (stored ?? []).filter { all.contains($0) && seen.insert($0).inserted }
+        return enabled.isEmpty ? defaults(surface) : enabled
+    }
+}
+
 enum EditorMode: Equatable, Sendable {
     case post
     case reply(postID: Int64)

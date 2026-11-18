@@ -24,8 +24,14 @@ import Testing
     #expect({ gate.tap(at: 2.4, wasHome: true, isHome: true, isRoot: true, atTop: false) }())
 }
 
-@Test func detailTopAndInvalidTimeCannotCompletePair() {
-    for blocked in [0, 1, 2, 3, 4, 5] {
+@Test func doubleTapAtTopStillRequestsRefresh() {
+    var gate = NativeHomeTabInteraction()
+    #expect(!{ gate.tap(at: 1, wasHome: true, isHome: true, isRoot: true, atTop: true) }())
+    #expect({ gate.tap(at: 1.2, wasHome: true, isHome: true, isRoot: true, atTop: true) }())
+}
+
+@Test func detailAndInvalidTimeCannotCompletePair() {
+    for blocked in [0, 2, 3, 4, 5] {
         var gate = NativeHomeTabInteraction()
         #expect(!{ gate.tap(at: 1, wasHome: true, isHome: true, isRoot: true, atTop: false) }())
         let time: Double = blocked == 2 ? .nan : blocked == 3 ? .infinity : blocked == 4 ? 0.9 : blocked == 5 ? -1 : 1.1

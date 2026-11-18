@@ -309,7 +309,10 @@ internal fun NativeContext.contentObserve(operation: String, args: JsonObject): 
         val slug = args.nativeOptionalText("categorySlug")
         val sort = args.nativeEnum("sort", FeedSort.LAST_REPLY)
         val page = args.nativePage()
-        nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.feed(slug, sort, page), graph.postRepository.feedTotalPages(slug, sort), page)
+        // One initial mediator refresh, never an additional presenter.refresh(). The caller must
+        // omit the one-shot flag on later ordinary observations, keeping its identity separate.
+        val forceInitialRefresh = args.nativeBoolean("forceInitialRefresh", false)
+        nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.feed(slug, sort, page, forceInitialRefresh), graph.postRepository.feedTotalPages(slug, sort), page)
     }
 
     "search.feed" -> nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.searchFeed(args.nativeText("query"), args.nativeOptionalText("categorySlug"), args.nativeEnum("sort", FeedSort.LAST_REPLY)), null, 1)
@@ -390,6 +393,9 @@ internal fun nativePagingFlow(
     mainContext: CoroutineContext = Dispatchers.Main,
 ): Flow<JsonElement> = channelFlow {
     var totalPages: Int? = null
+    // A source receipt is accepted only when that very generation has installed its Refresh list.
+    var currentReceipt: kotlinx.coroutines.flow.StateFlow<Boolean>? = null
+    var presentedRemoteRefresh = false
     lateinit var presenter: PagingDataPresenter<FeedPost>
     fun nativeSnapshot(): JsonObject {
         val snapshot = presenter.snapshot()
@@ -399,10 +405,14 @@ internal fun nativePagingFlow(
             "placeholdersBefore" to snapshot.placeholdersBefore, "placeholdersAfter" to snapshot.placeholdersAfter,
             "itemCount" to snapshot.size, "page" to page, "totalPages" to totalPages,
             "refresh" to nativeLoadState(states?.refresh), "append" to nativeLoadState(states?.append), "prepend" to nativeLoadState(states?.prepend),
+            "remoteRefreshComplete" to (presentedRemoteRefresh && states?.mediator?.refresh is LoadState.NotLoading && states.refresh is LoadState.NotLoading),
         )
     }
     presenter = object : PagingDataPresenter<FeedPost>(mainContext) {
         override suspend fun presentPagingDataEvent(event: PagingDataEvent<FeedPost>) {
+            if (event is PagingDataEvent.Refresh) {
+                presentedRemoteRefresh = currentReceipt?.value == true
+            }
             send(nativeSnapshot())
         }
     }
@@ -417,7 +427,14 @@ internal fun nativePagingFlow(
                 }
             }
         }
-        data.collectLatest { presenter.collectFrom(it) }
+        if (data is io.github.nodyssey.data.FeedPagingFlow) {
+            data.generations.collectLatest { generation ->
+                currentReceipt = generation.afterRemoteRefresh
+                presenter.collectFrom(generation.data)
+            }
+        } else {
+            data.collectLatest { presenter.collectFrom(it) }
+        }
         // Static/empty PagingData can finish; the Swift subscription still owns its handle.
         awaitCancellation()
     } finally {

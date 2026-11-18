@@ -19,6 +19,7 @@ internal open class NoOpPostRepository : PostRepository {
         categorySlug: String?,
         sort: FeedSort,
         startPage: Int,
+        forceInitialRefresh: Boolean,
     ): Flow<PagingData<FeedPost>> = emptyFlow()
 
     override fun feedTotalPages(categorySlug: String?, sort: FeedSort): Flow<Int> = emptyFlow()

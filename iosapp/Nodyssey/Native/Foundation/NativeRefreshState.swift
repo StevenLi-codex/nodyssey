@@ -53,6 +53,9 @@ struct NativeRefreshState: Equatable {
     var onChange: ((NativeRefreshState) -> Void)?
     private var active: Task<Void, Never>?
     private var activeToken: UUID?
+    private var ownerEpoch: UInt64 = 0
+    private var activeEpoch: UInt64 = 0
+    private var admissionSerial: UInt64 = 0
     private var visible = true
 
     deinit { active?.cancel() }
@@ -66,6 +69,13 @@ struct NativeRefreshState: Equatable {
 
     func cancel() {
         visible = false
+        invalidate()
+    }
+
+    /// Rebinding a UIKit scroll/control is not disappearance of its SwiftUI page.
+    /// Revoke the old token without permanently closing admission for that page.
+    func invalidate() {
+        ownerEpoch &+= 1
         state.reset()
         active?.cancel()
     }
@@ -77,19 +87,37 @@ struct NativeRefreshState: Equatable {
         action: @escaping @MainActor () async -> Void
     ) async {
         guard visible, !Task.isCancelled else { return }
-        if let active {
+        let requestedEpoch = ownerEpoch
+        let requestedSerial = admissionSerial
+        while let draining = active {
             let token = activeToken
-            await withTaskCancellationHandler { await active.value } onCancel: {
-                active.cancel()
+            let sameOwner = activeEpoch == requestedEpoch
+            await withTaskCancellationHandler { await draining.value } onCancel: {
+                // A new owner's cancelled waiter must not cancel unrelated work.
+                if sameOwner { draining.cancel() }
                 Task { @MainActor [weak self] in
-                    guard let self, let token, self.activeToken == token else { return }
+                    guard sameOwner, let self, let token, self.activeToken == token else { return }
                     self.state.collapse(token)
                 }
             }
-            return
+            guard visible, !Task.isCancelled, ownerEpoch == requestedEpoch else { return }
+            // Any waiter can retire a drained task. The old creator's token fence
+            // prevents its eventual cleanup from clearing the replacement flight.
+            if sameOwner { return }
+            if admissionSerial != requestedSerial {
+                // A peer admitted this owner's intent while we resumed. Join its
+                // drain if still installed, never replay after a fast completion.
+                if let current = active, activeEpoch == requestedEpoch { await current.value }
+                return
+            }
+            if activeToken == token { active = nil; activeToken = nil }
+            // Invalidated work was serialization, not this new explicit intent.
+            // Recheck once more so simultaneous new-owner callers coalesce.
         }
         let token = UUID()
         guard state.begin(token) else { return }
+        admissionSerial &+= 1
+        activeEpoch = requestedEpoch
         activeToken = token
         let work = Task { @MainActor [weak self] in
             guard !Task.isCancelled else { return }

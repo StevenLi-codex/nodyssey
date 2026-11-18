@@ -4,50 +4,48 @@ import NodysseyNativeCore
 import UIKit
 #endif
 
-/// Sheet presentation does not own the model. Only the registered thread departure
-/// can terminate it; a gesture first commits IME input and awaits the existing draft queue.
+/// The thread owns the draft. Only auxiliary panels are presented; the input stays
+/// mounted in the thread's single bottom inset through blur and preview transitions.
 struct EditorThreadReplyPresentation: ViewModifier {
     @ObservedObject var owner: EditorReplyLifetime
     let covered: Bool
     let onPublished: (JSONValue) -> Void
-    @State private var previewPresented = false
-    private var sheetVisible: Binding<Bool> {
-        Binding(get: { owner.visible && !owner.previewVisible && !covered }, set: { showing in
-            if !showing && !covered && !owner.previewVisible { Task { await owner.hide() } }
-        })
-    }
+    var onOpen: () -> Void = {}
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: sheetVisible, onDismiss: {
-                if owner.visible && owner.previewVisible && !covered { previewPresented = true }
-            }) {
-                if let model = owner.model {
-                    EditorReplySheet(model: model, owner: owner, onPreview: {
-                        model.focus.handoff {
-                            owner.previewVisible = true
-                            Task { await model.showPreview() }
-                        }
-                    }, onPublished: onPublished)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !covered {
+                    if let model = owner.model {
+                        EditorInlineReply(model: model, owner: owner, onPublished: onPublished)
+                    } else {
+                        Button(action: onOpen) {
+                            HStack {
+                                Image(systemName: "square.and.pencil")
+                                Text(EL("reply")).foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }.frame(minHeight: 44).contentShape(Rectangle())
+                        }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 4)
+                            .background(.background)
+                    }
                 }
             }
             #if os(iOS)
-            .fullScreenCover(isPresented: $previewPresented, onDismiss: finishPreview) { preview }
+            .fullScreenCover(isPresented: previewVisible, onDismiss: finishPreview) { preview }
             #else
-            .sheet(isPresented: $previewPresented, onDismiss: finishPreview) { preview }
+            .sheet(isPresented: previewVisible, onDismiss: finishPreview) { preview }
             #endif
             .onChange(of: covered) { value in
                 if value {
-                    previewPresented = false
                     owner.model?.focus.handoff {}
                     if let model = owner.model { Task { do { try await model.flush() } catch { model.report(error) } } }
-                } else if owner.previewVisible && owner.visible { previewPresented = true }
+                }
             }
-            .onChange(of: owner.visible) { if !$0 { previewPresented = false } }
+    }
+    private var previewVisible: Binding<Bool> {
+        Binding(get: { owner.previewVisible && !covered }, set: { if !$0 && !covered { finishPreview() } })
     }
     @ViewBuilder private var preview: some View {
-        if let model = owner.model {
-            EditorReplyPreview(model: model, close: { previewPresented = false })
-        }
+        if let model = owner.model { EditorReplyPreview(model: model, close: finishPreview) }
     }
     private func finishPreview() {
         if !covered { owner.previewVisible = false; owner.model?.previewing = false; owner.model?.preview = nil }
@@ -65,110 +63,90 @@ private struct EditorReplyPreview: View {
                 else { ProgressView().padding() }
             }
             .navigationTitle(EL("preview"))
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(EL("edit"), action: close).frame(minHeight: 44) } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(EL("edit"), action: close).frame(minWidth: 44, minHeight: 44) } }
         }
     }
 }
 
-private struct EditorReplySheet: View {
+private struct EditorInlineReply: View {
     @EnvironmentObject private var app: NativeAppModel
     @ObservedObject var model: EditorViewModel
     @ObservedObject var owner: EditorReplyLifetime
-    let onPreview: () -> Void
     let onPublished: (JSONValue) -> Void
     @State private var panel: EditorPanel?
     @State private var photos = false
     @State private var emoji = false
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var explicitlyExpanded = false
-
-    private var expanded: Bool { dynamicTypeSize.isAccessibilitySize || explicitlyExpanded }
-    // Offering .large beside the compact detent makes UIKit choose full height
-    // during keyboard avoidance, without changing SwiftUI's selected detent.
-    // Only an explicit user action may offer the large detent.
-    private var detents: Set<PresentationDetent> {
-        expanded ? [.large] : [.height(240)]
-    }
+    @State private var tools = false
+    @State private var expanded = false
     private var session: EditorSession { model.session }
     private var canPublish: Bool {
         model.ready && !session.busy && !session.accepted && session.pendingRestore == nil && model.attachments.isEmpty && !session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Button(action: close) { Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44) }.accessibilityLabel(EL("close"))
-                Text(EL("reply") + (session.replyContext["replyToFloor"]?.int.map { " #\($0)" } ?? ""))
-                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
-                Button { explicitlyExpanded.toggle() } label: {
-                    Image(systemName: explicitlyExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .frame(minWidth: 44, minHeight: 44)
-                }.accessibilityLabel(EL(explicitlyExpanded ? "collapse" : "expand"))
-                Button(action: onPreview) { Image(systemName: "eye").frame(minWidth: 44, minHeight: 44) }
-                    .accessibilityLabel(EL("preview")).disabled(!model.ready || session.busy)
-                Button(EL("publishReply")) {
-                    model.focus.handoff {
-                        Task { if let result = await owner.publish() { onPublished(result) } }
-                    }
-                }.frame(minHeight: 44).disabled(!canPublish)
-            }.padding(.horizontal, 8)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if session.replyContext["replyToFloor"]?.int != nil {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("@" + (session.replyContext["replyToAuthor"]?.string ?? "")).font(.subheadline.weight(.medium))
-                                Text(session.replyContext["replyToText"]?.string ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                            Spacer(minLength: 0)
-                            Button { model.clearReplyTarget() } label: { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
-                                .accessibilityLabel(EL("removeQuote"))
-                        }.padding(8).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    if session.pendingRestore != nil {
-                        Text(EL("draftFound")).font(.caption)
-                        HStack {
-                            Button(EL("restore")) { model.focus.handoff { if let draft = session.pendingRestore { session.restore(draft) } } }
-                            Button(EL("keepCurrent")) { model.focus.handoff { session.keepCurrent() } }
-                        }.frame(minHeight: 44)
-                    }
-                    if !model.ready {
-                        if let failure = model.failure { NativeFailureView(failure: failure, retry: {
-                            if case .reply(let postID) = session.mode {
-                                Task { await owner.open(postID: postID, transport: app.transport, generation: app.generation) }
-                            }
-                        }) }
-                        else { ProgressView() }
-                    }
-                    MarkedTextEditor(buffer: Binding(get: { session.body }, set: session.changeBody), focus: model.focus, accessibilityLabel: EL("body"), autofocus: model.ready && owner.initialFocusAllowed)
-                        // Match the original reply's bounded editor, not a half-page empty field.
-                        // Expansion is explicit; keyboard avoidance must not select long-editor mode.
-                        .frame(height: expanded ? 260 : 80)
-                        .simultaneousGesture(TapGesture().onEnded { emoji = false })
-                    attachments
-                    if session.accepted { Text(EL("acceptedDetail")).font(.caption) }
-                    if let failure = model.failure, model.ready { NativeFailureView(failure: failure) }
+            Divider()
+            if session.replyContext["replyToFloor"]?.int != nil {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("@" + (session.replyContext["replyToAuthor"]?.string ?? "")).font(.caption.weight(.medium))
+                        Text(session.replyContext["replyToText"]?.string ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Button { model.clearReplyTarget() } label: { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
+                        .accessibilityLabel(EL("removeQuote"))
                 }.padding(.horizontal, 16)
             }
-            Divider()
-            EditorToolbar(model: model, onPanel: { selected in
-                model.focus.handoff {
-                    if selected == .stickers { emoji.toggle() }
-                    else { emoji = false; panel = selected }
-                }
-            }, onPhotos: { model.focus.handoff { emoji = false; photos = true } }, compact: true)
-            if emoji {
-                EditorPanelView(panel: .stickers, model: model, embedded: true)
-                    .frame(height: 200)
+            if session.pendingRestore != nil {
+                HStack {
+                    Text(EL("draftFound")).font(.caption)
+                    Button(EL("restore")) { model.focus.handoff { if let draft = session.pendingRestore { session.restore(draft) } } }
+                    Button(EL("keepCurrent")) { model.focus.handoff { session.keepCurrent() } }
+                }.frame(minHeight: 44).padding(.horizontal, 16)
             }
+            if !model.ready {
+                if let failure = model.failure {
+                    NativeFailureView(failure: failure, retry: {
+                        if case .reply(let postID) = session.mode { Task { await owner.open(postID: postID, transport: app.transport, generation: app.generation) } }
+                    })
+                } else { ProgressView() }
+            }
+            HStack(alignment: .bottom, spacing: 0) {
+                Menu {
+                    Button(EL("IMAGE")) { model.focus.handoff { emoji = false; photos = true } }
+                    Button(EL("preview")) { model.focus.handoff { owner.previewVisible = true; Task { await model.showPreview() } } }
+                        .disabled(!model.ready || session.busy)
+                    Button(EL(expanded ? "collapse" : "expand")) { expanded.toggle() }
+                    Button(EL("toolbar")) { tools.toggle() }
+                    Button(EL("close")) { close() }
+                } label: { Image(systemName: "plus.circle").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel(EL("IMAGE"))
+                Button { model.focus.handoff { emoji.toggle() } } label: { Image(systemName: "face.smiling").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel(EL("EMOJI"))
+                MarkedTextEditor(buffer: Binding(get: { session.body }, set: session.changeBody), focus: model.focus,
+                                 accessibilityLabel: EL("body"), autofocus: model.ready && owner.initialFocusAllowed,
+                                 maximumVisibleLines: expanded ? 8 : 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .simultaneousGesture(TapGesture().onEnded { emoji = false; owner.visible = true })
+                Button {
+                    model.focus.handoff { Task { if let result = await owner.publish() { onPublished(result) } } }
+                } label: { Image(systemName: "arrow.up.circle.fill").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel(EL("publishReply")).disabled(!canPublish)
+            }.padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 4)
+            if tools {
+                EditorToolbar(model: model, onPanel: { selected in
+                    model.focus.handoff {
+                        if selected == .stickers { emoji.toggle() }
+                        else { emoji = false; panel = selected }
+                    }
+                }, onPhotos: { model.focus.handoff { emoji = false; photos = true } }, compact: true)
+            }
+            attachments
+            if let failure = model.failure, model.ready { NativeFailureView(failure: failure) }
         }
+        .background(.background)
         .disabled(owner.closing || app.departureRunning || session.busy)
-        .interactiveDismissDisabled(true)
-        .background(EditorReplyDismissAttempt(onAttempt: close))
-        .presentationDetents(detents)
-        .presentationDragIndicator(.visible)
-        .onChange(of: emoji) { if $0 { explicitlyExpanded = true } }
         .sheet(item: $panel) { panel in NavigationStack { EditorPanelView(panel: panel, model: model) } }
         .sheet(isPresented: $photos) { EditorPhotoPicker(model: model) }
+        .sheet(isPresented: $emoji) { NavigationStack { EditorPanelView(panel: .stickers, model: model, embedded: true) } }
         .onDisappear { model.focus.handoff {} }
     }
     private func close() {
@@ -195,33 +173,3 @@ private struct EditorReplySheet: View {
         }
     }
 }
-
-#if canImport(UIKit)
-/// SwiftUI has no async shouldDismiss hook. A refused UIKit gesture invokes the
-/// same awaited hide action as Close; it never lets UIKit discard an unsaved owner.
-private struct EditorReplyDismissAttempt: UIViewControllerRepresentable {
-    let onAttempt: () -> Void
-    func makeUIViewController(context: Context) -> Controller { Controller(onAttempt: onAttempt) }
-    func updateUIViewController(_ controller: Controller, context: Context) { controller.onAttempt = onAttempt; controller.install() }
-    final class Controller: UIViewController, UIAdaptivePresentationControllerDelegate {
-        var onAttempt: () -> Void
-        init(onAttempt: @escaping () -> Void) { self.onAttempt = onAttempt; super.init(nibName: nil, bundle: nil) }
-        required init?(coder: NSCoder) { fatalError("Not a storyboard controller") }
-        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); install() }
-        func install() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                var controller: UIViewController? = self.parent
-                while let current = controller {
-                    if let presentation = current.presentationController { presentation.delegate = self; return }
-                    controller = current.parent
-                }
-            }
-        }
-        func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { false }
-        func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) { onAttempt() }
-    }
-}
-#else
-private struct EditorReplyDismissAttempt: View { let onAttempt: () -> Void; var body: some View { EmptyView() } }
-#endif

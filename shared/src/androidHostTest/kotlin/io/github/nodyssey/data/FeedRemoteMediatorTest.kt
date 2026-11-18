@@ -45,11 +45,13 @@ class FeedRemoteMediatorTest {
     private fun mediator(
         slug: String? = null,
         startPage: Int = FeedRemoteMediator.FIRST_PAGE,
+        forceInitialRefresh: Boolean = false,
     ) = FeedRemoteMediator(
         feedKey = feedKeyFor(slug),
         database = database,
         clock = clock,
         startPage = startPage,
+        forceInitialRefresh = forceInitialRefresh,
     ) { page -> remote.loadList(slug, page, FeedSort.LAST_REPLY) }
 
     private fun emptyPagingState() =
@@ -304,6 +306,22 @@ class FeedRemoteMediatorTest {
             load(LoadType.REFRESH)
             clock.advanceBy(FeedRemoteMediator.CACHE_TTL_MILLIS - 1)
 
+            assertEquals(RemoteMediator.InitializeAction.SKIP_INITIAL_REFRESH, mediator().initialize())
+        }
+
+    @Test
+    fun `an explicit return to page one refreshes even when the stored window still starts at one`() =
+        runTest {
+            load(LoadType.REFRESH)
+            load(LoadType.APPEND)
+            clock.advanceBy(1000)
+            val before = remote.listRequests.size
+            val explicit = mediator(forceInitialRefresh = true)
+
+            assertEquals(RemoteMediator.InitializeAction.LAUNCH_INITIAL_REFRESH, explicit.initialize())
+            assertEquals(before, remote.listRequests.size)
+            assertTrue(explicit.load(LoadType.REFRESH, emptyPagingState()) is RemoteMediator.MediatorResult.Success)
+            assertEquals(before + 1, remote.listRequests.size)
             assertEquals(RemoteMediator.InitializeAction.SKIP_INITIAL_REFRESH, mediator().initialize())
         }
 
