@@ -234,6 +234,8 @@ struct ContentSortPicker: View {
 
 struct ContentPagedList: View {
     @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.nativePostTransition) private var postTransition
+    @State private var transitionFeedID = UUID()
     let operation: String
     let arguments: [String: JSONValue]
     var clearSearch: (() -> Void)? = nil
@@ -303,7 +305,8 @@ struct ContentPagedList: View {
                                 }.buttonStyle(.plain)
                             } else {
                                 ContentPostRow(value: row.value, openPost: { openPost(row.id, row.value) },
-                                               openAuthor: { authorCard = ContentIdentityRow(id: $0, value: .null) })
+                                               openAuthor: { authorCard = ContentIdentityRow(id: $0, value: .null) },
+                                               transitionSource: isHome && postTransition != nil ? .init(feedID: transitionFeedID, postID: row.id) : nil)
                             }
                         }.id(row.id)
                             .background {
@@ -639,7 +642,12 @@ struct ContentPagedList: View {
         }
     }
     private func openPost(_ id: Int64, _ value: JSONValue) {
+        let fromHomeRoot = isHome && postTransition != nil && app.selectedTab == .home && app.homePath.isEmpty && app.sheet == nil
         app.open("PostDetail", ["postId": .integer(id), "preview": value["summary"] ?? .null])
+        if fromHomeRoot, let destination = app.homePath.first {
+            postTransition?.handoff.record(destination: destination,
+                source: .init(feedID: transitionFeedID, postID: id), generation: app.generation)
+        }
     }
     @ViewBuilder private func loadState(_ name: String, proxy: ScrollViewProxy) -> some View {
         let state = store.value[name] ?? .null

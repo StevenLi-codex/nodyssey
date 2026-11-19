@@ -8,6 +8,8 @@ cp "$HERE/Package.swift" "$STAGE/Package.swift"
 cp -R "$HERE/Tests" "$STAGE/Tests"
 SOURCE="$HERE/../Nodyssey/Native/Rendering/RichDocument.swift"
 cp "$SOURCE" "$STAGE/Sources/RichDocument.swift"
+cp "$HERE/../Nodyssey/Native/Rendering/NativeRenderingMemo.swift" "$STAGE/Sources/"
+cp "$HERE/../Nodyssey/Native/Rendering/NativeInlineArrangement.swift" "$STAGE/Sources/"
 # CLT-only Macs keep Swift Testing outside SwiftPM's inferred framework path.
 if [ "$(uname -s)" = Darwin ] && [ "$(xcode-select -p)" = /Library/Developer/CommandLineTools ]; then
     DEVELOPER=$(xcode-select -p)

@@ -17,7 +17,7 @@ cp "$HERE/../Nodyssey/Native/Content/ContentPreferences.swift" "$STAGE/Sources/C
 if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
     cp "$HERE/../Nodyssey/Native/Foundation/NativePageCanvas.swift" "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Foundation/NativeGlassSurface.swift" "$STAGE/Sources/"
-    for file in NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion NativeRefreshable; do
+    for file in NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion NativeRefreshable NativePostTransition NativePressStyle; do
         cp "$HERE/../Nodyssey/Native/Foundation/$file.swift" "$STAGE/Sources/"
     done
     cp "$HERE/../Nodyssey/Native/Content/"*.swift "$STAGE/Sources/"

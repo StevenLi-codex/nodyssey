@@ -24,6 +24,19 @@ public enum NativeRichLinkPolicy {
 /// Wrap opportunities for the native media/text flow. Never split a composed character.
 /// Ordinary text-only paragraphs use Text's native attributed-string layout instead.
 public enum NativeInlineFlow {
+    /// Presentation-only tokens; canonical nodes and media/action payloads stay unchanged.
+    public static func project(_ inlines: [NativeInlineNode]) -> [NativeInlineNode] {
+        inlines.flatMap { node -> [NativeInlineNode] in
+            switch node {
+            case let .text(text, style):
+                return tokens(text).map { $0.unicodeScalars.contains { $0 == "\n" || $0 == "\r" } ? .lineBreak : .text($0, style) }
+            case let .link(text, url, style):
+                return tokens(text).map { $0.unicodeScalars.contains { $0 == "\n" || $0 == "\r" } ? .lineBreak : .link($0, url, style) }
+            default: return [node]
+            }
+        }
+    }
+
     public static func tokens(_ text: String) -> [String] {
         var result: [String] = []
         var word = ""

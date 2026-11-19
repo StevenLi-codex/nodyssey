@@ -203,6 +203,22 @@ struct MediaStickerGroup: Identifiable, Sendable {
     }
 }
 
+/// Editor-only projection: collections remain in the management catalogue and storage.
+struct MediaStickerPickerContent: Sendable {
+    let groups: [MediaStickerGroup]
+    let selectionKey: String
+    var entries: [MediaSticker] { groups.first { $0.id == selectionKey }?.entries ?? [] }
+
+    init(snapshot: JSONValue, selectedKey: String?) {
+        groups = MediaStickerGroup.groups(snapshot).filter { $0.id != "mine" && !$0.hidden }
+        if let selectedKey, groups.contains(where: { $0.id == selectedKey }) {
+            selectionKey = selectedKey
+        } else {
+            selectionKey = groups.first(where: { $0.slug == nil })?.id ?? groups.first?.id ?? ""
+        }
+    }
+}
+
 /// Masked read-back values are never submitted as replacement credentials.
 enum MediaSecretEdit: Equatable, Sendable {
     case preserve, clear, replace(String)

@@ -199,14 +199,15 @@ struct NativeStickerPicker: View {
     @State private var retry = 0
     @State private var key: String?
     private func manage() { if let onManage { onManage() } else { app.open("StickerManage") } }
-    private var groups: [MediaStickerGroup] { MediaStickerGroup.groups(store.value).filter { !$0.hidden } }
-    private var entries: [MediaSticker] { groups.first(where: { $0.id == (key ?? groups.first?.id) })?.entries ?? [] }
+    private var content: MediaStickerPickerContent { MediaStickerPickerContent(snapshot: store.value, selectedKey: key) }
+    private var groups: [MediaStickerGroup] { content.groups }
+    private var entries: [MediaSticker] { content.entries }
     var body: some View {
         VStack {
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
             if store.isLoading { ProgressView() }
             HStack {
-                Picker(MediaL.text("groups"), selection: Binding(get: { key ?? groups.first?.id ?? "" }, set: { key = $0 })) {
+                Picker(MediaL.text("groups"), selection: Binding(get: { content.selectionKey }, set: { key = $0 })) {
                     ForEach(groups) { group in Text(MediaL.text(group.name)).tag(group.id) }
                 }.pickerStyle(.menu)
                 if compactKeyboard {
@@ -229,7 +230,9 @@ struct NativeStickerPicker: View {
         }
         .frame(maxHeight: compactKeyboard ? .infinity : nil)
         .task(id: "\(app.generation)-\(retry)") { await store.observe(app, "stickers.observe") }
-        .onChange(of: store.value) { _ in if !groups.contains(where: { $0.id == key }) { key = groups.first?.id } }
+        .onChange(of: store.value) { value in
+            key = MediaStickerPickerContent(snapshot: value, selectedKey: key).selectionKey
+        }
     }
 }
 

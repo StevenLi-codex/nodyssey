@@ -262,11 +262,13 @@ private struct NativeRichImage: View {
 
 private struct NativeInlineContent: View {
     @Environment(\.nativeRichTextRole) private var role
+    @Environment(\.dynamicTypeSize) private var dynamicType
     let inlines: [NativeInlineNode]
     let actions: NativeRichTextActions
     var font: Font? = nil
     var inTable = false
     @ScaledMetric(relativeTo: .body) private var stickerSize = 24.0
+    @StateObject private var flowProjection = NativeRenderingMemo<[NativeInlineNode], [NativeInlineNode]>()
 
     private var hasMedia: Bool {
         inlines.contains { node in
@@ -277,7 +279,10 @@ private struct NativeInlineContent: View {
     var body: some View {
         Group {
             if hasMedia {
-                NativeInlineLayout {
+                NativeInlineLayout(revision: .init(
+                    inlines: inlines, font: font ?? role.textFont,
+                    dynamicType: dynamicType, stickerSize: stickerSize
+                )) {
                     ForEach(Array(flowNodes.enumerated()), id: \.offset) { _, node in
                         flowPiece(node)
                     }
@@ -293,13 +298,7 @@ private struct NativeInlineContent: View {
     }
 
     private var flowNodes: [NativeInlineNode] {
-        inlines.flatMap { node -> [NativeInlineNode] in
-            switch node {
-            case let .text(text, style): return NativeInlineFlow.tokens(text).map { $0.contains("\n") || $0.contains("\r") ? .lineBreak : .text($0, style) }
-            case let .link(text, url, style): return NativeInlineFlow.tokens(text).map { $0.contains("\n") || $0.contains("\r") ? .lineBreak : .link($0, url, style) }
-            default: return [node]
-            }
-        }
+        flowProjection.value(for: inlines) { NativeInlineFlow.project(inlines) }
     }
 
     @ViewBuilder private func flowPiece(_ node: NativeInlineNode) -> some View {
@@ -385,44 +384,38 @@ private struct NativeLineBreakKey: LayoutValueKey { static let defaultValue = fa
 /// SwiftUI Text cannot contain arbitrary async image views. A native Layout is used only for
 /// paragraphs containing media; text-only paragraphs keep native selection and shaping.
 private struct NativeInlineLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(width: proposal.width, subviews: subviews).size
+    struct Revision: Equatable {
+        let inlines: [NativeInlineNode]
+        let font: Font
+        let dynamicType: DynamicTypeSize
+        let stickerSize: Double
+    }
+    let revision: Revision
+    typealias Cache = NativeInlineArrangementCache<Revision>
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    // SwiftUI calls this when subviews change, including their intrinsic metrics.
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.invalidate() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews, cache: &cache).size
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrange(width: bounds.width, subviews: subviews)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let result = arrangement(width: bounds.width, subviews: subviews, cache: &cache)
         for index in subviews.indices {
             let frame = result.frames[index]
             subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading, proposal: ProposedViewSize(frame.size))
         }
     }
 
-    private func arrange(width proposed: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
-        let width = proposed.flatMap { $0.isFinite ? max(1, $0) : nil } ?? 320
-        var frames: [CGRect] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var usedWidth: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(ProposedViewSize(width: width, height: nil))
-            if view[NativeLineBreakKey.self] {
-                frames.append(CGRect(x: x, y: y, width: 0, height: size.height))
-                y += max(lineHeight, size.height)
-                x = 0
-                lineHeight = 0
-                continue
-            }
-            if x > 0 && x + size.width > width {
-                y += lineHeight
-                x = 0
-                lineHeight = 0
-            }
-            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
-            x += size.width
-            usedWidth = max(usedWidth, x)
-            lineHeight = max(lineHeight, size.height)
+    private func arrangement(width: CGFloat?, subviews: Subviews, cache: inout Cache) -> NativeInlineArrangement {
+        cache.arrangement(width: width, revision: revision, count: subviews.count) { index, width in
+            NativeInlineMeasurement(
+                size: subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil)),
+                isLineBreak: subviews[index][NativeLineBreakKey.self]
+            )
         }
-        return (CGSize(width: proposed == nil ? usedWidth : width, height: y + lineHeight), frames)
     }
 }

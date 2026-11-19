@@ -4,82 +4,54 @@ import Photos
 import ImageIO
 import NodysseyShell
 
-@MainActor
-final class NativeImageState: ObservableObject {
-    @Published private(set) var image: UIImage?
-    @Published private(set) var data: Data?
-    @Published private(set) var failure = false
-    @Published private(set) var deferredForWifi = false
-    private var request: NativeRequest?
-    private var decodeTask: Task<Void, Never>?
-    private var identity = UUID()
-    private(set) var url: String?
-
-    func load(_ url: String, allowMetered: Bool = false) {
-        cancel()
-        self.url = url
-        image = nil
-        data = nil
-        failure = false
-        deferredForWifi = false
-        let identity = self.identity
-        request = NativePlatform.shared.image(url: url, allowMetered: allowMetered) { [weak self] bytes, error in
-            guard let self, self.identity == identity, self.url == url else { return }
-            self.request = nil
-            guard error == nil, let bytes else {
-                self.failure = true
-                self.deferredForWifi = error == "IMAGE_WIFI_ONLY"
-                return
-            }
-            let data = bytes as Data
-            self.decodeTask = Task { [weak self] in
-                let worker = Task.detached(priority: .userInitiated) { NativeImageDecoder.decode(data) }
-                let image = await withTaskCancellationHandler(operation: { await worker.value },
-                                                              onCancel: { worker.cancel() })
-                guard !Task.isCancelled, let self, self.identity == identity, self.url == url else { return }
-                self.data = data
-                self.image = image
-                self.failure = image == nil
-            }
-        }
+extension NativeAppModel {
+    var nativeImageScope: NativeImageScope {
+        NativeImageScope(appIdentity: ObjectIdentifier(self),
+            identityEpoch: session.nativeString("identityEpoch"),
+            boundaryEpoch: privateBoundary.nativeString("identityEpoch"),
+            boundaryPhase: privateBoundary.nativeString("phase"), generation: generation,
+            site: site.nativeString("current"), siteOrigin: siteOrigin,
+            wifiOnly: settings["imagesOnWifiOnly"]?.bool)
     }
-    func cancel() {
-        identity = UUID()
-        request?.cancel()
-        request = nil
-        decodeTask?.cancel()
-        decodeTask = nil
-    }
-    deinit { request?.cancel(); decodeTask?.cancel() }
 }
 
 /// Uses the installed Kotlin image loader (authenticated headers, proxy, cache, SVG workers).
 struct NativeRemoteImage: View {
     let url: String
     var aspectFit: Bool = true
+    /// Optional pixel target for fixed-size consumers; default uses the display's pixel extent.
+    var maxPixel: Int? = nil
+    @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.displayScale) private var displayScale
     @StateObject private var state = NativeImageState()
     @State private var viewing = false
+    private var scope: NativeImageScope { app.nativeImageScope }
+    private var targetPixel: Int {
+        maxPixel ?? Int((max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * displayScale).rounded(.up))
+    }
 
     var body: some View {
         Group {
-            if state.url == url, let image = state.image {
+            if state.url == url, state.scope == scope, let image = state.image {
                 NativeImageDisplay(image: image, aspectFit: aspectFit)
-                    .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: aspectFit ? .fit : .fill)
+                    .aspectRatio(state.aspectRatio ?? (image.size.width / max(image.size.height, 1)), contentMode: aspectFit ? .fit : .fill)
                     .clipped()
                     .onTapGesture { viewing = true }
                     .accessibilityLabel("Image")
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction { viewing = true }
-            } else if state.url == url, state.failure {
-                Button { state.load(url, allowMetered: state.deferredForWifi) } label: {
+            } else if state.url == url, state.scope == scope, state.failure {
+                Button { state.load(url, allowMetered: state.deferredForWifi, scope: scope, maxPixel: targetPixel) } label: {
                     Label(state.deferredForWifi ? "Load using mobile data" : "Retry image", systemImage: "arrow.clockwise")
                 }.buttonStyle(.plain)
             } else {
                 ProgressView().accessibilityLabel("Loading image")
             }
         }
-        .onAppear { state.load(url) }
-        .onChange(of: url) { value in viewing = false; state.load(value) }
+        .onAppear { state.load(url, scope: scope, maxPixel: targetPixel) }
+        .onChange(of: url) { value in viewing = false; state.load(value, scope: scope, maxPixel: targetPixel) }
+        .onChange(of: scope) { value in viewing = false; state.load(url, scope: value, maxPixel: targetPixel) }
+        .onChange(of: targetPixel) { value in state.load(url, scope: scope, maxPixel: value) }
         .onDisappear { state.cancel() }
         .fullScreenCover(isPresented: $viewing) { NativeImageViewer(url: url) }
     }
@@ -113,6 +85,8 @@ struct NativeImageGallery: View {
 
 struct NativeImageViewer: View {
     let url: String
+    @EnvironmentObject private var app: NativeAppModel
+    private var scope: NativeImageScope { app.nativeImageScope }
     @Environment(\.dismiss) private var dismiss
     @StateObject private var state = NativeImageState()
     @State private var sharing = false
@@ -123,11 +97,11 @@ struct NativeImageViewer: View {
     var body: some View {
         NavigationStack {
             Group {
-                if state.url == url, let image = state.image {
+                if state.url == url, state.scope == scope, let image = state.image {
                     NativeZoomImage(image: image, onDismiss: { dismiss() })
-                } else if state.failure {
+                } else if state.scope == scope, state.failure {
                     Button(state.deferredForWifi ? "Load using mobile data" : "Retry image") {
-                        state.load(url, allowMetered: state.deferredForWifi)
+                        state.load(url, allowMetered: state.deferredForWifi, scope: scope)
                     }
                 } else {
                     ProgressView()
@@ -143,14 +117,14 @@ struct NativeImageViewer: View {
                     Button { browsing = true } label: { Label("Open in browser", systemImage: "safari") }
                         .disabled(!NativePlatform.shared.isExternalBrowserUrl(url: url) || saving)
                     Button { sharing = true } label: { Label("Share", systemImage: "square.and.arrow.up") }
-                        .disabled(state.image == nil || saving)
+                        .disabled(state.scope != scope || state.image == nil || saving)
                     Button { save() } label: {
                         if saving { ProgressView() } else { Label("Save image", systemImage: "square.and.arrow.down") }
-                    }.disabled(state.data == nil || saving)
+                    }.disabled(state.scope != scope || state.data == nil || saving)
                 }
             }
             .sheet(isPresented: $sharing) {
-                if let image = state.image { NativeShare(items: [image]) }
+                if state.scope == scope, let image = state.image { NativeShare(items: [image]) }
             }
             .sheet(isPresented: $browsing) {
                 if let target = URL(string: url) { NativeExternalBrowser(url: target) }
@@ -159,18 +133,24 @@ struct NativeImageViewer: View {
                 Button("OK", role: .cancel) { message = nil }
             } message: { Text(message ?? "") }
         }
-        .onAppear { state.load(url) }
-        .onChange(of: url) { value in sharing = false; browsing = false; state.load(value) }
+        .onAppear { state.load(url, scope: scope) }
+        .onChange(of: url) { value in sharing = false; browsing = false; state.load(value, scope: scope) }
+        .onChange(of: scope) { value in
+            sharing = false; browsing = false
+            state.load(url, scope: value)
+        }
         .onDisappear { state.cancel() }
     }
 
     private func save() {
-        guard !saving, let data = state.data, state.url == url else { return }
+        guard !saving, state.scope == scope, let data = state.data, state.url == url else { return }
+        let acceptedScope = scope
         saving = true
         Task { @MainActor in
             defer { saving = false }
             // Called only by the explicit Save button. Never requests read-library permission.
             let permission = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard app.nativeImageScope == acceptedScope else { return }
             guard permission == .authorized || permission == .limited else {
                 message = "Photo access was denied. You can allow adding photos in Settings."
                 return
@@ -187,40 +167,10 @@ struct NativeImageViewer: View {
     }
 }
 
-/// ImageIO decoding stays on the worker. SVG rasterization remains in Kotlin's existing pipeline.
-private enum NativeImageDecoder {
-    static func decode(_ data: Data) -> UIImage? {
-        guard !Task.isCancelled, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let count = CGImageSourceGetCount(source)
-        guard count > 1, count <= 300 else { return UIImage(data: data) }
-        var frames: [UIImage] = []
-        var duration: TimeInterval = 0
-        var pixels = 0
-        for index in 0..<count {
-            if Task.isCancelled { return nil }
-            guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
-                  width > 0, height > 0, width <= 4096, height <= 4096 else { return UIImage(data: data) }
-            pixels += width * height
-            // Bound animation decode memory, not just the encoded file's size.
-            guard pixels <= 16_000_000,
-                  let cgImage = CGImageSourceCreateImageAtIndex(source, index, nil) else { return UIImage(data: data) }
-            let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
-            let delay = (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double)
-                ?? (gif?[kCGImagePropertyGIFDelayTime] as? Double) ?? 0.1
-            let ticks = min(100, max(1, Int((max(0.02, min(delay, 2)) / 0.02).rounded())))
-            let frame = UIImage(cgImage: cgImage)
-            frames.append(contentsOf: repeatElement(frame, count: ticks))
-            duration += Double(ticks) * 0.02
-        }
-        return UIImage.animatedImage(with: frames, duration: duration)
-    }
-}
-
 private struct NativeImageDisplay: UIViewRepresentable {
     let image: UIImage
     let aspectFit: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -232,7 +182,7 @@ private struct NativeImageDisplay: UIViewRepresentable {
     func updateUIView(_ view: UIImageView, context: Context) {
         view.contentMode = aspectFit ? .scaleAspectFit : .scaleAspectFill
         view.clipsToBounds = true
-        if view.image !== image { view.image = image }
+        NativeImagePlayback.update(view, image: image, reduceMotion: reduceMotion)
     }
 }
 
@@ -297,11 +247,12 @@ private struct NativeZoomImage: UIViewRepresentable {
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         context.coordinator.onDismiss = onDismiss
         context.coordinator.reduceMotion = reduceMotion
-        if context.coordinator.imageView.image !== image {
+        if context.coordinator.sourceImage !== image {
             scroll.transform = .identity
             scroll.setZoomScale(1, animated: false)
-            context.coordinator.imageView.image = image
+            context.coordinator.sourceImage = image
         }
+        NativeImagePlayback.update(context.coordinator.imageView, image: image, reduceMotion: reduceMotion)
     }
     // UIScrollView owns pinch/pan. SwiftUI's page TabView offers no per-page gesture arbitration
     // on iOS 16; fail dependencies let its ancestor pager win only when our zoom pan fails.
@@ -332,6 +283,7 @@ private struct NativeZoomImage: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let imageView = UIImageView()
+        var sourceImage: UIImage?
         var onDismiss: () -> Void = {}
         var reduceMotion = false
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }

@@ -41,7 +41,7 @@ import NodysseyNativeCore
 
 @Test @MainActor func nativeStickerSelectionReplacesUTF16SelectionAndPublishesShortcodesNotImages() async throws {
     let snapshot = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
-    {"mine":[],"subscriptions":[],"groupLayout":{"hidden":["site:yct"]},
+    {"mine":[{"url":"https://e.test/personal.gif","name":"saved"}],"subscriptions":[],"groupLayout":{"hidden":["site:yct"]},
      "arrangedGroupKeys":["mine","site:xhj","site:ac","site:yct","fluent"],
      "siteGroups":[
       {"key":"site:ac","entries":[{"type":"Sticker","name":"ac01","shortcode":" :ac01: ","url":"https://www.nodeseek.com/static/image/sticker/ac/01.png"}]},
@@ -52,6 +52,13 @@ import NodysseyNativeCore
     let groups = MediaStickerGroup.groups(snapshot)
     #expect(groups.map(\.id) == ["mine", "site:xhj", "site:ac", "site:yct", "fluent"])
     #expect(groups.filter { !$0.hidden }.map(\.id) == ["mine", "site:xhj", "site:ac", "fluent"])
+    let initialPicker = MediaStickerPickerContent(snapshot: snapshot, selectedKey: "mine")
+    #expect(initialPicker.groups.map(\.id) == ["site:xhj", "site:ac", "fluent"])
+    #expect(initialPicker.selectionKey == "site:xhj")
+    #expect(groups.first { $0.id == "mine" }?.entries.map(\.id) == ["https://e.test/personal.gif"])
+    // Re-enable YCT through the same observed snapshot shape before selecting it.
+    var visibleSnapshot = try #require(snapshot.object)
+    visibleSnapshot["groupLayout"] = .object(["hidden": .array([])])
     let transport = RecordingTransport()
     let model = EditorViewModel(mode: .reply(postID: 42), transport: transport,
         arguments: ["quotedFloor": .integer(7), "replyToAuthor": .string("reader")])
@@ -59,7 +66,9 @@ import NodysseyNativeCore
     model.session.changeBody(EditorBuffer(text: original, selection: (original as NSString).range(of: "替换")))
     var picker = MediaStickerInteraction(mode: .picker)
     for id in ["site:ac", "site:yct", "site:xhj"] {
-        let sticker = try #require(groups.first { $0.id == id }?.entries.first)
+        let content = MediaStickerPickerContent(snapshot: .object(visibleSnapshot), selectedKey: id)
+        #expect(content.selectionKey == id)
+        let sticker = try #require(content.entries.first)
         guard case .insert(let value) = picker.activate(sticker) else { Issue.record("Picker did not insert"); return }
         model.insert(value)
     }

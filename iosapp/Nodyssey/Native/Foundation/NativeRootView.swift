@@ -6,6 +6,8 @@ struct NativeRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var restart = 0
     @State private var homeTabInteraction = NativeHomeTabInteraction()
+    @Namespace private var postTransitionNamespace
+    @StateObject private var postTransition = NativePostTransition()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +37,7 @@ struct NativeRootView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("native.root")
         .modifier(NativeSettingsAppearance(settings: app.settings))
+        .environment(\.nativeCardMotionDisabled, app.settings.nativeBool("einkMode") == true)
         .sheet(item: Binding(get: { app.sheet }, set: { value in
             if value == nil { Task { await app.dismissSheet() } }
         })) { destination in
@@ -52,6 +55,7 @@ struct NativeRootView: View {
             .environmentObject(app)
             .interactiveDismissDisabled(app.sheetRequiresDeparture || app.departureRunning)
             .modifier(NativeSettingsAppearance(settings: app.settings))
+            .environment(\.nativeCardMotionDisabled, app.settings.nativeBool("einkMode") == true)
         }
         .task(id: restart) { await app.start() }
         .onChange(of: scenePhase) { phase in
@@ -72,6 +76,9 @@ struct NativeRootView: View {
         TabView(selection: $app.selectedTab) {
             NavigationStack(path: pathBinding(.home)) {
                 NativeScreen(destination: NativeDestination("PostList"))
+                    // Only this root feed can nominate a source. Pushed feeds,
+                    // other tabs and sheets keep the ordinary system push.
+                    .environment(\.nativePostTransition, NativePostTransitionContext(namespace: postTransitionNamespace, handoff: postTransition))
                     #if os(iOS)
                     .background {
                         NativeTabTapObserver(isHomeRoot: { app.homePath.isEmpty && app.sheet == nil }, selected: { wasHome, isHome, wasRoot in
@@ -82,7 +89,12 @@ struct NativeRootView: View {
                         }).allowsHitTesting(false)
                     }
                     #endif
-                    .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
+                    .navigationDestination(for: NativeDestination.self) { destination in
+                        NativeScreen(destination: destination)
+                            .environment(\.nativePostTransition, nil)
+                            .nativePostTransitionDestination(postTransition.source(for: destination,
+                                directDestinationID: app.homePath.first?.id, generation: app.generation), namespace: postTransitionNamespace)
+                    }
             }
             .tabItem { Label("tab_home", systemImage: "house").accessibilityIdentifier("native.tab.home") }
             .tag(NativeTab.home)

@@ -69,6 +69,7 @@ struct ContentPostRow: View {
     let value: JSONValue
     var openPost: (() -> Void)? = nil
     var openAuthor: ((Int64) -> Void)? = nil
+    var transitionSource: NativePostTransition.Source? = nil
     var body: some View {
         let summary = value["summary"] ?? value
         postAction {
@@ -97,6 +98,7 @@ struct ContentPostRow: View {
                 .padding(.horizontal, 28).padding(.top, 4)
             }
         }
+        .nativePostTransitionSource(transitionSource)
     }
     private func card(_ summary: JSONValue) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -139,7 +141,7 @@ struct ContentPostRow: View {
         .background { ContentPostCardSurface().allowsHitTesting(false) }
     }
     @ViewBuilder private func postAction<Label: View>(@ViewBuilder label: () -> Label) -> some View {
-        if let openPost { Button(action: openPost, label: label).buttonStyle(.plain) }
+        if let openPost { Button(action: openPost, label: label).buttonStyle(NativeCardPressStyle()) }
         else { label() }
     }
     private func author(_ summary: JSONValue) -> some View {

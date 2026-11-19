@@ -11,7 +11,15 @@ struct ContentRichBody: View {
     var jump: (String) -> Void
     @State private var poll: ContentRichPoll?
     @State private var report: ContentRichReport?
-    private var decoded: Result<[NativeRichNode], Error> { Result { try JSONDecoder().decode([NativeRichNode].self, from: value.nativeEncoded()) } }
+    @StateObject private var projection = NativeRenderingMemo<ContentRichProjectionKey, Result<[NativeRichNode], Error>>()
+    private var decoded: Result<[NativeRichNode], Error> {
+        projection.value(for: ContentRichProjectionKey(
+            app: ObjectIdentifier(app), generation: app.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"), content: value
+        )) {
+            Result { try JSONDecoder().decode([NativeRichNode].self, from: value.nativeEncoded()) }
+        }
+    }
     var body: some View {
         Group {
             switch decoded {
@@ -69,6 +77,8 @@ struct ContentRichBody: View {
         )
     }
 }
+
+private typealias ContentRichProjectionKey = NativeRenderingInput<JSONValue>
 
 private struct ContentRichPoll: Identifiable { let id: Int64 }
 private struct ContentRichReport: Identifiable { let id = UUID(); let code: NativeCode; let sourceOverride: Bool? }
