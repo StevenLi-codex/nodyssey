@@ -176,8 +176,12 @@ jobs:
           PY
       - name: Build unsigned iPhone archive
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
+        env:
+          # Release LTO exceeded the Debug-sized heap; serialize this archive only.
+          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -Dorg.gradle.workers.max=1 -Dorg.gradle.parallel=false
         run: |
           set -o pipefail
+          python3 -c 'import subprocess; m=int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])); print("ARCHIVE_HOST_MEMORY_BYTES", m); assert m >= 12 * 1024**3, "Release archive requires a host with at least 12 GiB RAM"'
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess
           paths = [pathlib.Path('iosapp/Nodyssey/App.swift')]
