@@ -260,6 +260,7 @@ struct ContentPagedList: View {
     @State private var restored = false
     @State private var isVisible = false
     @State private var owner: ContentFeedTicket?
+    @State private var visibleObservation = ContentFeedVisibleObservation()
     @State private var visiblePage: Int64
     @State private var jump = ContentFeedJump()
     @State private var pageSheet = ContentFeedSheet()
@@ -367,18 +368,27 @@ struct ContentPagedList: View {
                 if !dragging { direction.endGesture() } // Includes system cancellation.
             }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
-                if isHome, let ticket = owner, owns(ticket), case .success(let window) = window, let first = window.rows.first {
+                let currentWindow = window
+                if isHome, let ticket = owner, owns(ticket), case .success(let currentWindow) = currentWindow, let first = currentWindow.rows.first {
                     let frame = rows.first { $0.ticket == ticket && $0.id == first.id }?.frame
-                    homeTopPosition = (ticket, first.id, NativeHomeTabInteraction.isAtTop(firstMinY: frame.map { Double($0.minY) },
-                                                                                       viewportMinY: Double(viewport.frame(in: .global).minY)))
-                } else { homeTopPosition = nil }
+                    let atTop = NativeHomeTabInteraction.isAtTop(firstMinY: frame.map { Double($0.minY) },
+                                                                  viewportMinY: Double(viewport.frame(in: .global).minY))
+                    if homeTopPosition?.ticket != ticket || homeTopPosition?.id != first.id || homeTopPosition?.atTop != atTop {
+                        homeTopPosition = (ticket, first.id, atTop)
+                    }
+                } else if homeTopPosition != nil { homeTopPosition = nil }
                 guard isVisible, restored, let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
                       let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
-                      case .success(let window) = window,
-                      let row = window.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
+                      case .success(let currentWindow) = currentWindow,
+                      let row = currentWindow.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
+                // Do not open a mutable @State access on every pixel of travel.
+                // Commit its new observation only when the visible identity changes.
+                var nextObservation = visibleObservation
+                guard nextObservation.shouldPublish(first, current: ticket) else { return }
+                visibleObservation = nextObservation
+                if restoreID != row.id { restoreID = row.id }
+                if let page = row.page, page > 0, visiblePage != page { visiblePage = page }
                 visible(row.id, row.page)
-                restoreID = row.id
-                if let page = row.page, page > 0 { visiblePage = page }
             }
             .onReceive(app.homeScrollToTop) { _ in
                 guard isHome, isVisible, app.selectedTab == .home, app.homePath.isEmpty, app.sheet == nil,

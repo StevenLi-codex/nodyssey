@@ -27,6 +27,24 @@ import NodysseyNativeCore
     #expect(ContentFeedViewport.firstVisible(samples, viewport: .zero, ticket: ticket) == nil)
 }
 
+@Test func repeatedVisibleGeometryPublishesOnlyOnRowPageOrOwnerChange() {
+    let ticket = ContentFeedTicket(generation: 7, board: "tech", sort: "LAST_REPLY", observation: UUID())
+    let otherOwner = ContentFeedTicket(generation: 7, board: "tech", sort: "LAST_REPLY", observation: UUID())
+    var observation = ContentFeedVisibleObservation()
+    let publish: (ContentFeedVisibleRow, ContentFeedTicket) -> Bool = { row, current in
+        observation.shouldPublish(row, current: current)
+    }
+    let row = ContentFeedVisibleRow(ticket: ticket, id: 41, page: 2, frame: CGRect(x: 0, y: 0, width: 320, height: 80))
+
+    #expect(publish(row, ticket))
+    #expect(!publish(row, ticket))
+    #expect(!publish(ContentFeedVisibleRow(ticket: ticket, id: 41, page: 2, frame: CGRect(x: 0, y: 1, width: 320, height: 80)), ticket))
+    #expect(publish(ContentFeedVisibleRow(ticket: ticket, id: 42, page: 2, frame: row.frame), ticket))
+    #expect(publish(ContentFeedVisibleRow(ticket: ticket, id: 42, page: 3, frame: row.frame), ticket))
+    #expect(!publish(ContentFeedVisibleRow(ticket: ticket, id: 42, page: 3, frame: row.frame), otherOwner))
+    #expect(publish(ContentFeedVisibleRow(ticket: otherOwner, id: 42, page: 3, frame: row.frame), otherOwner))
+}
+
 @Test func feedSheetCancelAndOldOwnerNeverJump() {
     let ticket = ContentFeedTicket(generation: 1, board: "a", sort: "LAST_REPLY", observation: UUID())
     var sheet = ContentFeedSheet()

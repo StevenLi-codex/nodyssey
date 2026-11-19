@@ -8,6 +8,7 @@ struct ContentPostDetail: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativeDestinationID) private var destinationID
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.layoutDirection) private var layoutDirection
     let postID: Int64
     let initialFloor: String?
     let initialPage: Int64?
@@ -103,7 +104,24 @@ struct ContentPostDetail: View {
                 .coordinateSpace(name: "thread.viewport")
                 .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(ContentThreadFrames.self) { frames in updateViewport(frames, height: viewport.size.height) }
-                .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in hasRead = true; railExpanded = false })
+                .simultaneousGesture(DragGesture(minimumDistance: 8)
+                    .onChanged { _ in
+                        if !hasRead { hasRead = true }
+                        if railExpanded { railExpanded = false }
+                    }
+                    .onEnded { gesture in
+                        guard let destinationID,
+                              ContentBackSwipe.shouldReturn(startX: Double(gesture.startLocation.x),
+                                width: Double(viewport.size.width), translationX: Double(gesture.translation.width),
+                                translationY: Double(gesture.translation.height), predictedX: Double(gesture.predictedEndTranslation.width),
+                                rightToLeft: layoutDirection == .rightToLeft) else { return }
+                        Task { @MainActor in
+                            // Recheck after scheduling: a system pop or a new route
+                            // may already have changed the owner. Never pop its parent.
+                            guard !covered, !app.departureRunning else { return }
+                            await app.dismissDestination(destinationID)
+                        }
+                    })
                 .overlay(alignment: .bottomTrailing) {
                     if !replyOwner.visible && !covered {
                         ContentThreadPageRail(page: currentPage, total: totalPages,

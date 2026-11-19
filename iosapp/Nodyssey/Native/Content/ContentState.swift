@@ -184,6 +184,24 @@ struct ContentFeedVisibleRow: Equatable {
     let frame: CGRect
 }
 
+/// Suppress repeated geometry deliveries while preserving row, page, and observation changes.
+struct ContentFeedVisibleObservation {
+    private struct Identity: Equatable {
+        let ticket: ContentFeedTicket
+        let id: Int64
+        let page: Int64?
+    }
+    private var last: Identity?
+
+    mutating func shouldPublish(_ row: ContentFeedVisibleRow, current: ContentFeedTicket) -> Bool {
+        guard row.ticket == current else { return false }
+        let identity = Identity(ticket: row.ticket, id: row.id, page: row.page)
+        guard identity != last else { return false }
+        last = identity
+        return true
+    }
+}
+
 enum ContentFeedViewport {
     static func firstVisible(_ rows: [ContentFeedVisibleRow], viewport: CGRect, ticket: ContentFeedTicket) -> ContentFeedVisibleRow? {
         guard viewport.width > 0, viewport.height > 0 else { return nil }

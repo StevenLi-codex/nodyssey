@@ -189,10 +189,11 @@ jobs:
           pathlib.Path(os.environ['RUNNER_TEMP'], 'shipping-source-manifest.json').write_text(json.dumps({'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'files': manifest}, indent=2))
           PY
           xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            MARKETING_VERSION="1.2.34" CURRENT_PROJECT_VERSION="76" \
+            SWIFT_OPTIMIZATION_LEVEL="-O" \
+            MARKETING_VERSION="1.2.35" CURRENT_PROJECT_VERSION="77" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
       - name: Package unsigned test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
@@ -206,7 +207,7 @@ jobs:
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           ipa = root / 'nodyssey-swiftui-unsigned.ipa'
           info = plistlib.loads((root / 'Payload/Nodyssey.app/Info.plist').read_bytes())
-          (root / 'ipa-manifest.json').write_text(json.dumps({'filename': ipa.name, 'bytes': ipa.stat().st_size, 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(), 'bundleIdentifier': info['CFBundleIdentifier'], 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'configuration': 'Debug', 'testsRun': False}, indent=2))
+          (root / 'ipa-manifest.json').write_text(json.dumps({'filename': ipa.name, 'bytes': ipa.stat().st_size, 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(), 'bundleIdentifier': info['CFBundleIdentifier'], 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'configuration': 'Release', 'swiftOptimization': '-O', 'testsRun': False}, indent=2))
           PY
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
