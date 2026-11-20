@@ -110,6 +110,15 @@ private struct EditorHost: View {
         })
     }
     private var bodyBinding: Binding<EditorBuffer> { Binding(get: { session.body }, set: session.changeBody) }
+    private var submitTitle: String {
+        if case .edit = session.mode { return EL("save") }
+        return EL(isMessage ? "send" : "publishReply")
+    }
+    private var permissionTitle: String {
+        if session.permission == 0 { return PCL("permissionPublic") }
+        if session.permission == 255 { return EL("private") }
+        return "\(EL("permission")): \(session.permission)"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,10 +133,15 @@ private struct EditorHost: View {
             if session.pendingRestore != nil {
                 HStack {
                     Text(EL("draftFound"))
+                    Spacer()
                     Button(EL("restore")) { model.focus.handoff { confirmRestore = true } }
-                    Button(EL("keepCurrent")) { model.focus.handoff { session.keepCurrent() } }
-                    Button(EL("discard"), role: .destructive) { confirmDelete = true }
-                }.padding()
+                    Menu {
+                        Button(EL("keepCurrent")) { model.focus.handoff { session.keepCurrent() } }
+                        Button(EL("discard"), role: .destructive) { confirmDelete = true }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44)
+                    }.accessibilityLabel(PCL("draftOptions"))
+                }.font(.subheadline).padding(.horizontal, 16)
             }
             if session.mode.showsTitle {
                 // Original ComposerOptions precedes its borderless page heading.
@@ -156,7 +170,7 @@ private struct EditorHost: View {
             } else {
                 NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
                                     hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
-                    .frame(minHeight: isMessage ? 100 : 180, maxHeight: isMessage ? 180 : .infinity)
+                    .frame(minHeight: isMessage ? 100 : 80, maxHeight: isMessage ? 180 : .infinity)
                     .padding(.horizontal, 7)
                     .padding(.top, 8)
             }
@@ -164,31 +178,44 @@ private struct EditorHost: View {
                 Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() })).padding(.horizontal)
                 if model.acceptedResult != nil { Text(EL("acceptedMessage")).font(.caption).padding(.horizontal) }
             }
-            if session.busy { ProgressView() }
             attachmentRows
             EditorToolbar(model: model, onPanel: { openPanel($0) }, onPhotos: {
                 model.focus.handoff { showPhotos = true }
-            })
+            }, compact: !isMessage)
         }
         .disabled(routeLifetime.closing || app.departureRunning)
         .navigationTitle(EL(isMessage ? "messages" : (session.mode == .post ? "newPost" : "compose")))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .navigationBarBackButtonHidden(true)
         // All permanent exits must run the awaited close/teardown path, even
         // for title-only drafts or attachments with an empty body.
         .interactiveDismissDisabled(true)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button(EL("close")) { close() }.disabled(routeLifetime.closing || session.busy)
+                Button { close() } label: {
+                    Label(EL("close"), systemImage: "xmark")
+                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                }.disabled(routeLifetime.closing || session.busy)
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button(EL(model.previewing ? "edit" : "preview")) {
+                Button {
                     model.focus.handoff {
                         if model.previewing { model.previewing = false }
                         else { Task { await model.showPreview() } }
                     }
+                } label: {
+                    Label(EL(model.previewing ? "edit" : "preview"), systemImage: model.previewing ? "pencil" : "eye")
+                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                 }
-                Button(EL(isMessage ? "send" : "publish")) {
+                Button {
                     model.focus.handoff { confirmPublish = true }
+                } label: {
+                    HStack(spacing: 6) {
+                        if session.busy { ProgressView().controlSize(.small) }
+                        Text(submitTitle)
+                    }.frame(minHeight: 44)
                 }.disabled(!model.ready || session.busy || session.pendingRestore != nil || session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty || (!isMessage && session.accepted))
             }
         }
@@ -199,7 +226,7 @@ private struct EditorHost: View {
             EditorPhotoPicker(model: model)
         }
         .confirmationDialog(EL("confirmPublish"), isPresented: $confirmPublish, titleVisibility: .visible) {
-            Button(EL(isMessage ? "send" : "publish")) {
+            Button(submitTitle) {
                 model.focus.handoff { Task { await model.submit() } }
             }
         } message: { Text(EL("noAutoRetry")) }
@@ -266,9 +293,12 @@ private struct EditorHost: View {
                     }
                     Menu {
                         ForEach(permissions.value.array?.compactMap(\.int) ?? [], id: \.self) { rank in
-                            Button(rank == 255 ? EL("private") : String(rank)) { session.permission = rank; session.changed() }
+                            Button(rank == 0 ? PCL("permissionPublic") : rank == 255 ? EL("private") : String(rank)) { session.permission = rank; session.changed() }
                         }
-                    } label: { Label(session.permission == 255 ? EL("private") : "\(EL("permission")): \(session.permission)", systemImage: "lock") }
+                    } label: {
+                        Label(permissionTitle,
+                              systemImage: session.permission == 0 ? "globe" : "lock")
+                    }.accessibilityLabel(EL("permission")).accessibilityValue(permissionTitle)
                 }
                 .font(.subheadline)
                 .buttonStyle(.borderless)

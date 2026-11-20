@@ -148,7 +148,7 @@ internal fun NativeContext.supplementObserve(op: String): Flow<JsonElement>? = n
 sources = [str(out / f) for f in ['Graph.kt', 'UnusedDomains.kt', 'PlatformCore.kt', 'Darwin.kt']]
 sources += [str(root / 'iosapp/tests/fixtures' / f) for f in ['SessionFoundationFixture.kt', 'SessionWebKitFixture.kt']]
 sources += [str(root / 'shared/src/appleMain/kotlin/io/github/plaza/core/net/WebKitCookieBridge.kt')]
-sources += [str(main / f) for f in ['NativeAccount.kt', 'NativeAccountMapping.kt', 'NativeBridge.kt']]
+sources += [str(main / f) for f in ['NativeAccount.kt', 'NativeAccountMapping.kt', 'NativeCountRefreshOwner.kt', 'NativeBridge.kt']]
 sources += [str(root / 'iosapp/tests/fixtures' / f) for f in ['NativeSessionSecurityJvmTest.kt', 'NativeSessionIsolationOpenTest.kt']]
 sources += [str(root / 'iosapp/tests/fixtures/PrivateNativeRequestDrainTest.kt')]
 if args.graph_integration:

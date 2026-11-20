@@ -19,4 +19,4 @@ swiftc -typecheck -swift-version 6 -D FOUNDATION_EDITOR_UI_CHECK -sdk "$SDK" -ta
     "$HERE"/../Nodyssey/Native/Rendering/*.swift \
     "$HERE/../Nodyssey/Native/Editing/EditorState.swift" "$HERE/../Nodyssey/Native/Editing/EditorViewModel.swift" \
     "$HERE/../Nodyssey/Native/Editing/NativeEditorScreens.swift" "$HERE/../Nodyssey/Native/Editing/NativePostComposerPresentation.swift" "$HERE/../Nodyssey/Native/Editing/EditorPanels.swift" \
-    "$HERE/../Nodyssey/Native/Editing/EditorMessageThread.swift" "$HERE/../Nodyssey/Native/Editing/EditorRichPreview.swift"
+    "$HERE/../Nodyssey/Native/Editing/EditorMessageFollowState.swift" "$HERE/../Nodyssey/Native/Editing/EditorMessageThread.swift" "$HERE/../Nodyssey/Native/Editing/EditorRichPreview.swift"

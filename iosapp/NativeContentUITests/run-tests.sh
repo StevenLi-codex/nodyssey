@@ -9,6 +9,7 @@ cp -R "$HERE/Tests" "$STAGE/Tests"
 cp -R "$HERE/../NativeCore/Sources/NodysseyNativeCore" "$STAGE/Core"
 cp "$HERE/../Nodyssey/Native/Content/ContentBackSwipe.swift" "$STAGE/Sources/ContentBackSwipe.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentState.swift" "$STAGE/Sources/ContentState.swift"
+cp "$HERE/../Nodyssey/Native/Content/ContentFeedDragState.swift" "$STAGE/Sources/ContentFeedDragState.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentFeedTopRefresh.swift" "$STAGE/Sources/ContentFeedTopRefresh.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentCommand.swift" "$STAGE/Sources/ContentCommand.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentImageGallery.swift" "$STAGE/Sources/ContentImageGallery.swift"
@@ -26,7 +27,7 @@ if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
     for source in "$HERE/../Nodyssey/Native/Rendering/"*.swift; do
         [ "$(basename "$source")" = NativeCodeBlock.swift ] || cp "$source" "$STAGE/Sources/"
     done
-    for file in EditorState EditorViewModel NativeEditorScreens NativePostComposerPresentation EditorPanels EditorMessageThread EditorRichPreview EditorThreadReply; do
+    for file in EditorState EditorViewModel NativeEditorScreens NativePostComposerPresentation EditorPanels EditorMessageFollowState EditorMessageThread EditorRichPreview EditorThreadReply; do
         cp "$HERE/../Nodyssey/Native/Editing/$file.swift" "$STAGE/Sources/"
     done
     for file in AccountAuthorQuickCard AccountAuthorQuickCardState AccountProfileDate; do

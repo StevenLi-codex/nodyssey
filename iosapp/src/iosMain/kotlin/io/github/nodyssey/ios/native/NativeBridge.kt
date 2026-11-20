@@ -50,6 +50,7 @@ internal class NativeContext(val graph: IosAppContainer, val scope: CoroutineSco
 /** The only exported application-data ABI; all repository access starts on Main. */
 object NativeBridge {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    internal val countRefresh = NativeCountRefreshOwner(scope)
     private val sessionControls = setOf("session.signIn", "session.verifyTwoFactor", "session.signOut")
 
     private fun publicOperation(operation: String): Boolean = operation.startsWith("session.") ||

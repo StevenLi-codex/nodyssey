@@ -3,16 +3,51 @@
   "strings": {
     "titleHint": {
       "localizations": {
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "一句话说清主题" } },
-        "zh-Hant": { "stringUnit": { "state": "translated", "value": "一句話說清主題" } },
-        "en": { "stringUnit": { "state": "translated", "value": "One line that says what this is about" } }
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "标题" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "標題" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Title" } }
       }
     },
     "bodyHint": {
       "localizations": {
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "写下正文，支持 Markdown…" } },
-        "zh-Hant": { "stringUnit": { "state": "translated", "value": "寫下內文，支援 Markdown…" } },
-        "en": { "stringUnit": { "state": "translated", "value": "Write the body — Markdown works…" } }
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "写点什么…" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "寫點什麼…" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Write something…" } }
+      }
+    },
+    "permissionPublic": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "公开" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "公開" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Public" } }
+      }
+    },
+    "draftOptions": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "草稿选项" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "草稿選項" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Draft options" } }
+      }
+    },
+    "returnToLatestMessages": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "回到最新消息" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "回到最新訊息" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Back to latest messages" } }
+      }
+    },
+    "newMessagesReturnToLatest": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "有新消息 · 回到最新" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "有新訊息 · 回到最新" } },
+        "en": { "stringUnit": { "state": "translated", "value": "New messages · Back to latest" } }
+      }
+    },
+    "moreTools": {
+      "localizations": {
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "更多工具" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "更多工具" } },
+        "en": { "stringUnit": { "state": "translated", "value": "More tools" } }
       }
     }
   },

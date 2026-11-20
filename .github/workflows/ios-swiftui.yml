@@ -46,6 +46,9 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun simctl list devices available
           swift --version
+      - name: Validate native test tools
+        if: ${{ !inputs.archive_only }}
+        run: |
           python3 iosapp/NativeNavigationUITests/validate-project.py
           python3 -m unittest discover -s iosapp/scripts -p 'test_verify_native_results.py' -v
       - uses: actions/setup-java@v5
@@ -184,32 +187,49 @@ jobs:
           python3 -c 'import subprocess; m=int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])); print("ARCHIVE_HOST_MEMORY_BYTES", m); assert m >= 12 * 1024**3, "Release archive requires a host with at least 12 GiB RAM"'
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess
-          paths = [pathlib.Path('iosapp/Nodyssey/App.swift')]
-          paths += sorted(pathlib.Path('iosapp/Nodyssey/Native').rglob('*'))
-          paths += sorted(pathlib.Path('iosapp/NativeCore/Sources').rglob('*'))
-          paths += sorted(pathlib.Path('iosapp/src/iosMain/kotlin').rglob('*'))
-          paths += sorted(pathlib.Path('shared/src/commonMain/kotlin').rglob('*'))
+          paths = [pathlib.Path(p) for p in subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0') if p]
           manifest = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
           pathlib.Path(os.environ['RUNNER_TEMP'], 'shipping-source-manifest.json').write_text(json.dumps({'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'files': manifest}, indent=2))
           PY
-          xcodebuild -project iosapp/Nodyssey.xcodeproj -scheme Nodyssey \
-            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" archive \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            SWIFT_OPTIMIZATION_LEVEL="-O" \
-            MARKETING_VERSION="1.2.35" CURRENT_PROJECT_VERSION="77" \
-            | tee "$RUNNER_TEMP/xcodebuild-archive.log"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          command = ['xcodebuild', '-project', 'iosapp/Nodyssey.xcodeproj', '-scheme', 'Nodyssey',
+                     '-configuration', 'Release', '-sdk', 'iphoneos', '-destination', 'generic/platform=iOS',
+                     '-derivedDataPath', str(root / 'NodysseyReleaseDerivedData'),
+                     '-archivePath', str(root / 'Nodyssey.xcarchive'),
+                     '-resultBundlePath', str(root / 'archive.xcresult'), '-jobs', '2', 'archive',
+                     'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=',
+                     'SWIFT_OPTIMIZATION_LEVEL=-O', 'MARKETING_VERSION=1.2.33', 'CURRENT_PROJECT_VERSION=75']
+          (root / 'archive-command.json').write_text(json.dumps(command, indent=2))
+          with (root / 'xcodebuild-archive.log').open('wb') as log:
+              code = subprocess.call(command, stdout=log, stderr=subprocess.STDOUT)
+              temporary = root / 'xcodebuild.exitcode.tmp'
+              with temporary.open('w') as receipt:
+                  receipt.write(str(code) + '\n')
+                  receipt.flush()
+                  os.fsync(receipt.fileno())
+              os.replace(temporary, root / 'xcodebuild.exitcode')
+          closure = root / 'compiler-input-closure'
+          for source in (root / 'NodysseyReleaseDerivedData').rglob('*'):
+              if source.is_file() and (source.suffix in ('.SwiftFileList', '.resp', '.LinkFileList') or source.name.endswith('-OutputFileMap.json')):
+                  target = closure / source.relative_to(root / 'NodysseyReleaseDerivedData')
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(source, target)
+          print((root / 'xcodebuild-archive.log').read_text(errors='replace'))
+          raise SystemExit(code)
+          PY
       - name: Package unsigned test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
-          (cd "$RUNNER_TEMP" && zip -qry nodyssey-swiftui-unsigned.ipa Payload)
-          shasum -a 256 "$RUNNER_TEMP/nodyssey-swiftui-unsigned.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry Nodyssey-1.2.33-build75-unsigned.ipa Payload)
+          shasum -a 256 "$RUNNER_TEMP/Nodyssey-1.2.33-build75-unsigned.ipa"
           python3 - <<'PY'
           import hashlib, json, os, pathlib, plistlib
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          ipa = root / 'nodyssey-swiftui-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.33-build75-unsigned.ipa'
           info = plistlib.loads((root / 'Payload/Nodyssey.app/Info.plist').read_bytes())
           (root / 'ipa-manifest.json').write_text(json.dumps({'filename': ipa.name, 'bytes': ipa.stat().st_size, 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(), 'bundleIdentifier': info['CFBundleIdentifier'], 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'configuration': 'Release', 'swiftOptimization': '-O', 'testsRun': False}, indent=2))
           PY
@@ -217,7 +237,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         with:
           name: nodyssey-swiftui-unsigned
-          path: ${{ runner.temp }}/nodyssey-swiftui-unsigned.ipa
+          path: ${{ runner.temp }}/Nodyssey-1.2.33-build75-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
       - name: Upload verification evidence
@@ -228,6 +248,11 @@ jobs:
           path: |
             ${{ runner.temp }}/xcodebuild-archive.log
             ${{ runner.temp }}/shipping-source-manifest.json
+            ${{ runner.temp }}/archive-command.json
+            ${{ runner.temp }}/xcodebuild.exitcode
+            ${{ runner.temp }}/archive.xcresult
+            ${{ runner.temp }}/compiler-input-closure/
+            ${{ runner.temp }}/Nodyssey.xcarchive/Info.plist
             ${{ runner.temp }}/ipa-manifest.json
             ${{ runner.temp }}/nodyssey-launch.png
             ${{ runner.temp }}/native-svg-host.xcresult

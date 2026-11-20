@@ -30,6 +30,7 @@ struct EditorToolbar: View {
                         Button(EL("receive")) { onPanel(.receive) }
                         Button(EL("toolbar")) { onPanel(.toolbar) }
                     } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel(PCL("moreTools"))
                 } else {
                     if model.session.mode.surface != "MESSAGE" {
                         Button(EL("vote")) { onPanel(.vote) }

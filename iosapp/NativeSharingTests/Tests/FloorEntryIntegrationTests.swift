@@ -3,7 +3,7 @@ import Testing
 import NodysseyNativeCore
 @testable import Sharing
 
-// Runs the verbatim ContentPostDetail.floor initializer against real ContentShareLink,
+// Runs the verbatim ContentPostDetail.floorActionSheet initializer against real ContentShareLink,
 // FloorShareContext and document decoding. No SwiftUI environment/task or live I/O.
 @MainActor private func imageDocument(_ entry: ContentShareLink) throws -> FloorShareDocument {
     let context = try #require(entry.shareContext)
@@ -36,13 +36,15 @@ import NodysseyNativeCore
     var fields = try #require(try content([.paragraph([.text("Blocked selected body", .init())])], floor: "#32").object)
     fields["isBlocked"] = .bool(true)
     let thread: JSONValue = .object(["title": .string("Thread")])
-    for expanded: Set<String> in [[], ["#11"]] {
+    for expanded: Set<String> in [[], ["floor:#11"]] {
+        #expect(actualFloorBlocked(value: .object(fields), opening: false, expanded: expanded))
         let entry = actualFloorEntry(value: .object(fields), page: 4, opening: false,
                                     postID: 17, threadValue: thread, expanded: expanded)
         #expect(throws: FloorShareError.blockedContent) { try imageDocument(entry) }
     }
+    #expect(!actualFloorBlocked(value: .object(fields), opening: false, expanded: ["floor:#32"]))
     let revealed = actualFloorEntry(value: .object(fields), page: 4, opening: false,
-                                   postID: 17, threadValue: thread, expanded: ["#32"])
+                                   postID: 17, threadValue: thread, expanded: ["floor:#32"])
     #expect(try imageDocument(revealed).body == "Blocked selected body")
 }
 

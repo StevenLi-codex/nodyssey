@@ -80,9 +80,10 @@ struct ContentPostDetail: View {
                                 Text(CT("autoPaging")).font(.caption).foregroundStyle(.secondary)
                             }.padding(.horizontal, 18).padding(.vertical, 12)
                             if commentRows.isEmpty { Text(CT("emptyReplies")).foregroundStyle(.secondary).padding(18) }
+                            let firstNewID = firstNewRowID
                             ForEach(commentRows) { row in
                                 VStack(alignment: .leading, spacing: 0) {
-                                    if row.id == firstNewRowID {
+                                    if row.id == firstNewID {
                                         Label(CT("newReplies"), systemImage: "sparkles").font(.caption).foregroundStyle(.tint).padding(.horizontal, 18).padding(.vertical, 8)
                                     }
                                     commentRow(row)
@@ -228,11 +229,17 @@ struct ContentPostDetail: View {
     private struct FloorSelection: Identifiable { let id: String; let opening: Bool }
     private struct AuthorSelection: Identifiable { let id: Int64 }
     private struct PageRequest: Equatable { let id = UUID(); let page: Int64; let extend: Bool }
+    @StateObject private var commentProjection = NativeRenderingMemo<NativeRenderingInput<JSONValue>, [CommentRow]>()
     private var commentRows: [CommentRow] {
-        let pages = thread.value.nativeArray("commentPages")
-        return thread.value.nativeArray("comments").enumerated().map { index, value in
-            let id = value.nativeInt("commentId").map { "comment:\($0)" } ?? value.nativeString("floor").map { "floor:\($0)" } ?? "unidentified:\(index)"
-            return CommentRow(id: id, value: value, page: pages.indices.contains(index) ? pages[index].int ?? firstPage : firstPage)
+        commentProjection.value(for: .init(
+            app: ObjectIdentifier(app), generation: app.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"), content: thread.value
+        )) {
+            let pages = thread.value.nativeArray("commentPages")
+            return thread.value.nativeArray("comments").enumerated().map { index, value in
+                let id = value.nativeInt("commentId").map { "comment:\($0)" } ?? value.nativeString("floor").map { "floor:\($0)" } ?? "unidentified:\(index)"
+                return CommentRow(id: id, value: value, page: pages.indices.contains(index) ? pages[index].int ?? firstPage : firstPage)
+            }
         }
     }
     private var firstNewRowID: String? {
@@ -490,14 +497,19 @@ struct ContentPostDetail: View {
         app.open("Web", ["url": .string(url.absoluteString)])
     }
     private func updateViewport(_ frames: [String: CGRect], height: CGFloat) {
-        if let title = frames["thread.title"] { titleOffscreen = title.maxY < 0 }
+        if let title = frames["thread.title"] {
+            let offscreen = title.maxY < 0
+            if titleOffscreen != offscreen { titleOffscreen = offscreen }
+        }
         let rows = commentRows
         let visible = rows.filter { frames[$0.id].map { $0.maxY > 0 && $0.minY < height } ?? false }
         if let opening = frames["#0"], opening.maxY > 0, thread.value["body"] != .null, thread.value["body"] != nil {
-            visibleTarget = .init(visibleFloor: "#0", page: 1)
-            if opening.minY >= 0 { railExpanded = true }
+            let nextTarget = ContentReadingTarget(visibleFloor: "#0", page: 1)
+            if visibleTarget != nextTarget { visibleTarget = nextTarget }
+            if opening.minY >= 0, !railExpanded { railExpanded = true }
         } else if let row = visible.min(by: { (frames[$0.id]?.minY ?? 0) < (frames[$1.id]?.minY ?? 0) }) {
-            visibleTarget = .init(visibleFloor: row.value.nativeString("floor"), page: row.page)
+            let nextTarget = ContentReadingTarget(visibleFloor: row.value.nativeString("floor"), page: row.page)
+            if visibleTarget != nextTarget { visibleTarget = nextTarget }
         }
         guard hasRead, target == nil, !loadingPage, lastPage < totalPages,
               let last = visible.last, let index = rows.firstIndex(where: { $0.id == last.id }), index >= max(0, rows.count - 4) else { return }

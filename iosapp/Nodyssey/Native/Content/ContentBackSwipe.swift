@@ -13,8 +13,11 @@ enum ContentBackSwipe {
         let direction = rightToLeft ? -1.0 : 1.0
         let travel = translationX * direction
         let projected = predictedX * direction
-        let threshold = max(96, width * 0.45)
-        return leadingDistance <= 24 && min(travel, projected) >= threshold &&
-            projected >= travel && travel > abs(translationY) * 1.5
+        guard leadingDistance <= 36, projected >= travel,
+              travel > abs(translationY) * 1.5 else { return false }
+        let threshold = max(64, min(110, width * 0.22))
+        let fastSwipe = travel >= 44 && projected >= max(140, width * 0.4) &&
+            projected - travel >= 60
+        return travel >= threshold || fastSwipe
     }
 }

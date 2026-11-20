@@ -71,6 +71,18 @@ private val nativeContentMutations = setOf(
     "notifications.read", "notifications.readAll", "messages.read", "messages.readAll", "messages.send",
 )
 
+private fun NativeContext.refreshMessageCountsInBackground() {
+    val appGraph = graph
+    val identityEpoch = appGraph.privateBoundary.state.value.identityEpoch
+    NativeBridge.countRefresh.request {
+        appGraph.privateBoundary.protect {
+            if (appGraph.privateBoundary.state.value.identityEpoch == identityEpoch) {
+                appGraph.notificationRepository.refreshCounts()
+            }
+        }
+    }
+}
+
 internal suspend fun NativeContext.contentRequest(operation: String, args: JsonObject): JsonElement? =
     if (operation in nativeContentMutations) {
         // Sorted JSON gives equivalent object arguments the same in-flight identity. No automatic
@@ -247,20 +259,22 @@ private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): Jso
         "notifications.counts" -> nativeContentJson(graph.notificationRepository.counts.value)
 
         "notifications.refresh" -> {
-            val counts = graph.notificationRepository.refreshCounts()
+            val counts = NativeBridge.countRefresh.run { graph.notificationRepository.refreshCounts() }
             nativeNotificationRevision.value++
             nativeContentJson(counts)
         }
 
         "notifications.read" -> {
-            graph.notificationRepository.markViewed(
-                a.nativeArray("sources").map { item ->
-                    val source = item as? JsonObject ?: throw NativeFailure("INVALID_ARGUMENT")
-                    val category = source.nativeEnum<NotificationCategory>("category")
-                    if (category == NotificationCategory.MESSAGES) throw NativeFailure("INVALID_ARGUMENT")
-                    NotificationSource(category, source.nativeOptionalLong("viewedId"), source.nativeBoolean("isUnread"))
-                },
-            )
+            NativeBridge.countRefresh.run {
+                graph.notificationRepository.markViewed(
+                    a.nativeArray("sources").map { item ->
+                        val source = item as? JsonObject ?: throw NativeFailure("INVALID_ARGUMENT")
+                        val category = source.nativeEnum<NotificationCategory>("category")
+                        if (category == NotificationCategory.MESSAGES) throw NativeFailure("INVALID_ARGUMENT")
+                        NotificationSource(category, source.nativeOptionalLong("viewedId"), source.nativeBoolean("isUnread"))
+                    },
+                )
+            }
             nativeNotificationRevision.value++
             JsonNull
         }
@@ -268,7 +282,7 @@ private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): Jso
         "notifications.readAll" -> {
             val category = a.nativeEnum<NotificationCategory>("category")
             if (category == NotificationCategory.MESSAGES) throw NativeFailure("INVALID_ARGUMENT")
-            graph.notificationRepository.markAllRead(category)
+            NativeBridge.countRefresh.run { graph.notificationRepository.markAllRead(category) }
             nativeNotificationRevision.value++
             JsonNull
         }
@@ -279,18 +293,21 @@ private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): Jso
 
         "messages.refresh" -> {
             nativeMessageRevision.value++
+            refreshMessageCountsInBackground()
             JsonNull
         }
 
         "messages.read" -> {
             graph.messageRepository.markRead(a.nativeIds("messageIds"))
             nativeMessageRevision.value++
+            refreshMessageCountsInBackground()
             JsonNull
         }
 
         "messages.readAll" -> {
             graph.messageRepository.markAllRead()
             nativeMessageRevision.value++
+            refreshMessageCountsInBackground()
             JsonNull
         }
 
@@ -344,7 +361,10 @@ internal fun NativeContext.contentObserve(operation: String, args: JsonObject): 
 private suspend fun NativeContext.nativeLoadNotifications(a: JsonObject): JsonElement {
     val category = a.nativeOptionalText("category")
     val rows = if (category == null) {
-        graph.notificationRepository.interactions()
+        // The merged interaction load publishes counts.overlap as part of its operation. Keep that
+        // publication ordered with unread-count refreshes, but leave read-only single categories
+        // and all message list/thread/ACK operations independent of this owner.
+        NativeBridge.countRefresh.run { graph.notificationRepository.interactions() }
     } else {
         val value = a.nativeEnum<NotificationCategory>("category")
         if (value == NotificationCategory.MESSAGES) throw NativeFailure("INVALID_ARGUMENT")

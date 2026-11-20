@@ -36,24 +36,86 @@ struct EditorMessageThread: View {
                 }.disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
             }.padding(.horizontal)
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
+            EditorMessageHistory(scope: .init(generation: app.generation, uid: uid), messages: messages, quote: model.quote)
+                .id(EditorMessageFollowState.Scope(generation: app.generation, uid: uid))
+            if store.isLoading { ProgressView() }
+        }
+        .task(id: "\(app.generation):\(uid):\(retry)") { await store.observe(app, "messages.thread", ["uid": .integer(uid)]) }
+    }
+}
+
+private struct EditorMessageGeometry: Equatable, Sendable {
+    let observation: UUID
+    let sample: EditorMessageFollowState.Sample
+}
+
+private struct EditorMessageGeometryKey: PreferenceKey {
+    static let defaultValue: EditorMessageGeometry? = nil
+    static func reduce(value: inout EditorMessageGeometry?, nextValue: () -> EditorMessageGeometry?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct EditorMessageHistory: View {
+    let scope: EditorMessageFollowState.Scope
+    let messages: [JSONValue]
+    let quote: (String) -> Void
+    @StateObject private var follow = EditorMessageFollowObservation()
+    private var observation: UUID { follow.observation }
+    private var lastID: String? { messages.last?["id"]?.string }
+
+    var body: some View {
+        GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(messages.indices, id: \.self) { index in
                             if let id = messages[index]["id"]?.string {
-                                let value = messages[index]
-                                EditorMessageRow(value: value, quote: { text in
-                                    model.quote(text)
-                                }).id(id)
+                                EditorMessageRow(value: messages[index], quote: quote).id(id)
                             }
                         }
-                    }.padding()
+                    }
+                    .padding()
+                    .background {
+                        GeometryReader { content in
+                            Color.clear.preference(key: EditorMessageGeometryKey.self, value: EditorMessageGeometry(
+                                observation: observation,
+                                sample: .init(scope: scope, lastID: lastID,
+                                              top: Double(content.frame(in: .named(observation)).minY),
+                                              height: Double(content.size.height), viewport: Double(viewport.size.height))))
+                        }.allowsHitTesting(false)
+                    }
                 }
-                .onChange(of: messages.last?["id"]?.string) { id in if let id { proxy.scrollTo(id, anchor: .bottom) } }
+                .coordinateSpace(name: observation)
+                // iOS 16 has no scroll-position/scroll-geometry API. Observe the
+                // original content's real frame, never LazyVStack row appearances.
+                // Content identity and geometry arrive together, avoiding an
+                // onChange/new-layout ordering race that would lose follow intent.
+                .onPreferenceChange(EditorMessageGeometryKey.self) { value in
+                    guard let value, value.observation == observation, value.sample.scope == scope else { return }
+                    if follow.update(value.sample, observation: value.observation), let id = value.sample.lastID {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if follow.presentation != .following, let id = lastID {
+                        Button(action: follow.makeReturnAction(
+                            targetID: id,
+                            scope: scope,
+                            observation: observation,
+                            scrollTo: { proxy.scrollTo($0, anchor: .bottom) }
+                        )) {
+                            Label(PCL(follow.presentation == .newMessages ? "newMessagesReturnToLatest" : "returnToLatestMessages"),
+                                  systemImage: follow.presentation == .newMessages ? "arrow.down.to.line.circle.fill" : "arrow.down.to.line")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding()
+                    }
+                }
             }
-            if store.isLoading { ProgressView() }
         }
-        .task(id: "\(app.generation):\(retry)") { await store.observe(app, "messages.thread", ["uid": .integer(uid)]) }
+        .onAppear { follow.activate() }
+        .onDisappear { follow.revoke() }
     }
 }
 

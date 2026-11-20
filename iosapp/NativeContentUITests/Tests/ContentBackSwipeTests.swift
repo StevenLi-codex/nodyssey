@@ -10,13 +10,67 @@ import Testing
             translationX: -240, translationY: 12, predictedX: -280, rightToLeft: true))
     }
 
+    @Test func fastSwipeWithShortTravelRequestsReturn() {
+        #expect(ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 60, translationY: 0, predictedX: 240))
+        // The former 90pt/300pt projection case is also intentionally accepted.
+        #expect(ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 90, translationY: 0, predictedX: 300))
+    }
+
+    @Test func moderateSlowSwipeRequestsReturn() {
+        #expect(ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 100, translationY: 0, predictedX: 100))
+    }
+
+    @Test func leadingEdgeStartWithinThirtyTwoPointsRequestsReturn() {
+        #expect(ContentBackSwipe.shouldReturn(startX: 32, width: 400,
+            translationX: 100, translationY: 0, predictedX: 100))
+    }
+
+    @Test func sensitivityBoundariesPreserveAccidentalDragRejection() {
+        #expect(ContentBackSwipe.shouldReturn(startX: 36, width: 400,
+            translationX: 44, translationY: 0, predictedX: 160))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 37, width: 400,
+            translationX: 240, translationY: 0, predictedX: 280))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 60, translationY: 0, predictedX: 159))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 60, translationY: 40, predictedX: 240))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
+            translationX: 60, translationY: -80, predictedX: 240))
+    }
+
+    @Test func slowSwipeThresholdScalesWithClampedViewportWidth() {
+        for (width, threshold) in [(200.0, 64.0), (400.0, 88.0), (1_000.0, 110.0)] {
+            #expect(ContentBackSwipe.shouldReturn(startX: 8, width: width,
+                translationX: threshold, translationY: 0, predictedX: threshold))
+            #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: width,
+                translationX: threshold - 1, translationY: 0, predictedX: threshold - 1))
+        }
+    }
+
+    @Test func sensitiveSwipeAndEdgeBoundariesMirrorInRightToLeftLayout() {
+        #expect(ContentBackSwipe.shouldReturn(startX: 368, width: 400,
+            translationX: -60, translationY: 0, predictedX: -240, rightToLeft: true))
+        #expect(ContentBackSwipe.shouldReturn(startX: 364, width: 400,
+            translationX: -100, translationY: 0, predictedX: -100, rightToLeft: true))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 363, width: 400,
+            translationX: -240, translationY: 0, predictedX: -280, rightToLeft: true))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 392, width: 400,
+            translationX: -43, translationY: 0, predictedX: -300, rightToLeft: true))
+        #expect(!ContentBackSwipe.shouldReturn(startX: 392, width: 400,
+            translationX: -60, translationY: 40, predictedX: -240, rightToLeft: true))
+    }
+
     @Test func normalReadingInteriorAndShortDragsNeverRequestReturn() {
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
             translationX: 20, translationY: 300, predictedX: 30))
         #expect(!ContentBackSwipe.shouldReturn(startX: 160, width: 400,
             translationX: 240, translationY: 12, predictedX: 280))
+        // Product intent: sub-44pt motion remains a rejected accidental tap/jitter.
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
-            translationX: 90, translationY: 0, predictedX: 300))
+            translationX: 43, translationY: 0, predictedX: 300))
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
             translationX: 200, translationY: 180, predictedX: 280))
     }

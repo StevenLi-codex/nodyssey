@@ -264,7 +264,7 @@ struct ContentPagedList: View {
     @State private var visiblePage: Int64
     @State private var jump = ContentFeedJump()
     @State private var pageSheet = ContentFeedSheet()
-    @State private var direction = ContentFeedDirection()
+    @StateObject private var direction = ContentFeedDragState()
     @GestureState private var feedDragging = false
     @State private var chromeHeight: CGFloat = 0
     @State private var homeTopPosition: (ticket: ContentFeedTicket, id: Int64, atTop: Bool)?
@@ -285,7 +285,15 @@ struct ContentPagedList: View {
         owner == ticket && ticket.generation == app.generation &&
             ticket.board == (arguments["categorySlug"]?.string ?? "") && ticket.sort == (arguments["sort"]?.string ?? "")
     }
-    private var window: Result<ContentPagingWindow, Error> { Result { try ContentPagingWindow(store.value) } }
+    @StateObject private var windowProjection = NativeRenderingMemo<NativeRenderingInput<JSONValue>, Result<ContentPagingWindow, Error>>()
+    private var window: Result<ContentPagingWindow, Error> {
+        windowProjection.value(for: .init(
+            app: ObjectIdentifier(app), generation: app.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"), content: store.value
+        )) {
+            Result { try ContentPagingWindow(store.value) }
+        }
+    }
     var body: some View {
         ScrollViewReader { proxy in
           GeometryReader { viewport in
@@ -527,7 +535,7 @@ struct ContentPagedList: View {
                 restoreID = requestedRestoreID
                 restored = requestedRestoreID == nil && observedArguments == nil
                 visiblePage = max(1, arguments["page"]?.int ?? 1)
-                direction = ContentFeedDirection()
+                direction.reset()
                 homeTopPosition = nil; homeTopHintSuppression = nil
                 authorNavigation = nil; authorCard = nil
             }
