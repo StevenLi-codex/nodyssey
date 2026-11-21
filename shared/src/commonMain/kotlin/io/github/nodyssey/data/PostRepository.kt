@@ -65,10 +65,30 @@ data class FeedPost(
 )
 
 /** Observation-local provenance; a generation is eligible only after a successful Room commit. */
-class FeedPagingGeneration(val data: PagingData<FeedPost>, val afterRemoteRefresh: kotlinx.coroutines.flow.StateFlow<Boolean>)
+class FeedPagingGeneration(
+    val data: PagingData<FeedPost>,
+    val afterRemoteRefresh: kotlinx.coroutines.flow.StateFlow<Boolean>,
+    val refreshToken: kotlinx.coroutines.flow.StateFlow<String?> = kotlinx.coroutines.flow.MutableStateFlow(null),
+)
+
+/** Transient command admission, never persisted. A second intention cannot cancel a held refresh. */
+class FeedRefreshRequests {
+    private val active = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val token: String? get() = active.value
+    fun begin(token: String): Boolean = token.isNotBlank() && active.compareAndSet(null, token)
+    fun presented(token: String) {
+        active.compareAndSet(token, null)
+    }
+    fun failed(token: String?) {
+        active.compareAndSet(token, null)
+    }
+}
 
 /** Preserved through the private boundary; no row IDs, clocks or load-state latches are receipts. */
-class FeedPagingFlow(val generations: Flow<FeedPagingGeneration>) : Flow<PagingData<FeedPost>> by generations.map({ it.data })
+class FeedPagingFlow(
+    val generations: Flow<FeedPagingGeneration>,
+    val refreshRequests: FeedRefreshRequests? = null,
+) : Flow<PagingData<FeedPost>> by generations.map({ it.data })
 
 /**
  * One line of the browsing history.
@@ -136,6 +156,14 @@ interface PostRepository {
         startPage: Int = FeedRemoteMediator.FIRST_PAGE,
         forceInitialRefresh: Boolean = false,
     ): Flow<PagingData<FeedPost>>
+
+    /** iOS-only explicit opt-in. Other implementations retain their ordinary feed semantics. */
+    fun feedWithRefreshReceipts(
+        categorySlug: String?,
+        sort: FeedSort,
+        startPage: Int = FeedRemoteMediator.FIRST_PAGE,
+        forceInitialRefresh: Boolean = false,
+    ): Flow<PagingData<FeedPost>> = feed(categorySlug, sort, startPage, forceInitialRefresh)
 
     /**
      * How many pages the site last said this feed has; 1 until a page has been stored.
@@ -422,6 +450,15 @@ class OfflineFirstPostRepository(
         return pagedFeed(feedKey, startPage, forceInitialRefresh) { page -> remote.loadList(categorySlug, page, sort) }
     }
 
+    override fun feedWithRefreshReceipts(
+        categorySlug: String?,
+        sort: FeedSort,
+        startPage: Int,
+        forceInitialRefresh: Boolean,
+    ): Flow<PagingData<FeedPost>> = pagedFeed(feedKeyFor(categorySlug, sort), startPage, forceInitialRefresh, true) { page ->
+        remote.loadList(categorySlug, page, sort)
+    }
+
     override fun feedTotalPages(
         categorySlug: String?,
         sort: FeedSort,
@@ -476,10 +513,11 @@ class OfflineFirstPostRepository(
         feedKey: String,
         startPage: Int = FeedRemoteMediator.FIRST_PAGE,
         forceInitialRefresh: Boolean = false,
+        refreshReceipts: Boolean = false,
         loadPage: suspend (page: Int) -> PostListPage,
     ): Flow<PagingData<FeedPost>> {
         // Keep ordinary/search paging unchanged; only explicit observation refreshes need receipts.
-        if (!forceInitialRefresh) {
+        if (!forceInitialRefresh && !refreshReceipts) {
             return showBlockedContent.distinctUntilChanged().flatMapLatest { includeBlocked ->
                 Pager(
                     config = FEED_PAGING_CONFIG,
@@ -488,14 +526,16 @@ class OfflineFirstPostRepository(
                 ).flow
             }.map { it.map(FeedPostRow::toFeedPost) }
         }
+        val requests = if (refreshReceipts) FeedRefreshRequests() else null
         return FeedPagingFlow(
             channelFlow {
                 val transaction = Mutex()
                 var committed = false
+                var committedToken: String? = null
                 var includeBlocked = false
                 var activeSource: PagingSource<Int, FeedPostRow>? = null
                 val ready = CompletableDeferred<Unit>()
-                val generations = Channel<kotlinx.coroutines.flow.StateFlow<Boolean>>(Channel.UNLIMITED)
+                val generations = Channel<Pair<kotlinx.coroutines.flow.StateFlow<Boolean>, kotlinx.coroutines.flow.StateFlow<String?>>>(Channel.UNLIMITED)
                 val settings = launch(start = CoroutineStart.UNDISPATCHED) {
                     showBlockedContent.distinctUntilChanged().collect { reveal ->
                         transaction.withLock {
@@ -515,18 +555,26 @@ class OfflineFirstPostRepository(
                             clock = clock,
                             startPage = startPage,
                             forceInitialRefresh = forceInitialRefresh,
-                            refreshTransaction = { write ->
-                                transaction.withLock {
-                                    write()
-                                    committed = true
-                                    // Also forces a post-commit read for identical/empty transactions.
-                                    activeSource?.invalidate()
+                            refreshTransactionForLoad = {
+                                // Capture BEFORE the remote suspends, not when its response commits.
+                                val token = requests?.token
+                                val commit: suspend (suspend () -> Unit) -> Unit = { write ->
+                                    transaction.withLock {
+                                        write()
+                                        currentCoroutineContext().ensureActive()
+                                        committed = true
+                                        committedToken = token
+                                        // Identical and empty commits must install a new generation too.
+                                        activeSource?.invalidate()
+                                    }
                                 }
+                                commit
                             },
                             loadPage = loadPage,
                         ),
                         pagingSourceFactory = {
                             val receipt = kotlinx.coroutines.flow.MutableStateFlow(false)
+                            val tokenReceipt = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
                             // Factory itself does not suspend. The REFRESH load serializes its Room query
                             // with commit/settings, so its immutable result has unambiguous provenance.
                             val source = object : PagingSource<Int, FeedPostRow>() {
@@ -546,16 +594,18 @@ class OfflineFirstPostRepository(
                                     val result = room.load(params)
                                     if (params is LoadParams.Refresh && result is LoadResult.Page && !invalid) {
                                         receipt.value = committed
+                                        tokenReceipt.value = committedToken
                                     }
                                     result
                                 }
                             }
                             activeSource = source
-                            check(generations.trySend(receipt).isSuccess)
+                            check(generations.trySend(receipt to tokenReceipt).isSuccess)
                             source
                         },
                     ).flow.collect { data ->
-                        send(FeedPagingGeneration(data.map(FeedPostRow::toFeedPost), generations.receive()))
+                        val receipt = generations.receive()
+                        send(FeedPagingGeneration(data.map(FeedPostRow::toFeedPost), receipt.first, receipt.second))
                     }
                 } finally {
                     settings.cancel()
@@ -564,6 +614,7 @@ class OfflineFirstPostRepository(
                     generations.close()
                 }
             },
+            requests,
         )
     }
 

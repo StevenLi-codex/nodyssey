@@ -1,8 +1,17 @@
 import SwiftUI
 import NodysseyNativeCore
 
+private struct ContentThreadGalleryValueKey: EnvironmentKey { static let defaultValue: JSONValue? = nil }
+extension EnvironmentValues {
+    var contentThreadGalleryValue: JSONValue? {
+        get { self[ContentThreadGalleryValueKey.self] }
+        set { self[ContentThreadGalleryValueKey.self] = newValue }
+    }
+}
+
 struct ContentRichBody: View {
     @EnvironmentObject private var app: NativeAppModel
+    @Environment(\.contentThreadGalleryValue) private var galleryValue
     let value: JSONValue
     let postID: Int64
     var threadTitle: String? = nil
@@ -37,6 +46,9 @@ struct ContentRichBody: View {
                 }
             }
         }
+        .id(ContentRichSelectionIdentity(app: ObjectIdentifier(app), generation: app.generation,
+            epoch: app.session.nativeString("identityEpoch")))
+        .environment(\.nativeRichSelectionEnabled, true)
         .modifier(NativeRichTextPresentation(role: role))
         .environment(\.nativeRichTextRole, role)
         .sheet(item: $poll) { poll in NavigationStack { ScrollView { ContentPollView(voteID: poll.id).padding() }.toolbar { Button(String(localized: "content.close", table: "Content")) { self.poll = nil } } } }
@@ -45,7 +57,11 @@ struct ContentRichBody: View {
     }
     private var actions: NativeRichTextActions {
         NativeRichTextActions(
-            onImage: ContentImageGallery.onImage(value: value, open: { app.open($0, $1) }),
+            onImage: ContentImageGallery.onImage(value: galleryValue ?? value, open: { app.open($0, $1) }),
+            imageTapUsesOwner: true,
+            attachmentContent: { url, alt, inherited in
+                AnyView(NativeRichImage(url: url, alt: alt, actions: inherited).environmentObject(app))
+            },
             onVote: { poll = ContentRichPoll(id: $0) },
             onStardust: { receive in
                 app.open("Stardust", ["memberId": .integer(receive.memberId), "refId": .integer(receive.refId), "amount": .integer(Int64(receive.amount)), "description": .string(receive.description), "onetime": .bool(receive.onetime)])
@@ -77,6 +93,8 @@ struct ContentRichBody: View {
         )
     }
 }
+
+private struct ContentRichSelectionIdentity: Hashable { let app: ObjectIdentifier; let generation: Int; let epoch: String? }
 
 private typealias ContentRichProjectionKey = NativeRenderingInput<JSONValue>
 

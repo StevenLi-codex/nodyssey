@@ -42,6 +42,7 @@ private struct NativeRefreshModifier: ViewModifier {
     @StateObject private var presentation = NativeRefreshPresentation()
     @Environment(\.self) private var environment
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.nativeCardMotionDisabled) private var appMotionDisabled
 
     func body(content: Content) -> some View {
         content
@@ -56,7 +57,8 @@ private struct NativeRefreshModifier: ViewModifier {
             }
             .background {
                 #if os(iOS) && canImport(UIKit)
-                NativeRefreshScrollBridge(presentation: presentation, state: presentation.state, environment: environment)
+                NativeRefreshScrollBridge(presentation: presentation, state: presentation.state, environment: environment,
+                                          motion: NativeRefreshMotionPolicy(reduceMotion: reduceMotion, appMotionDisabled: appMotionDisabled))
                     .allowsHitTesting(false).accessibilityHidden(true)
                 #endif
             }
@@ -90,7 +92,7 @@ private struct NativeRefreshModifier: ViewModifier {
 private struct NativeRefreshRing: View {
     let background: Color
     let state: NativeRefreshState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let motion: NativeRefreshMotionPolicy
     @State private var rotating = false
 
     var body: some View {
@@ -99,24 +101,28 @@ private struct NativeRefreshRing: View {
             if state.phase == .success {
                 Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.tint)
-                    .transition(.opacity.combined(with: .scale(scale: reduceMotion ? 1 : 0.8)))
+                    .transition(.opacity.combined(with: .scale(scale: motion.successScale)))
             } else {
                 Circle().trim(from: 0, to: state.phase == .refreshing ? 0.72 : state.progress)
                     .stroke(.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90 + (rotating && !reduceMotion ? 360 : 0)))
-                    .animation(state.phase == .refreshing && !reduceMotion
+                    .rotationEffect(.degrees(-90 + motion.rotationDegrees(rotating: rotating)))
+                    .animation(motion.repeats(in: state.phase)
                         ? .linear(duration: 0.85).repeatForever(autoreverses: false) : nil,
                                value: rotating)
             }
         }
         .frame(width: 26, height: 26)
-        .scaleEffect(reduceMotion || state.phase != .pulling ? 1 : 0.84 + 0.16 * state.progress)
+        .scaleEffect(motion.pullScale(phase: state.phase, progress: state.progress))
         .opacity(state.phase == .pulling ? state.progress : (state.phase == .idle ? 0 : 1))
         // Drag samples track the finger directly. Only completed-state changes
         // get a light rebound; idle -> pulling must not spring the progress.
-        .animation(reduceMotion || state.phase == .pulling ? nil : .spring(response: 0.28, dampingFraction: 0.8), value: state.phase)
-        .onChange(of: state.phase) { phase in rotating = phase == .refreshing }
-        .onAppear { rotating = state.phase == .refreshing }
+        .animation(motion.animatesPhase(state.phase) ? .spring(response: 0.28, dampingFraction: 0.8) : nil, value: state.phase)
+        .onChange(of: state.phase) { phase in rotating = motion.repeats(in: phase) }
+        .onChange(of: motion.disabled) { _ in rotating = motion.repeats(in: state.phase) }
+        .onAppear { rotating = motion.repeats(in: state.phase) }
+        // The independent host cannot inherit the page transaction. Stop an
+        // already-running loop when either live preference turns motion off.
+        .transaction { if motion.disabled { $0.animation = nil; $0.disablesAnimations = true } }
         // UIRefreshControl can draw semantic-label spokes despite clear tint.
         // Keep only this drawing area opaque, independent of ring progress and
         // animation; never inspect or mutate implementation subviews.
@@ -141,15 +147,16 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
     let presentation: NativeRefreshPresentation
     let state: NativeRefreshState
     let environment: EnvironmentValues
+    let motion: NativeRefreshMotionPolicy
 
     func makeUIView(context: Context) -> NativeRefreshAnchor {
         let view = NativeRefreshAnchor()
         view.isUserInteractionEnabled = false
-        view.configure(presentation: presentation, environment: environment)
+        view.configure(presentation: presentation, environment: environment, motion: motion)
         return view
     }
     func updateUIView(_ view: NativeRefreshAnchor, context: Context) {
-        view.configure(presentation: presentation, environment: environment)
+        view.configure(presentation: presentation, environment: environment, motion: motion)
     }
     static func dismantleUIView(_ view: NativeRefreshAnchor, coordinator: ()) { view.detach() }
 }
@@ -159,6 +166,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
     private weak var control: UIRefreshControl?
     private weak var presentation: NativeRefreshPresentation?
     private var environment: EnvironmentValues?
+    private var motion = NativeRefreshMotionPolicy(reduceMotion: false, appMotionDisabled: false)
     private var host: UIHostingController<AnyView>?
     private var savedTint: UIColor?
     private var savedTintWasNil = false
@@ -170,8 +178,8 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
 
     private var lastPhase: NativeRefreshState.Phase = .idle
 
-    func configure(presentation: NativeRefreshPresentation, environment: EnvironmentValues) {
-        self.presentation = presentation; self.environment = environment
+    func configure(presentation: NativeRefreshPresentation, environment: EnvironmentValues, motion: NativeRefreshMotionPolicy) {
+        self.presentation = presentation; self.environment = environment; self.motion = motion
         if presentation.state.phase == .idle, lastPhase == .refreshing || lastPhase == .success {
             control?.endRefreshing()
         }
@@ -316,7 +324,7 @@ private struct NativeRefreshScrollBridge: UIViewRepresentable {
     }
     private func render(_ state: NativeRefreshState) {
         guard let environment, let host else { return }
-        host.rootView = AnyView(NativeRefreshRing(background: Color(uiColor: UIColor.systemBackground.resolvedColor(with: control?.traitCollection ?? traitCollection)), state: state).environment(\.self, environment))
+        host.rootView = AnyView(NativeRefreshRing(background: Color(uiColor: UIColor.systemBackground.resolvedColor(with: control?.traitCollection ?? traitCollection)), state: state, motion: motion).environment(\.self, environment))
     }
     private func restoreControl() {
         controlObservation?.invalidate(); controlObservation = nil

@@ -111,3 +111,6 @@ include(":ui")
 // It holds the Xcode project as well as the Kotlin: the two are one deliverable, and a framework
 // nobody links is not a shell. Nothing depends on this module; it depends on everything.
 include(":iosapp")
+
+// Auditable source replacement; no new repository or downloaded prebuilt artifact.
+include(":room-paging-ios-patched")

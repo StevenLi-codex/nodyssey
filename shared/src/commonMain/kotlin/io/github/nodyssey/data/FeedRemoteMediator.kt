@@ -46,6 +46,8 @@ class FeedRemoteMediator(
     private val forceInitialRefresh: Boolean = false,
     // Serializes source reads with a successful refresh commit, when provenance is requested.
     private val refreshTransaction: suspend (suspend () -> Unit) -> Unit = { it() },
+    // A per-load closure freezes command provenance before any remote suspension.
+    private val refreshTransactionForLoad: () -> (suspend (suspend () -> Unit) -> Unit) = { refreshTransaction },
     /**
      * How one page of this feed is fetched.
      *
@@ -87,6 +89,7 @@ class FeedRemoteMediator(
         loadType: LoadType,
         state: PagingState<Int, FeedPostRow>,
     ): MediatorResult {
+        val commitRefresh = if (loadType == LoadType.REFRESH) refreshTransactionForLoad() else null
         val previousKey = database.feedDao().remoteKey(feedKey)
 
         val page =
@@ -154,7 +157,7 @@ class FeedRemoteMediator(
                     if (loadType == LoadType.REFRESH) feedDao.deleteOrphanedPosts()
                 }
             }
-            if (loadType == LoadType.REFRESH) refreshTransaction(write) else write()
+            if (commitRefresh != null) commitRefresh(write) else write()
 
             MediatorResult.Success(endOfPaginationReached = !result.hasNextPage)
         } catch (e: CancellationException) {

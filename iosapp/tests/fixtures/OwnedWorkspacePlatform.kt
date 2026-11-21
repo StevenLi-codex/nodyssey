@@ -24,16 +24,19 @@ class CookieFixture : SessionCookieStore {
     override suspend fun removeAll() { header = "" }
     override fun flush() = Unit
 }
-internal class IosGlobalServices(val root: File, val jar: CookieFixture) : AppContainer by unused<AppContainer>() {
+internal class IosGlobalServices(
+    val root: File,
+    val jar: CookieFixture,
+    val transport: HttpTransport = unused(),
+) : AppContainer by unused<AppContainer>() {
     val job = SupervisorJob()
     val scope = CoroutineScope(job + Dispatchers.Default)
     override val doh: io.github.nodyssey.data.dns.DohSupport get() = error("DNS is not exercised by the JVM platform fixture")
     override val dispatchers = AppDispatchers()
     override val clock = AppClock.System
-    val transport: HttpTransport = unused()
     val htmlClient = SiteHtmlClient(transport, dispatchers, NodeSeekSite.CONFIG)
     val jsonClient = NodeSeekJsonClient(transport, dispatchers)
-    val remotePosts: PostRemoteDataSource = unused()
+    var remotePosts: PostRemoteDataSource = NetworkPostDataSource(htmlClient, dispatchers, clock)
     val database = createNodeSeekDatabase(File(root,"global.db").path)
     val sessionCookies = SessionCookies(NodeSeekSite.CONFIG, jar)
     override val sessionRepository = SessionRepository(sessionCookies, deferPublication = true)

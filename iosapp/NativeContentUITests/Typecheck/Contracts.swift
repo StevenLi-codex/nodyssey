@@ -32,7 +32,7 @@ struct NativeDestination { let route: String; let arguments: [String: JSONValue]
 struct NativeFailureView: View { let failure: NativeFailure; var retry: (() -> Void)? = nil; var body: some View { EmptyView() } }
 struct NativeEmptyView: View { init(_ title: String) {}; var body: some View { EmptyView() } }
 struct NativeBusyView: View { var body: some View { EmptyView() } }
-struct NativeRemoteImage: View { let url: String; var aspectFit: Bool = true; var body: some View { EmptyView() } }
+struct NativeRemoteImage: View { let url: String; var aspectFit: Bool = true; var onOpen: (() -> Void)? = nil; var body: some View { EmptyView() } }
 extension JSONValue {
     func nativeString(_ key: String) -> String? { self[key]?.string }
     func nativeInt(_ key: String) -> Int64? { self[key]?.int }

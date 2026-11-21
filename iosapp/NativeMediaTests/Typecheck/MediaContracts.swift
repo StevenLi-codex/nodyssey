@@ -17,7 +17,7 @@ import NodysseyNativeCore
 struct NativeRemoteImage: View {
     let url: String
     var aspectFit = true
-    var body: some View { EmptyView() }
+    var onOpen: (() -> Void)? = nil; var body: some View { EmptyView() }
 }
 struct NativeFailureView: View {
     let failure: NativeFailure

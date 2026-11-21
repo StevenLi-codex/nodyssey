@@ -21,8 +21,12 @@ struct NativeRemoteImage: View {
     var aspectFit: Bool = true
     /// Optional pixel target for fixed-size consumers; default uses the display's pixel extent.
     var maxPixel: Int? = nil
+    /// The content owner may activate its existing gallery, only after this leaf has loaded.
+    var onOpen: (() -> Void)? = nil
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.nativeCardMotionDisabled) private var motionDisabled
     @StateObject private var state = NativeImageState()
     @State private var viewing = false
     private var scope: NativeImageScope { app.nativeImageScope }
@@ -33,17 +37,22 @@ struct NativeRemoteImage: View {
     var body: some View {
         Group {
             if state.url == url, state.scope == scope, let image = state.image {
-                NativeImageDisplay(image: image, aspectFit: aspectFit)
-                    .aspectRatio(state.aspectRatio ?? (image.size.width / max(image.size.height, 1)), contentMode: aspectFit ? .fit : .fill)
-                    .clipped()
-                    .onTapGesture { viewing = true }
-                    .accessibilityLabel("Image")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { viewing = true }
+                if let onOpen {
+                    Button(action: onOpen) { loadedImage(image) }
+                        .buttonStyle(.plain)
+                        .nativeRichInteractionBoundary(.imageActivation)
+                } else {
+                    loadedImage(image)
+                        .onTapGesture { viewing = true }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { viewing = true }
+                        .nativeRichInteractionBoundary(.imageActivation)
+                }
             } else if state.url == url, state.scope == scope, state.failure {
                 Button { state.load(url, allowMetered: state.deferredForWifi, scope: scope, maxPixel: targetPixel) } label: {
                     Label(state.deferredForWifi ? "Load using mobile data" : "Retry image", systemImage: "arrow.clockwise")
                 }.buttonStyle(.plain)
+                    .nativeRichInteractionBoundary(.imageRetryConsent)
             } else {
                 ProgressView().accessibilityLabel("Loading image")
             }
@@ -55,39 +64,76 @@ struct NativeRemoteImage: View {
         .onDisappear { state.cancel() }
         .fullScreenCover(isPresented: $viewing) { NativeImageViewer(url: url) }
     }
+
+    private func loadedImage(_ image: UIImage) -> some View {
+        NativeImageDisplay(image: image, aspectFit: aspectFit, reduceMotion: reduceMotion || motionDisabled)
+            .aspectRatio(state.aspectRatio ?? (image.size.width / max(image.size.height, 1)), contentMode: aspectFit ? .fit : .fill)
+            .clipped()
+            .contentShape(Rectangle())
+            .accessibilityLabel("Image")
+    }
 }
 
 /// A gallery destination keeps URL identity stable while paging and zooming.
 struct NativeImageGallery: View {
     let urls: [String]
+    let destinationID: UUID?
     @State private var index: Int
+    @EnvironmentObject private var app: NativeAppModel
     @Environment(\.dismiss) private var dismiss
 
-    init(urls: [String], initialIndex: Int = 0) {
+    init(urls: [String], initialIndex: Int = 0, destinationID: UUID? = nil) {
         self.urls = urls
+        self.destinationID = destinationID
         _index = State(initialValue: urls.indices.contains(initialIndex) ? initialIndex : 0)
     }
     var body: some View {
         if urls.isEmpty {
             VStack {
                 Text("No images")
-                Button("Close") { dismiss() }
+                Button("Close") { close() }
             }
         } else {
             TabView(selection: $index) {
                 ForEach(Array(urls.enumerated()), id: \.offset) { offset, url in
-                    NativeImageViewer(url: url).tag(offset)
+                    NativeImageViewer(url: url, onClose: { close() }).tag(offset)
                 }
             }.tabViewStyle(.page(indexDisplayMode: .automatic))
+        }
+    }
+
+    private func close() {
+        // A real modal gallery still belongs to SwiftUI. A routed gallery is a
+        // root-only owned page: its environment dismiss can dismiss an outer sheet.
+        guard let destinationID else { dismiss(); return }
+        let owner = app.capturePathUpdateOwner()
+        Task { @MainActor in
+            let stack: NativeAppModel.Stack
+            if app.sheet != nil { stack = .sheet }
+            else {
+                switch app.selectedTab {
+                case .home: stack = .home
+                case .notifications: stack = .notifications
+                case .profile: stack = .profile
+                }
+            }
+            // Retained/hidden galleries must not remove a newer route above them,
+            // and a queued action must not cross a navigation/identity change.
+            guard owner == app.capturePathUpdateOwner(),
+                  app.path(for: stack).last?.id == destinationID else { return }
+            await app.dismissDestination(destinationID)
         }
     }
 }
 
 struct NativeImageViewer: View {
     let url: String
+    var onClose: (() -> Void)? = nil
     @EnvironmentObject private var app: NativeAppModel
     private var scope: NativeImageScope { app.nativeImageScope }
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.nativeCardMotionDisabled) private var motionDisabled
     @StateObject private var state = NativeImageState()
     @State private var sharing = false
     @State private var browsing = false
@@ -98,7 +144,8 @@ struct NativeImageViewer: View {
         NavigationStack {
             Group {
                 if state.url == url, state.scope == scope, let image = state.image {
-                    NativeZoomImage(image: image, onDismiss: { dismiss() })
+                    NativeZoomImage(image: image, onDismiss: { close() }, reduceMotion: reduceMotion || motionDisabled)
+                        .nativeRichInteractionBoundary(.imageZoom)
                 } else if state.scope == scope, state.failure {
                     Button(state.deferredForWifi ? "Load using mobile data" : "Retry image") {
                         state.load(url, allowMetered: state.deferredForWifi, scope: scope)
@@ -112,7 +159,7 @@ struct NativeImageViewer: View {
             .navigationTitle("Image")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { close() } }
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button { browsing = true } label: { Label("Open in browser", systemImage: "safari") }
                         .disabled(!NativePlatform.shared.isExternalBrowserUrl(url: url) || saving)
@@ -140,6 +187,11 @@ struct NativeImageViewer: View {
             state.load(url, scope: value)
         }
         .onDisappear { state.cancel() }
+    }
+
+    private func close() {
+        if let onClose { onClose() }
+        else { dismiss() }
     }
 
     private func save() {
@@ -170,7 +222,7 @@ struct NativeImageViewer: View {
 private struct NativeImageDisplay: UIViewRepresentable {
     let image: UIImage
     let aspectFit: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let reduceMotion: Bool
     func makeUIView(context: Context) -> UIImageView {
         let view = UIImageView()
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -182,6 +234,9 @@ private struct NativeImageDisplay: UIViewRepresentable {
     func updateUIView(_ view: UIImageView, context: Context) {
         view.contentMode = aspectFit ? .scaleAspectFit : .scaleAspectFill
         view.clipsToBounds = true
+        // A displayed animated UIImage can retain its animation presentation after stopAnimating.
+        // Break that presentation before asking the existing helper for its still frame.
+        if reduceMotion, view.image?.images != nil { view.stopAnimating(); view.image = nil }
         NativeImagePlayback.update(view, image: image, reduceMotion: reduceMotion)
     }
 }
@@ -211,7 +266,7 @@ enum NativeImageGesturePolicy {
 private struct NativeZoomImage: UIViewRepresentable {
     let image: UIImage
     var onDismiss: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let reduceMotion: Bool
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = ViewerScrollView()
@@ -246,11 +301,21 @@ private struct NativeZoomImage: UIViewRepresentable {
     }
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         context.coordinator.onDismiss = onDismiss
+        if reduceMotion && !context.coordinator.reduceMotion {
+            // UIKit animation is outside SwiftUI transactions. Stop an old reset/zoom locally.
+            scroll.layer.removeAllAnimations()
+            scroll.transform = .identity
+            scroll.setZoomScale(scroll.zoomScale, animated: false)
+        }
         context.coordinator.reduceMotion = reduceMotion
         if context.coordinator.sourceImage !== image {
             scroll.transform = .identity
             scroll.setZoomScale(1, animated: false)
             context.coordinator.sourceImage = image
+        }
+        if reduceMotion, context.coordinator.imageView.image?.images != nil {
+            context.coordinator.imageView.stopAnimating()
+            context.coordinator.imageView.image = nil
         }
         NativeImagePlayback.update(context.coordinator.imageView, image: image, reduceMotion: reduceMotion)
     }

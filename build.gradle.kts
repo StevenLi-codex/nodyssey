@@ -96,3 +96,23 @@ spotless {
         ktlint(libs.versions.ktlint.get()).editorConfigOverride(ktlintRules)
     }
 }
+
+// Room's root metadata/API dependency stays upstream for common/Android/JVM/macOS.
+// Only the iOS available-at leaf is replaced, on every consuming iOS configuration.
+// This is intentionally not a global module substitution or an additional same-package jar.
+subprojects {
+    if (path != ":room-paging-ios-patched") {
+        configurations.configureEach {
+            if (name.startsWith("iosArm64") || name.startsWith("iosSimulatorArm64")) {
+                resolutionStrategy.dependencySubstitution {
+                    substitute(module("androidx.room:room-paging-iosarm64:2.8.5"))
+                        .using(project(":room-paging-ios-patched"))
+                        .because("iOS-only Room initial-load invalidation/retry repair; upstream public ABI retained")
+                    substitute(module("androidx.room:room-paging-iossimulatorarm64:2.8.5"))
+                        .using(project(":room-paging-ios-patched"))
+                        .because("iOS-only Room initial-load invalidation/retry repair; upstream public ABI retained")
+                }
+            }
+        }
+    }
+}

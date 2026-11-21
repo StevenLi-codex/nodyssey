@@ -51,6 +51,7 @@ internal class NativeFailure(val code: String): RuntimeException(code)
 internal suspend fun fixtureThreadRequest(posts: PostRepository, op: String, a: JsonObject): JsonElement = when(op) {
 ''' + region + '\nelse -> error("Unsupported fixture operation: $op")\n}\n' + helpers)
 sources = [out / 'Dispatch.kt', here / 'ReactionRepositoryRegression.kt', main / 'NativeContentMapping.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/PostRepository.kt']
+sources.append(root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/FeedRemoteMediator.kt')
 # New shared receipt may be placed beside its repository by the shared owner.
 receipt = root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/ThreadReactionRead.kt'
 if receipt.exists(): sources.append(receipt)

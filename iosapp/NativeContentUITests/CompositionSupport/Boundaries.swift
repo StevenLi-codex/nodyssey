@@ -67,7 +67,7 @@ struct NativeBusyView: View { var body: some View { ProgressView() } }
 struct NativeRemoteImage: View {
     let url: String
     var aspectFit: Bool = true
-    var body: EmptyView { return unavailable() }
+    var onOpen: (() -> Void)? = nil; var body: EmptyView { return unavailable() }
     private func unavailable() -> EmptyView { fatalError("Unexpected image load: \(url)") }
 }
 extension JSONValue {

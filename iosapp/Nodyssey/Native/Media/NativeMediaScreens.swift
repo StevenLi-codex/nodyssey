@@ -17,7 +17,7 @@ import NodysseyNativeCore
             let urls = values.compactMap(\.string)
             let index = args["index"]?.int ?? 0
             guard index >= 0, index < Int64(urls.count) else { return invalid() }
-            return AnyView(NativeImageGallery(urls: urls, initialIndex: Int(index)))
+            return AnyView(NativeImageGallery(urls: urls, initialIndex: Int(index), destinationID: destination.id))
         case "Web":
             guard let url = args["url"]?.string else { return invalid() }
             let goal: NativeBrowserGoal

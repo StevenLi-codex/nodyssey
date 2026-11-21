@@ -8,6 +8,7 @@ struct ContentPostList: View {
     @StateObject private var command = ContentCommand()
     @State private var manageBoards = false
     @State private var category = ""
+    @State private var pageJumpRequest: ContentHomePageJumpIntent?
     private var sort: String { ContentPreferences(settings: app.settings).feedSort }
     @State private var page: Int64 = 1
 
@@ -37,10 +38,10 @@ struct ContentPostList: View {
                         .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true, role: .homeSearch) }
                         .padding(.horizontal, NativeFeedLayout.horizontalInset)
                     HStack(spacing: 0) {
-                        ContentBoardTabs(categories: homeCategories, selection: $category)
+                        ContentBoardTabs(categories: homeCategories, selection: boardSelection)
                         Menu {
                             ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
-                                Button(boardTitle(slug)) { category = slug }
+                                Button(boardTitle(slug)) { selectBoard(slug) }
                             }
                             Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
                         } label: {
@@ -69,6 +70,10 @@ struct ContentPostList: View {
                              replacePage: { target in
                 guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
                 page = target
+            }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs,
+                             selectHomeBoard: { target in
+                guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                selectBoard(target)
             }, visible: { id, rowPage in
                 guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
                 positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
@@ -82,7 +87,12 @@ struct ContentPostList: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { app.open("Profile") } label: { Label("tab_profile", systemImage: "person.crop.circle") }
+                Button(action: composePost) { Image(systemName: "square.and.pencil") }
+                    .accessibilityLabel(Text(String(localized: "content.compose", table: "Content")))
                 Menu {
+                    Button { pageJumpRequest = ContentHomePageJumpIntent(scope: .init(generation: ownerGeneration, board: ownerBoard, sort: ownerSort)) } label: { Label("page_jump_title", systemImage: "arrow.turn.down.right") }
+                    Divider()
+                    Section {
                     ForEach(Array(app.site.nativeArray("sites").enumerated()), id: \.offset) { _, site in
                         if let id = site.nativeString("id"), let name = site.nativeString("displayName") {
                             Button {
@@ -96,15 +106,18 @@ struct ContentPostList: View {
                             }
                         }
                     }
+                    } header: { Text("action_switch_site") }
                     Text("native_settings_site_restart", tableName: "Settings")
-                } label: { Label("action_switch_site", systemImage: "globe") }
+                } label: { Image(systemName: "ellipsis").accessibilityLabel(Text("action_more")) }
                 .disabled(command.busy)
 
             }
         }
-        .onChange(of: category) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
-        .onChange(of: sort) { _ in page = positions.position(board: category, sort: sort)?.page ?? 1 }
-        .onChange(of: app.generation) { _ in command.cancel(); positions = ContentFeedMemory(); page = 1 }
+        .onChange(of: homeBoardSlugs) { boards in
+            if categories.hasValue, !boards.contains(category) { selectBoard("") }
+        }
+        .onChange(of: sort) { _ in pageJumpRequest = nil; page = positions.position(board: category, sort: sort)?.page ?? 1 }
+        .onChange(of: app.generation) { _ in pageJumpRequest = nil; command.cancel(); positions = ContentFeedMemory(); page = 1 }
         .task(id: "\(app.generation)|\(retry)") { categories.observeRetained(app, "categories", restart: retry) }
         .task(id: "\(app.generation)|\(retry)") { recent.observeRetained(app, "boards.recent", restart: retry) }
         .task(id: category) {
@@ -113,9 +126,9 @@ struct ContentPostList: View {
             catch is CancellationError { }
             catch { command.failure = error as? NativeFailure ?? .init(code: "INTERNAL", message: "Operation could not be completed.") }
         }
-        .sheet(isPresented: $manageBoards) { NavigationStack { ContentBoardManager(categories: categories.value, selection: $category) } }
+        .sheet(isPresented: $manageBoards) { NavigationStack { ContentBoardManager(categories: categories.value, selection: boardSelection) } }
         .task(id: app.generation) { await refreshCategories() }
-        .onDisappear { command.cancel() }
+        .onDisappear { command.cancel(); pageJumpRequest = nil }
     }
     private func boardTitle(_ slug: String) -> String {
         (categories.value.array ?? []).first { $0.nativeString("slug") == slug }?.nativeString("title") ?? slug
@@ -128,6 +141,28 @@ struct ContentPostList: View {
         let order = app.settings.nativeArray("homeBoardOrder").compactMap(\.string)
         let values = (categories.value.array ?? []).filter { !disabled.contains($0.nativeString("slug") ?? "") }
         return .array(values.sorted { (order.firstIndex(of: $0.nativeString("slug") ?? "") ?? Int.max) < (order.firstIndex(of: $1.nativeString("slug") ?? "") ?? Int.max) })
+    }
+    private var homeBoardSlugs: [String] {
+        var seen: Set<String> = [""]
+        return [""] + (homeCategories.array ?? []).compactMap { $0.nativeString("slug") }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+    private var boardSelection: Binding<String> {
+        Binding(get: { category }, set: selectBoard)
+    }
+    private func selectBoard(_ slug: String) {
+        guard slug != category else { return }
+        pageJumpRequest = nil
+        // Restore the saved page in the same transaction as the selected tab.
+        // Do not transiently open the next board with the previous board's page.
+        page = positions.position(board: slug, sort: sort)?.page ?? 1
+        category = slug
+    }
+    private func composePost() {
+        switch ContentFeedCompose.resolve(signedIn: app.isSignedIn, board: category) {
+        case .signIn: app.showSignIn()
+        case .compose(let arguments): app.open("PostComposer", arguments)
+        }
     }
     private var arguments: [String: JSONValue] {
         var value: [String: JSONValue] = ["sort": .string(sort), "page": .integer(page)]
@@ -146,14 +181,18 @@ struct ContentBoardTabs: View {
     let categories: JSONValue
     @Binding var selection: String
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                tab(String(localized: "content.all", table: "Content"), slug: "")
-                ForEach((categories.array ?? []).compactMap { value -> Board? in
-                    guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
-                    return Board(id: slug, title: value.nativeString("title") ?? slug)
-                }) { board in tab(board.title, slug: board.id) }
-            }.padding(.horizontal, 4)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    tab(String(localized: "content.all", table: "Content"), slug: "")
+                    ForEach((categories.array ?? []).compactMap { value -> Board? in
+                        guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
+                        return Board(id: slug, title: value.nativeString("title") ?? slug)
+                    }) { board in tab(board.title, slug: board.id) }
+                }.padding(.horizontal, 4)
+            }
+            .onChange(of: selection) { slug in proxy.scrollTo(slug, anchor: .center) }
+            .onAppear { proxy.scrollTo(selection, anchor: .center) }
         }
     }
     private func tab(_ title: String, slug: String) -> some View {
@@ -167,7 +206,7 @@ struct ContentBoardTabs: View {
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
+        .id(slug).buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
     }
     private struct Board: Identifiable { let id: String; let title: String }
 }
@@ -235,6 +274,7 @@ struct ContentSortPicker: View {
 struct ContentPagedList: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativePostTransition) private var postTransition
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var transitionFeedID = UUID()
     let operation: String
     let arguments: [String: JSONValue]
@@ -246,9 +286,19 @@ struct ContentPagedList: View {
     @State private var observedArguments: [String: JSONValue]?
     let replacePage: ((Int64) -> Void)?
     let visible: (Int64, Int64?) -> Void
-    init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil, clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil, visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
+    @Binding private var pageJumpRequest: ContentHomePageJumpIntent?
+    private let homeBoardSlugs: [String]
+    private let selectHomeBoard: ((String) -> Void)?
+    init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil,
+         clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil,
+         pageJumpRequest: Binding<ContentHomePageJumpIntent?> = .constant(nil), homeBoardSlugs: [String] = [],
+         selectHomeBoard: ((String) -> Void)? = nil,
+         visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
         self.operation = operation; self.arguments = arguments; self.visible = visible; self.clearSearch = clearSearch
         self.replacePage = replacePage
+        self._pageJumpRequest = pageJumpRequest
+        self.homeBoardSlugs = homeBoardSlugs
+        self.selectHomeBoard = selectHomeBoard
         self.requestedRestoreID = restoreID
         _restoreID = State(initialValue: restoreID)
         _restored = State(initialValue: restoreID == nil)
@@ -263,10 +313,11 @@ struct ContentPagedList: View {
     @State private var visibleObservation = ContentFeedVisibleObservation()
     @State private var visiblePage: Int64
     @State private var jump = ContentFeedJump()
-    @State private var pageSheet = ContentFeedSheet()
-    @StateObject private var direction = ContentFeedDragState()
+    @State private var pageSheet = ContentHomePageJumpSheet()
+    @State private var boardSwipe = ContentFeedBoardSwipeTrace()
     @GestureState private var feedDragging = false
-    @State private var chromeHeight: CGFloat = 0
+    @State private var previewMenus: Set<UUID> = []
+    private var previewMenuActive: Bool { !previewMenus.isEmpty }
     @State private var homeTopPosition: (ticket: ContentFeedTicket, id: Int64, atTop: Bool)?
     @State private var homeTopHintSuppression: ContentFeedTicket?
     @State private var homeRefreshRequest: UInt64 = 0
@@ -276,10 +327,23 @@ struct ContentPagedList: View {
     @State private var homeRefreshCompletedOwner: ContentFeedTicket?
     @State private var topRefreshFlight = ContentFeedTopRefreshFlight()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.nativeCardMotionDisabled) private var motionDisabled
     private var isHome: Bool { operation == "feed" && replacePage != nil }
+    private var pageJumpScope: ContentHomePageJumpScope {
+        .init(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
+              sort: arguments["sort"]?.string ?? "")
+    }
     private var totalPages: Int64 { max(1, store.value.nativeInt("totalPages") ?? 1) }
-    private var showRail: Bool {
-        isHome && ContentPreferences(settings: app.settings).homePageBar && totalPages > 1 && !store.value.nativeArray("items").isEmpty
+    private var allowsPostPreview: Bool {
+        isHome && isVisible && app.selectedTab == .home && app.homePath.isEmpty &&
+            app.sheet == nil && !app.departureRunning && pageSheet.owner == nil && authorCard == nil
+    }
+    private var boardSwipeOwner: ContentFeedBoardSwipeOwner? {
+        ContentFeedBoardSwipeOwner(generation: pageJumpScope.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"),
+            board: pageJumpScope.board, orderedBoards: homeBoardSlugs,
+            isHomeRoot: allowsPostPreview && !previewMenuActive, site: app.site.nativeString("current"))
+            .admitted(scope: pageJumpScope, ticket: owner)
     }
     private func owns(_ ticket: ContentFeedTicket) -> Bool {
         owner == ticket && ticket.generation == app.generation &&
@@ -297,6 +361,7 @@ struct ContentPagedList: View {
     var body: some View {
         ScrollViewReader { proxy in
           GeometryReader { viewport in
+            let presented = pageSheet.presentation
             List {
               // Status, empty and pagination rows share the same canvas as post gaps.
               Group {
@@ -315,7 +380,14 @@ struct ContentPagedList: View {
                             } else {
                                 ContentPostRow(value: row.value, openPost: { openPost(row.id, row.value) },
                                                openAuthor: { authorCard = ContentIdentityRow(id: $0, value: .null) },
-                                               transitionSource: isHome && postTransition != nil ? .init(feedID: transitionFeedID, postID: row.id) : nil)
+                                               transitionSource: isHome && postTransition != nil ? .init(feedID: transitionFeedID, postID: row.id) : nil,
+                                               previewItem: allowsPostPreview ? ContentPostPreviewItem(postID: row.id,
+                                                   summary: row.value["summary"] ?? row.value, routeIdentity: row.value,
+                                                   onCommit: { openPost(row.id, row.value) },
+                                                   onMenuStateChanged: { menu, active in
+                                                       if active { previewMenus.insert(menu); boardSwipe.revoke() }
+                                                       else { previewMenus.remove(menu) }
+                                                   }) : nil)
                             }
                         }.id(row.id)
                             .background {
@@ -349,32 +421,41 @@ struct ContentPagedList: View {
                 }
                 loadState("append", proxy: proxy)
                 loadState("refresh", proxy: proxy)
-                if let total = store.value.nativeInt("totalPages") { Text("\(total)").accessibilityLabel(Text(String(localized: "content.totalPages", table: "Content"))) }
-                if isHome {
-                    // The final row can scroll clear of the floating controls.
-                    Color.clear.frame(height: chromeHeight + 24)
-                        .listRowSeparator(.hidden).listRowBackground(Color.clear).accessibilityHidden(true)
-                }
+                if !isHome, let total = store.value.nativeInt("totalPages") { Text("\(total)").accessibilityLabel(Text(String(localized: "content.totalPages", table: "Content"))) }
               }
               .listRowBackground(ContentSurface(canvas: true))
             }
             .listStyle(.plain).scrollContentBackground(.hidden)
             .background(ContentSurface(canvas: true))
-            // Simultaneous observation does not replace the List's pan recognizer or
-            // delay buttons. Inertia and programmatic/geometry changes never feed the rail.
+            // Simultaneous recognizers keep List's vertical pan and row controls native.
             .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
                 .updating($feedDragging) { _, dragging, _ in dragging = true }
                 .onChanged { gesture in
-                    guard isHome, let ticket = owner, owns(ticket) else { return }
+                    boardSwipe.record(boardSwipeOwner, x: gesture.translation.width, y: gesture.translation.height)
                     // Programmatic return cannot prefetch a page; genuine new
-                    // finger travel restores the existing Paging access hints.
-                    homeTopHintSuppression = nil
-                    direction.record(translation: gesture.translation.height)
+                    // vertical finger travel restores the existing Paging access hints.
+                    if isHome, !previewMenuActive, let ticket = owner, owns(ticket),
+                       abs(gesture.translation.height) > abs(gesture.translation.width) {
+                        homeTopHintSuppression = nil
+                    }
                 }
-                .onEnded { _ in direction.endGesture() })
-            .onChange(of: feedDragging) { dragging in
-                if !dragging { direction.endGesture() } // Includes system cancellation.
+                .onEnded { gesture in
+                    guard let target = boardSwipe.finish(current: boardSwipeOwner,
+                        x: gesture.translation.width, y: gesture.translation.height,
+                        rightToLeft: layoutDirection == .rightToLeft) else { return }
+                    selectHomeBoard?(target)
+                })
+            .onChange(of: feedDragging) { dragging in if !dragging { boardSwipe.cancel() } }
+            .onChange(of: homeBoardSlugs) { _ in boardSwipe.revoke() }
+            .onChange(of: boardSwipeOwner) { current in boardSwipe.revoke(unless: current) }
+            .onChange(of: pageJumpRequest) { _ in presentRequestedPageJump() }
+            .onChange(of: owner) { _ in presentRequestedPageJump() }
+            .onChange(of: pageJumpScope) { scope in
+                boardSwipe.revoke(unless: boardSwipeOwner)
+                if pageJumpRequest?.scope != scope { pageJumpRequest = nil }
+                if let ticket = pageSheet.owner, !scope.contains(ticket) { pageSheet.cancel() }
             }
+            .onChange(of: previewMenuActive) { active in if active { boardSwipe.revoke() } }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
                 let currentWindow = window
                 if isHome, let ticket = owner, owns(ticket), case .success(let currentWindow) = currentWindow, let first = currentWindow.rows.first {
@@ -409,7 +490,7 @@ struct ContentPagedList: View {
                     homeTopPosition.map { $0.ticket == ticket && $0.atTop } ?? false), let target {
                     homeTopHintSuppression = ticket
                     restored = true
-                    withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                    withAnimation((reduceMotion || motionDisabled) ? nil : .easeInOut(duration: 0.35)) {
                         proxy.scrollTo(target, anchor: .top)
                     }
                 }
@@ -427,7 +508,7 @@ struct ContentPagedList: View {
                     restoreID = window.rows.first?.id
                     restored = true
                     if let target = restoreID {
-                        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                        withAnimation((reduceMotion || motionDisabled) ? nil : .easeInOut(duration: 0.35)) {
                             proxy.scrollTo(target, anchor: .top)
                         }
                     }
@@ -455,7 +536,7 @@ struct ContentPagedList: View {
                       !(homeTopPosition.map { $0.ticket == ticket && $0.id == first.id && $0.atTop } ?? false) else { return }
                 homeTopHintSuppression = ticket
                 restored = true; restoreID = first.id
-                withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.35)) {
+                withAnimation((reduceMotion || motionDisabled) ? nil : .easeInOut(duration: 0.35)) {
                     proxy.scrollTo(first.id, anchor: .top)
                 }
             }
@@ -484,20 +565,16 @@ struct ContentPagedList: View {
                 } catch is CancellationError { }
                 catch { if owns(ticket), jump.wait == wait { jump.cancel() } }
             }
-            .overlay(alignment: .bottomTrailing) {
-                if isHome {
-                    homeControls(proxy: proxy).padding(12)
-                        .background { GeometryReader { geometry in
-                            Color.clear.preference(key: ContentFeedChromeHeightPreference.self, value: geometry.size.height)
-                        }.allowsHitTesting(false) }
-                }
-            }
-            .onPreferenceChange(ContentFeedChromeHeightPreference.self) { chromeHeight = $0 }
-            .sheet(isPresented: Binding(get: { pageSheet.owner != nil }, set: { if !$0 { pageSheet.cancel() } })) {
-                ContentFeedJumpSheet(page: visiblePage, total: totalPages, cancel: { pageSheet.cancel() }, go: { target in
-                    guard let ticket = owner, owns(ticket), let accepted = pageSheet.take(target, current: ticket) else { return }
+            .sheet(isPresented: Binding(get: { presented != nil && pageSheet.presentation == presented }, set: { shown in
+                if !shown { pageSheet.dismiss(presented, current: owner, scope: pageJumpScope) }
+            })) {
+                ContentFeedJumpSheet(page: visiblePage, total: totalPages, cancel: {
+                    pageSheet.dismiss(presented, current: owner, scope: pageJumpScope)
+                }, go: { target in
+                    guard let accepted = pageSheet.take(target, presented: presented, current: owner,
+                                                       scope: pageJumpScope) else { return }
                     goToPage(accepted, proxy: proxy)
-                })
+                }).id(presented?.id)
             }
           }
         }
@@ -535,7 +612,7 @@ struct ContentPagedList: View {
                 restoreID = requestedRestoreID
                 restored = requestedRestoreID == nil && observedArguments == nil
                 visiblePage = max(1, arguments["page"]?.int ?? 1)
-                direction.reset()
+                boardSwipe.revoke()
                 homeTopPosition = nil; homeTopHintSuppression = nil
                 authorNavigation = nil; authorCard = nil
             }
@@ -551,6 +628,7 @@ struct ContentPagedList: View {
             command.cancel()
             let ticket = ContentFeedTicket(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
                                            sort: arguments["sort"]?.string ?? "", observation: UUID())
+            boardSwipe.revoke()
             owner = ticket
             jump = ContentFeedJump(owner: ticket); pageSheet.cancel()
         }
@@ -565,13 +643,13 @@ struct ContentPagedList: View {
             AccountAuthorQuickCard(uid: row.id, onNavigate: { authorNavigation = $0; authorCard = nil })
         }
         .onChange(of: app.generation) { generation in
-            authorNavigation = nil; authorCard = nil; pageSheet.cancel()
+            authorNavigation = nil; authorCard = nil; pageSheet.cancel(); boardSwipe.revoke()
             if owner?.generation != generation { owner = nil; jump.cancel(); topRefreshFlight.cancel() }
         }
         .onChange(of: store.failure) { failure in
             if failure != nil { topRefreshFlight.cancel() }
         }
-        .onDisappear { command.cancel(); isVisible = false; direction.endGesture(); topRefreshFlight.cancel() }
+        .onDisappear { command.cancel(); isVisible = false; pageJumpRequest = nil; pageSheet.cancel(); boardSwipe.revoke(); topRefreshFlight.cancel() }
         .onAppear { isVisible = true }
     }
     private func refreshHomeFromPageOne(_ ticket: ContentFeedTicket) async -> Bool {
@@ -593,6 +671,7 @@ struct ContentPagedList: View {
             guard store.observeRetained(app, operation, args, restart: pagerRestart) else {
                 topRefreshFlight.cancel(); return
             }
+            boardSwipe.revoke()
             replacePage?(1)
         })
         return succeeded && owns(ticket) && isVisible && !Task.isCancelled
@@ -603,6 +682,11 @@ struct ContentPagedList: View {
         restored = true // Explicit travel wins over an old restoration anchor.
         do { perform(try jump.request(page, snapshot: store.value), ticket: ticket, proxy: proxy) }
         catch { command.failure = error as? NativeFailure ?? .init(code: "INVALID_DATA", message: "Invalid paging window") }
+    }
+    private func presentRequestedPageJump() {
+        guard isHome, let ticket = ContentHomePageJumpIntent.take(&pageJumpRequest,
+            current: pageJumpScope, owner: owner) else { return }
+        pageSheet.present(ticket)
     }
     private func perform(_ action: ContentFeedJump.Action, ticket: ContentFeedTicket, proxy: ScrollViewProxy) {
         guard owns(ticket) else { return }
@@ -624,41 +708,7 @@ struct ContentPagedList: View {
             }
         }
     }
-    private func homeControls(proxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            if showRail {
-                VStack(spacing: 4) {
-                    Button { if let owner, owns(owner) { pageSheet.present(owner) } } label: {
-                        VStack(spacing: 0) {
-                            Text("\(visiblePage)").font(.subheadline.bold())
-                            Text("/\(totalPages)").font(.caption2).foregroundStyle(.secondary)
-                        }.monospacedDigit().frame(minWidth: 44, minHeight: 44)
-                    }
-                    .accessibilityLabel(Text(String(format: NSLocalizedString("page_jump_page_of", comment: ""), visiblePage, totalPages)))
-                    if direction.expanded || pageSheet.owner != nil {
-                        Button { goToPage(max(1, visiblePage - 1), proxy: proxy) } label: {
-                            Image(systemName: "chevron.up").frame(minWidth: 44, minHeight: 44)
-                        }.disabled(visiblePage <= 1).accessibilityLabel(Text("page_jump_previous"))
-                        Button { goToPage(visiblePage < totalPages ? visiblePage + 1 : totalPages, proxy: proxy) } label: {
-                            Image(systemName: "chevron.down").frame(minWidth: 44, minHeight: 44)
-                        }.disabled(visiblePage >= totalPages).accessibilityLabel(Text("page_jump_next"))
-                    }
-                }.buttonStyle(.bordered).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            }
-            Button {
-                switch ContentFeedCompose.resolve(signedIn: app.isSignedIn, board: arguments["categorySlug"]?.string ?? "") {
-                case .signIn: app.showSignIn()
-                case .compose(let arguments): app.open("PostComposer", arguments)
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "square.and.pencil")
-                    if direction.expanded { Text(String(localized: "content.compose", table: "Content")) }
-                }.frame(minWidth: 44, minHeight: 44)
-            }.buttonStyle(.borderedProminent).buttonBorderShape(.roundedRectangle)
-                .accessibilityLabel(Text(String(localized: "content.compose", table: "Content")))
-        }
-    }
+
     private func openPost(_ id: Int64, _ value: JSONValue) {
         let fromHomeRoot = isHome && postTransition != nil && app.selectedTab == .home && app.homePath.isEmpty && app.sheet == nil
         app.open("PostDetail", ["postId": .integer(id), "preview": value["summary"] ?? .null])
@@ -686,11 +736,6 @@ struct ContentPagedList: View {
             })
         }
     }
-}
-
-private struct ContentFeedChromeHeightPreference: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct ContentFeedRowsPreference: PreferenceKey {

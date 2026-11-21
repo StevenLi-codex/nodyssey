@@ -121,6 +121,7 @@ class NSUserDefaults {
     # Compile current boundary sources, not a potentially stale shared jar.
     sources += list((root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session').glob('Private*.kt'))
     sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt']
+    sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data' / name for name in ['PostRepository.kt', 'FeedRemoteMediator.kt']]
     sources += [root / ('shared/src/commonMain/kotlin/io/github/nodyssey/data/composer/' + name) for name in ['PostComposerRepository.kt', 'CommentComposerRepository.kt']]
     (out / 'source-hashes.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [graph_path, content_path, settings_path, main / 'NativeBridge.kt']}, indent=2))
     (out / 'Coil.kt').write_text('''package coil3

@@ -1,5 +1,24 @@
 import Foundation
 
+/// Explicit value input for the independent refresh-control hosting controller.
+/// A new host does not inherit the page's transaction; combine the system value
+/// read at the page with the root's existing app/e-ink motion policy there.
+struct NativeRefreshMotionPolicy: Equatable {
+    let disabled: Bool
+
+    init(reduceMotion: Bool, appMotionDisabled: Bool) {
+        disabled = reduceMotion || appMotionDisabled
+    }
+
+    var successScale: Double { disabled ? 1 : 0.8 }
+    func rotationDegrees(rotating: Bool) -> Double { rotating && !disabled ? 360 : 0 }
+    func repeats(in phase: NativeRefreshState.Phase) -> Bool { phase == .refreshing && !disabled }
+    func pullScale(phase: NativeRefreshState.Phase, progress: Double) -> Double {
+        disabled || phase != .pulling ? 1 : 0.84 + 0.16 * progress
+    }
+    func animatesPhase(_ phase: NativeRefreshState.Phase) -> Bool { !disabled && phase != .pulling }
+}
+
 /// Presentation only: the system scroll view still owns gesture admission and insets.
 struct NativeRefreshState: Equatable {
     enum Phase: Equatable { case idle, pulling, refreshing, success }

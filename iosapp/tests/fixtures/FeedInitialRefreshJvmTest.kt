@@ -161,8 +161,10 @@ fun main(args: Array<String>) = runBlocking {
             check(requests.size == 11)
         } finally { local.cancelAndJoin() }
         println("PASS SQL-blocked rows reveal/hide on same pager with no repeat remote request")
-        for (force in listOf(false, true)) {
-            val anchorDb = Room.databaseBuilder<NodeSeekDatabase>(args[0] + "-anchor-$force").setDriver(BundledSQLiteDriver()).build()
+        for (mode in listOf("ordinary", "force", "receipts")) {
+            val force = mode == "force"
+            val receiptMode = mode == "receipts"
+            val anchorDb = Room.databaseBuilder<NodeSeekDatabase>(args[0] + "-anchor-$mode").setDriver(BundledSQLiteDriver()).build()
             val anchorReveal = MutableStateFlow(false)
             var anchorRequests = 0
             val anchorRemote = object : PostRemoteDataSource {
@@ -182,7 +184,9 @@ fun main(args: Array<String>) = runBlocking {
                 anchorRemote.loadList("tech", page, FeedSort.POST_TIME)
             }.load(LoadType.REFRESH, state) is RemoteMediator.MediatorResult.Success)
             val anchorJob = launch {
-                nativePagingFlow("anchor", anchorRepository.feed("tech", FeedSort.POST_TIME, 1, force), null, 1,
+                val feed = if (receiptMode) anchorRepository.feedWithRefreshReceipts("tech", FeedSort.POST_TIME, 1, false)
+                    else anchorRepository.feed("tech", FeedSort.POST_TIME, 1, force)
+                nativePagingFlow("anchor", feed, null, 1,
                     anchorSessions, kotlin.coroutines.EmptyCoroutineContext).collect { anchorSnapshots += it.jsonObject }
             }
             suspend fun awaitAnchor(condition: () -> Boolean) = withTimeout(5000) {
@@ -200,7 +204,7 @@ fun main(args: Array<String>) = runBlocking {
                 presenter[75]
                 awaitAnchor { presenter.peek(75)?.summary?.postId == 76L }
                 // Ordinary reveal intentionally rebuilds its Pager; only the explicit handle retains it.
-                for (readMark in if (force) listOf(true, false) else listOf(true)) {
+                for (readMark in if (force || receiptMode) listOf(true, false) else listOf(true)) {
                     presenter[75]
                     var refreshed = false
                     val pagesUpdated: () -> Unit = { refreshed = true }
@@ -220,5 +224,60 @@ fun main(args: Array<String>) = runBlocking {
             } finally { anchorJob.cancelAndJoin(); anchorDb.close() }
         }
         println("PASS 120-row read-mark ordinary/explicit and explicit reveal invalidations preserve loaded anchor 76 without extra I/O")
+        val defaultsDb = Room.databaseBuilder<NodeSeekDatabase>(args[0] + "-defaults").setDriver(BundledSQLiteDriver()).build()
+        var defaultsNow = 500_000L
+        var listCalls = 0
+        var searchCalls = 0
+        val searchArguments = mutableListOf<Triple<String, String?, FeedSort>>()
+        val defaultsClock = object : AppClock { override fun nowMillis() = defaultsNow }
+        val defaultsRemote = object : PostRemoteDataSource {
+            override suspend fun loadList(categorySlug: String?, page: Int, sort: FeedSort): PostListPage {
+                listCalls++
+                return PostListPage(listOf(PostSummary(800, "default", "fixture", null, null, null, categorySlug, null, 0, null, null)), page, false)
+            }
+            override suspend fun loadSearch(query: String, page: Int, categorySlug: String?, sort: FeedSort): PostListPage {
+                searchCalls++
+                searchArguments += Triple(query, categorySlug, sort)
+                return PostListPage(listOf(PostSummary(900, "search", "fixture", null, null, null, categorySlug, null, 0, null, null)), page, false)
+            }
+            override suspend fun loadDetail(postId: Long, page: Int): PostDetail = error("unused")
+        }
+        val defaultsRepository = OfflineFirstPostRepository(defaultsDb, defaultsRemote, defaultsClock)
+        suspend fun ordinaryWindow(data: Flow<PagingData<FeedPost>>, expected: Long) {
+            check(data !is FeedPagingFlow) { "Android/default/search path opted into receipts" }
+            val values = mutableListOf<JsonObject>()
+            val localSessions = NativePagingSessions()
+            val collecting = launch {
+                nativePagingFlow("defaults", data, null, 1, localSessions, kotlin.coroutines.EmptyCoroutineContext).collect { values += it.jsonObject }
+            }
+            try {
+                withTimeout(5000) {
+                    while (values.lastOrNull()?.let {
+                        it["items"] == JsonArray(listOf(JsonPrimitive(expected))) &&
+                            it["refresh"]!!.jsonObject["status"]!!.jsonPrimitive.content == "NotLoading"
+                    } != true) yield()
+                }
+                check(values.last()["refreshReceiptVersion"] == JsonNull)
+            } finally { collecting.cancelAndJoin() }
+        }
+        try {
+            ordinaryWindow(defaultsRepository.feed("tech", FeedSort.POST_TIME), 800)
+            check(listCalls == 1)
+            defaultsNow += FeedRemoteMediator.CACHE_TTL_MILLIS - 1
+            ordinaryWindow(defaultsRepository.feed("tech", FeedSort.POST_TIME), 800)
+            check(listCalls == 1) { "ordinary fresh cache fetched again" }
+            defaultsNow += 2
+            ordinaryWindow(defaultsRepository.feed("tech", FeedSort.POST_TIME), 800)
+            check(listCalls == 2) { "ordinary stale cache did not refresh exactly once" }
+            ordinaryWindow(defaultsRepository.searchFeed(" android ", "tech", FeedSort.POST_TIME), 900)
+            check(searchCalls == 1 && searchArguments.single() == Triple("android", "tech", FeedSort.POST_TIME))
+            defaultsNow += FeedRemoteMediator.CACHE_TTL_MILLIS - 1
+            ordinaryWindow(defaultsRepository.searchFeed("android", "tech", FeedSort.POST_TIME), 900)
+            check(searchCalls == 1) { "search fresh cache fetched again" }
+            defaultsNow += 2
+            ordinaryWindow(defaultsRepository.searchFeed("android", "tech", FeedSort.POST_TIME), 900)
+            check(searchCalls == 2 && listCalls == 2) { "search stale cache refresh/count changed" }
+            println("PASS original default/search paths stay non-receipt, fresh TTL skips and expired TTL fetches exactly once with original query/board/sort")
+        } finally { defaultsDb.close() }
     } finally { db.close() }
 }

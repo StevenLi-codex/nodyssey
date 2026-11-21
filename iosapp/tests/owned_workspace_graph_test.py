@@ -22,6 +22,7 @@ imports = [line for line in text.splitlines() if line.startswith('import ') and 
 sources = [out / 'OwnedGraph.kt', base / 'IosAppCacheStore.kt', root / 'iosapp/tests/fixtures/OwnedWorkspacePlatform.kt', root / 'iosapp/tests/fixtures/OwnedWorkspaceGraphTest.kt']
 sources += list((root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session').glob('Private*.kt'))
 sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/session/SessionWorkBarrier.kt', root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data/settings/WorkspaceSettingsDataStore.kt']
+sources += [root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data' / name for name in ['PostRepository.kt', 'FeedRemoteMediator.kt']]
 # JVM factory equivalents use the same explicit paths and owned scopes.
 (out / 'Factory.kt').write_text('''package io.github.nodyssey.data
 import androidx.datastore.preferences.core.*

@@ -1,8 +1,15 @@
 package io.github.nodyssey.data.session
 
 import androidx.paging.PagingData
-import io.github.nodyssey.data.*
-import io.github.nodyssey.model.*
+import io.github.nodyssey.data.FeedPagingFlow
+import io.github.nodyssey.data.FeedPost
+import io.github.nodyssey.data.FreeChickenLegs
+import io.github.nodyssey.data.PostRepository
+import io.github.nodyssey.data.ReadHistoryEntry
+import io.github.nodyssey.data.ThreadReactionRead
+import io.github.nodyssey.model.FeedSort
+import io.github.nodyssey.model.ReactionAction
+import io.github.nodyssey.model.ThreadSnapshot
 import kotlinx.coroutines.flow.Flow
 
 /** iOS opt-in. Control-plane cleanup uses the raw repository only after joined revocation. */
@@ -10,8 +17,18 @@ class PrivatePostRepository(private val delegate: PostRepository, private val bo
     override fun feed(categorySlug: String?, sort: FeedSort, startPage: Int, forceInitialRefresh: Boolean): Flow<PagingData<FeedPost>> {
         val flow = delegate.feed(categorySlug, sort, startPage, forceInitialRefresh)
         return if (flow is io.github.nodyssey.data.FeedPagingFlow) {
-            io.github.nodyssey.data.FeedPagingFlow(boundary.protect(flow.generations))
-        } else boundary.protect(flow)
+            io.github.nodyssey.data.FeedPagingFlow(boundary.protect(flow.generations), flow.refreshRequests)
+        } else {
+            boundary.protect(flow)
+        }
+    }
+    override fun feedWithRefreshReceipts(categorySlug: String?, sort: FeedSort, startPage: Int, forceInitialRefresh: Boolean): Flow<PagingData<FeedPost>> {
+        val flow = delegate.feedWithRefreshReceipts(categorySlug, sort, startPage, forceInitialRefresh)
+        return if (flow is FeedPagingFlow) {
+            FeedPagingFlow(boundary.protect(flow.generations), flow.refreshRequests)
+        } else {
+            boundary.protect(flow)
+        }
     }
     override fun feedTotalPages(categorySlug: String?, sort: FeedSort): Flow<Int> = boundary.protect(delegate.feedTotalPages(categorySlug, sort))
     override suspend fun feedRowIndexOfPage(categorySlug: String?, sort: FeedSort, page: Int): Int? = boundary.protect { delegate.feedRowIndexOfPage(categorySlug, sort, page) }

@@ -31,7 +31,7 @@ import Testing
     @Test func sensitivityBoundariesPreserveAccidentalDragRejection() {
         #expect(ContentBackSwipe.shouldReturn(startX: 36, width: 400,
             translationX: 44, translationY: 0, predictedX: 160))
-        #expect(!ContentBackSwipe.shouldReturn(startX: 37, width: 400,
+        #expect(ContentBackSwipe.shouldReturn(startX: 37, width: 400,
             translationX: 240, translationY: 0, predictedX: 280))
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
             translationX: 60, translationY: 0, predictedX: 159))
@@ -50,12 +50,12 @@ import Testing
         }
     }
 
-    @Test func sensitiveSwipeAndEdgeBoundariesMirrorInRightToLeftLayout() {
+    @Test func sensitiveSwipeAndContentBoundariesMirrorInRightToLeftLayout() {
         #expect(ContentBackSwipe.shouldReturn(startX: 368, width: 400,
             translationX: -60, translationY: 0, predictedX: -240, rightToLeft: true))
         #expect(ContentBackSwipe.shouldReturn(startX: 364, width: 400,
             translationX: -100, translationY: 0, predictedX: -100, rightToLeft: true))
-        #expect(!ContentBackSwipe.shouldReturn(startX: 363, width: 400,
+        #expect(ContentBackSwipe.shouldReturn(startX: 200, width: 400,
             translationX: -240, translationY: 0, predictedX: -280, rightToLeft: true))
         #expect(!ContentBackSwipe.shouldReturn(startX: 392, width: 400,
             translationX: -43, translationY: 0, predictedX: -300, rightToLeft: true))
@@ -63,10 +63,10 @@ import Testing
             translationX: -60, translationY: 40, predictedX: -240, rightToLeft: true))
     }
 
-    @Test func normalReadingInteriorAndShortDragsNeverRequestReturn() {
+    @Test func centerIsEligibleButVerticalAndShortDragsAreNot() {
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
             translationX: 20, translationY: 300, predictedX: 30))
-        #expect(!ContentBackSwipe.shouldReturn(startX: 160, width: 400,
+        #expect(ContentBackSwipe.shouldReturn(startX: 160, width: 400,
             translationX: 240, translationY: 12, predictedX: 280))
         // Product intent: sub-44pt motion remains a rejected accidental tap/jitter.
         #expect(!ContentBackSwipe.shouldReturn(startX: 8, width: 400,
@@ -89,6 +89,17 @@ import Testing
             translationX: 300, translationY: 0, predictedX: 220))
         #expect(!ContentBackSwipe.shouldReturn(startX: 392, width: 400,
             translationX: -300, translationY: 0, predictedX: -220, rightToLeft: true))
+    }
+
+    @Test func progressTracksTravelBothWaysAndClampsOvershoot() {
+        #expect(ContentBackSwipe.begins(velocityX: -100, velocityY: 12, rightToLeft: true))
+        #expect(!ContentBackSwipe.begins(velocityX: 100, velocityY: 12, rightToLeft: true))
+        #expect(!ContentBackSwipe.begins(velocityX: 100, velocityY: 90, rightToLeft: false))
+        #expect(ContentBackSwipe.progress(translationX: 100, width: 400, rightToLeft: false) == 0.25)
+        #expect(ContentBackSwipe.progress(translationX: -240, width: 400, rightToLeft: true) == 0.6)
+        #expect(ContentBackSwipe.progress(translationX: -120, width: 400, rightToLeft: true) == 0.3)
+        #expect(ContentBackSwipe.progress(translationX: -440, width: 400, rightToLeft: true) == 1)
+        #expect(ContentBackSwipe.progress(translationX: 10, width: 400, rightToLeft: true) == 0)
     }
 
     @Test func invalidGeometryFailsClosed() {

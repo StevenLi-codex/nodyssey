@@ -70,6 +70,7 @@ struct ContentPostRow: View {
     var openPost: (() -> Void)? = nil
     var openAuthor: ((Int64) -> Void)? = nil
     var transitionSource: NativePostTransition.Source? = nil
+    var previewItem: ContentPostPreviewItem? = nil
     var body: some View {
         let summary = value["summary"] ?? value
         postAction {
@@ -141,7 +142,16 @@ struct ContentPostRow: View {
         .background { ContentPostCardSurface().allowsHitTesting(false) }
     }
     @ViewBuilder private func postAction<Label: View>(@ViewBuilder label: () -> Label) -> some View {
-        if let openPost { Button(action: openPost, label: label).buttonStyle(NativeCardPressStyle()) }
+        if let openPost {
+            Button(action: openPost) {
+                label().background {
+                    if let previewItem {
+                        ContentPostPreviewInteraction(item: previewItem)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }.buttonStyle(NativeCardPressStyle())
+        }
         else { label() }
     }
     private func author(_ summary: JSONValue) -> some View {

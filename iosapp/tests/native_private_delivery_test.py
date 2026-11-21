@@ -109,7 +109,7 @@ def main():
     props = dict(re.findall(r'override val (\w+): ([\w<>?]+)', graph))
     interface_props = dict(re.findall(r'^\s*val (\w+): ([\w<>?]+)\s*$', app_container, re.M))
     service_props = dict(re.findall(r'override val (\w+): ([\w<>?]+)', services))
-    names = sorted(set(re.findall(r'graph\.(\w+)', bridge + (native / 'NativeContent.kt').read_text())) - {'privateBoundary'})
+    names = sorted(set(re.findall(r'graph\.(\w+)', bridge + (native / 'NativeContent.kt').read_text())) - {'privateBoundary', 'previewThread'})
     type_by_name = dict(interface_props)
     type_by_name.update(service_props)
     type_by_name.update(props)
@@ -119,10 +119,18 @@ def main():
     unresolved_imports = sorted({re.sub(r'[<>?]', '', type_by_name[n]) for n in names} - imports.keys() - {'Map', 'String', 'Any'})
     if unresolved_imports:
         raise SystemExit(f'Cannot resolve fixture graph type imports from production declarations: {unresolved_imports}')
-    lines = ['package io.github.nodyssey.ios']
+    lines = ['package io.github.nodyssey.ios', 'import kotlinx.coroutines.ensureActive']
     lines += ['import ' + imports[re.sub(r'[<>?]', '', type_by_name[n])] for n in names if re.sub(r'[<>?]', '', type_by_name[n]) not in {'Map', 'String', 'Any'}]
     lines += ['class IosAppContainer(val values: Map<String, Any>, val privateBoundary: io.github.nodyssey.data.session.PrivateSessionBoundary) {']
     lines += [f'val {n}: {type_by_name[n]} get() = values.getValue("{n}") as {type_by_name[n]}' for n in names]
+    preview = graph[graph.index('    private val previewSite ='):graph.index('    override val postRepository:')]
+    lines += [
+        'val lifetime = io.github.nodyssey.data.session.PrivateWorkspaceLifetime().also { kotlinx.coroutines.runBlocking { it.start() } }',
+        'val remotePosts: io.github.nodyssey.data.PostRemoteDataSource get() = values.getValue("remotePosts") as io.github.nodyssey.data.PostRemoteDataSource',
+        preview,
+    ]
+    hashes[str(graph_path.relative_to(ROOT))] = hashlib.sha256(graph_path.read_bytes()).hexdigest()
+    sources += [common / 'PrivateWorkspaceLifetime.kt']
     lines += ['}', 'object NodysseyApp { lateinit var fixture: IosAppContainer; suspend fun ensureContainer() = fixture; fun nativeSiteMetadata(): kotlinx.serialization.json.JsonObject = error("Unused public bootstrap; tested in graph integration") }']
     (out / 'Graph.kt').write_text('\n'.join(lines))
     (out / 'UnusedDomains.kt').write_text('''package io.github.nodyssey.ios.native
@@ -173,9 +181,21 @@ fun main(args: Array<String>) {{
     coords += [('org.jetbrains.kotlinx', a, '1.11.0') for a in ['kotlinx-coroutines-core-jvm', 'kotlinx-coroutines-test-jvm', 'kotlinx-serialization-core-jvm', 'kotlinx-serialization-json-jvm']]
     coords += [('org.jetbrains.kotlinx', 'kotlinx-datetime-jvm', '0.8.0'), ('org.jetbrains', 'annotations', '23.0.0'), ('junit', 'junit', '4.13.2'), ('org.hamcrest', 'hamcrest-core', '1.3')]
     jars = [p for g,a,v in coords for p in (cache/g/a/v).rglob('*.jar')]
-    for group in ['androidx.datastore', 'androidx.paging', 'androidx.collection', 'com.squareup.okio']:
-        jars += list((cache/group).rglob('*.jar'))
-    jars += [ROOT/f'{m}/build/libs/{m}-jvm.jar' for m in ['shared','richtext']]
+    for group in ['androidx.datastore', 'androidx.paging', 'androidx.collection', 'androidx.room', 'androidx.sqlite', 'com.squareup.okio']:
+        jars += [p for p in (cache/group).rglob('*.jar') if not any(x in str(p) for x in ['compiler', 'gradle-plugin', 'testing'])]
+    from settings_compile_fixture import repository_jars
+    repository_root = ROOT if (ROOT/'shared/build/libs/shared-jvm.jar').exists() else ROOT.parent/'nodyssey-swiftui'
+    jars += repository_jars(repository_root, out)
+    sources += [common.parent / f for f in ['PostRepository.kt', 'FeedRemoteMediator.kt']]
+    # Freeze complete production inputs and avoid classpath jars being rewritten by another owner.
+    frozen_sources = []
+    for index, source in enumerate(sources):
+        frozen = out / 'inputs' / str(index) / source.name
+        frozen.parent.mkdir(parents=True, exist_ok=True)
+        frozen.write_bytes(source.read_bytes())
+        hashes[str(source)] = hashlib.sha256(frozen.read_bytes()).hexdigest()
+        frozen_sources.append(frozen)
+    sources = frozen_sources
     cp = ':'.join(map(str, jars))
     java = str(Path.home() / '.cache/nodyssey-build/jdk21/bin/java')
     plugin = next((cache/'org.jetbrains.kotlin/kotlin-serialization-compiler-plugin-embeddable/2.4.20').rglob('*.jar'))

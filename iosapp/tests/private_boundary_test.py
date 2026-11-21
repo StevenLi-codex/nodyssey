@@ -13,13 +13,15 @@ out = Path(tempfile.mkdtemp(prefix='private-boundary-', dir=os.environ['TMPDIR']
 java = str(Path.home() / '.cache/nodyssey-build/jdk21/bin/java')
 coords = [('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.4.20'),('org.jetbrains.kotlin','kotlin-stdlib','2.4.20'),('org.jetbrains.kotlin','kotlin-test','2.4.20'),('org.jetbrains.kotlin','kotlin-test-junit','2.4.20'),('org.jetbrains.kotlinx','kotlinx-coroutines-core-jvm','1.11.0'),('org.jetbrains.kotlinx','kotlinx-serialization-core-jvm','1.11.0'),('org.jetbrains.kotlinx','kotlinx-serialization-json-jvm','1.11.0'),('org.jetbrains','annotations','23.0.0'),('junit','junit','4.13.2'),('org.hamcrest','hamcrest-core','1.3')]
 jars = [p for g,a,v in coords for p in (cache/g/a/v).rglob('*.jar')]
-for group in ['androidx.datastore', 'androidx.paging', 'com.squareup.okio', 'androidx.collection']:
+jars += list((cache / 'org.jetbrains.kotlinx/kotlinx-datetime-jvm/0.8.0').rglob('*.jar'))
+for group in ['androidx.datastore', 'androidx.paging', 'com.squareup.okio', 'androidx.collection', 'androidx.room', 'androidx.sqlite']:
     jars += list((cache/group).rglob('*.jar'))
 jars += [root/f'{m}/build/libs/{m}-jvm.jar' for m in ['shared','richtext']]
 cp = ':'.join(map(str,jars))
 common = root/'shared/src/commonMain/kotlin'
 sources = list((common/'io/github/nodyssey/data/session').glob('Private*.kt')) + list((common/'io/github/nodyssey/data/session').glob('SessionWork*.kt'))
 sources += [common/p for p in ['io/github/plaza/core/net/SessionCookies.kt','io/github/nodyssey/data/session/SessionRepository.kt','io/github/nodyssey/data/composer/PostComposerRepository.kt','io/github/nodyssey/data/composer/CommentComposerRepository.kt']]
+sources += [common / 'io/github/nodyssey/data' / name for name in ['PostRepository.kt', 'FeedRemoteMediator.kt']]
 sources += list((root/'shared/src/jvmTest/kotlin/io/github/nodyssey/data/session').glob('PrivateBoundary*Test.kt'))
 plugin = next((cache/'org.jetbrains.kotlin/kotlin-serialization-compiler-plugin-embeddable/2.4.20').rglob('*.jar'))
 print('Artifacts:',out,flush=True)

@@ -8,7 +8,6 @@ struct ContentPostDetail: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativeDestinationID) private var destinationID
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.layoutDirection) private var layoutDirection
     let postID: Int64
     let initialFloor: String?
     let initialPage: Int64?
@@ -33,8 +32,6 @@ struct ContentPostDetail: View {
     @State private var reaction: PendingReaction?
     @State private var allowance: JSONValue = .null
     @State private var jumpPresented = false
-    @State private var railExpanded = true
-    @State private var railClearance: CGFloat = 0
     @State private var hasRead = false
     @State private var titleOffscreen = false
     @State private var selectedFloor: FloorSelection?
@@ -98,50 +95,22 @@ struct ContentPostDetail: View {
                             NativeEmptyView(CT("noCachedThread"))
                             Button(CT("reload")) { loadRetry += 1 }.padding()
                         }
-                        // A high-water clearance, never the collapsed rail's smaller height.
-                        Color.clear.frame(height: railClearance + 24).id("thread.bottom")
+                        Color.clear.frame(height: 24).id("thread.bottom")
                     }
                 }
                 .coordinateSpace(name: "thread.viewport")
                 .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(ContentThreadFrames.self) { frames in updateViewport(frames, height: viewport.size.height) }
-                .simultaneousGesture(DragGesture(minimumDistance: 8)
-                    .onChanged { _ in
-                        if !hasRead { hasRead = true }
-                        if railExpanded { railExpanded = false }
-                    }
-                    .onEnded { gesture in
-                        guard let destinationID,
-                              ContentBackSwipe.shouldReturn(startX: Double(gesture.startLocation.x),
-                                width: Double(viewport.size.width), translationX: Double(gesture.translation.width),
-                                translationY: Double(gesture.translation.height), predictedX: Double(gesture.predictedEndTranslation.width),
-                                rightToLeft: layoutDirection == .rightToLeft) else { return }
-                        Task { @MainActor in
-                            // Recheck after scheduling: a system pop or a new route
-                            // may already have changed the owner. Never pop its parent.
-                            guard !covered, !app.departureRunning else { return }
-                            await app.dismissDestination(destinationID)
-                        }
-                    })
-                .overlay(alignment: .bottomTrailing) {
-                    if !replyOwner.visible && !covered {
-                        ContentThreadPageRail(page: currentPage, total: totalPages,
-                            expanded: railExpanded || jumpPresented || command.failure != nil,
-                            enabled: thread.value != .null,
-                            previous: { jump(.init(floor: nil, page: currentPage - 1)) },
-                            next: { jump(.init(floor: nil, page: currentPage + 1)) },
-                            jump: { jumpPresented = true }, reply: { reply(nil) })
-                            .background(GeometryReader { geometry in Color.clear.preference(key: ContentThreadRailHeight.self, value: geometry.size.height) })
-                            .padding(16)
-                    }
-                }
-                .onPreferenceChange(ContentThreadRailHeight.self) { railClearance = max(railClearance, $0) }
+                .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in
+                    if !hasRead { hasRead = true }
+                })
             }
             .onChange(of: thread.value) { _ in restoreScroll(proxy) }
             .onChange(of: target) { _ in restoreScroll(proxy) }
             .onChange(of: loadingPage) { _ in restoreScroll(proxy) }
         }
         .nativePageCanvas()
+        .environment(\.contentThreadGalleryValue, sharedRichGalleryNodes)
         .navigationTitle(titleOffscreen ? title : CT("thread"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -151,6 +120,15 @@ struct ContentPostDetail: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { openBrowser() } label: { Label(CT("openOriginal"), systemImage: "safari") }
                 Menu {
+                    Button { jumpPresented = true } label: {
+                        Label("page_jump_title", systemImage: "arrow.turn.down.right")
+                    }.disabled(thread.value == .null)
+                    if totalPages > 1 {
+                        Button(CT("previous")) { jump(.init(floor: nil, page: currentPage - 1)) }
+                            .disabled(thread.value == .null || currentPage <= 1)
+                        Button(CT("next")) { jump(.init(floor: nil, page: currentPage + 1)) }
+                            .disabled(thread.value == .null || currentPage >= totalPages)
+                    }
                     Button(CT("reload")) { load(page: currentPage, extend: true) }
                     Button(CT("track")) { toggleTracking() }
                     Button(CT("all")) { app.open("TrackedThreads") }
@@ -241,6 +219,18 @@ struct ContentPostDetail: View {
                 return CommentRow(id: id, value: value, page: pages.indices.contains(index) ? pages[index].int ?? firstPage : firstPage)
             }
         }
+    }
+    // Match the existing gallery projection: loaded body/comment nodes only.
+    // Signatures/stickers not in this collection keep the clicked-image fallback.
+    private var sharedRichGalleryNodes: JSONValue {
+        var nodes: [JSONValue] = []
+        if let body = thread.value["body"], body != .null, !blocked(body, opening: true) {
+            nodes += body.nativeArray("nodes")
+        }
+        for row in commentRows where !blocked(row.value, opening: false) {
+            nodes += row.value.nativeArray("nodes")
+        }
+        return .array(nodes)
     }
     private var firstNewRowID: String? {
         guard let firstNewFloor else { return nil }
@@ -506,7 +496,6 @@ struct ContentPostDetail: View {
         if let opening = frames["#0"], opening.maxY > 0, thread.value["body"] != .null, thread.value["body"] != nil {
             let nextTarget = ContentReadingTarget(visibleFloor: "#0", page: 1)
             if visibleTarget != nextTarget { visibleTarget = nextTarget }
-            if opening.minY >= 0, !railExpanded { railExpanded = true }
         } else if let row = visible.min(by: { (frames[$0.id]?.minY ?? 0) < (frames[$1.id]?.minY ?? 0) }) {
             let nextTarget = ContentReadingTarget(visibleFloor: row.value.nativeString("floor"), page: row.page)
             if visibleTarget != nextTarget { visibleTarget = nextTarget }

@@ -9,6 +9,8 @@ cp -R "$HERE/Tests" "$STAGE/Tests"
 cp -R "$HERE/../NativeCore/Sources/NodysseyNativeCore" "$STAGE/Core"
 cp "$HERE/../Nodyssey/Native/Content/ContentBackSwipe.swift" "$STAGE/Sources/ContentBackSwipe.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentState.swift" "$STAGE/Sources/ContentState.swift"
+cp "$HERE/../Nodyssey/Native/Content/ContentPostPreviewState.swift" "$STAGE/Sources/"
+cp "$HERE/../Nodyssey/Native/Content/ContentHomePageJumpIntent.swift" "$STAGE/Sources/"
 cp "$HERE/../Nodyssey/Native/Content/ContentFeedDragState.swift" "$STAGE/Sources/ContentFeedDragState.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentFeedTopRefresh.swift" "$STAGE/Sources/ContentFeedTopRefresh.swift"
 cp "$HERE/../Nodyssey/Native/Content/ContentCommand.swift" "$STAGE/Sources/ContentCommand.swift"
@@ -19,7 +21,7 @@ cp "$HERE/../Nodyssey/Native/Content/ContentPreferences.swift" "$STAGE/Sources/C
 if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
     cp "$HERE/../Nodyssey/Native/Foundation/NativePageCanvas.swift" "$STAGE/Sources/"
     cp "$HERE/../Nodyssey/Native/Foundation/NativeGlassSurface.swift" "$STAGE/Sources/"
-    for file in NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion NativeRefreshable NativePostTransition NativePressStyle; do
+    for file in NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion NativeRefreshable NativePostTransition NativePressStyle NativeSettingsAppearance; do
         cp "$HERE/../Nodyssey/Native/Foundation/$file.swift" "$STAGE/Sources/"
     done
     cp "$HERE/../Nodyssey/Native/Content/"*.swift "$STAGE/Sources/"
@@ -33,9 +35,17 @@ if [ "${CONTENT_COMPOSITION:-0}" = 1 ]; then
     for file in AccountAuthorQuickCard AccountAuthorQuickCardState AccountProfileDate; do
         cp "$HERE/../Nodyssey/Native/Account/$file.swift" "$STAGE/Sources/"
     done
+    # Appearance's accent environment key lives in the real Settings component.
+    for file in SettingsComponents SettingsBehavior; do
+        cp "$HERE/../Nodyssey/Native/Settings/$file.swift" "$STAGE/Sources/"
+    done
     cp "$HERE/Typecheck/ThreadEditorContracts.swift" "$STAGE/Sources/"
     cp "$HERE/CompositionSupport/"*.swift "$STAGE/Sources/"
     cp "$HERE/Composition/"*.swift "$STAGE/Tests/"
+else
+    # Preview/swipe state uses the shipping JSON accessors; composition supplies
+    # its own explicit platform boundary and must not duplicate these types.
+    cp "$HERE/../Nodyssey/Native/Foundation/NativeDestination.swift" "$STAGE/Sources/"
 fi
 # CLT-only Macs keep Swift Testing outside SwiftPM's inferred framework path.
 if [ "$(uname -s)" = Darwin ] && [ "$(xcode-select -p)" = /Library/Developer/CommandLineTools ]; then
@@ -48,4 +58,9 @@ if [ "$(uname -s)" = Darwin ] && [ "$(xcode-select -p)" = /Library/Developer/Com
         -Xlinker -rpath -Xlinker "$FRAMEWORKS" -Xlinker -F -Xlinker "$FRAMEWORKS"
 else
     swift test --package-path "$STAGE"
+fi
+# The default local entry also executes the isolated real-Store preview suite.
+# Composition already contains its state tests; this leaf never delegates back.
+if [ "${CONTENT_COMPOSITION:-0}" != 1 ]; then
+    sh "$HERE/Preview/run-tests.sh"
 fi

@@ -42,6 +42,9 @@ extension EnvironmentValues {
 /// A nil callback disables its action; the renderer never fabricates a successful mutation.
 struct NativeRichTextActions {
     var onImage: ((String, String?) -> Void)?
+    var imageTapUsesOwner: Bool
+    /// Explicit image environment injection at the content owner; no second image pipeline.
+    var attachmentContent: ((String, String?, NativeRichTextActions) -> AnyView)?
     var onVote: ((Int64) -> Void)?
     var onStardust: ((NativeStardustReceive) -> Void)?
     var onLink: ((String) -> Void)?
@@ -53,6 +56,8 @@ struct NativeRichTextActions {
 
     init(
         onImage: ((String, String?) -> Void)? = nil,
+        imageTapUsesOwner: Bool = false,
+        attachmentContent: ((String, String?, NativeRichTextActions) -> AnyView)? = nil,
         onVote: ((Int64) -> Void)? = nil,
         onStardust: ((NativeStardustReceive) -> Void)? = nil,
         onLink: ((String) -> Void)? = nil,
@@ -61,6 +66,8 @@ struct NativeRichTextActions {
         codeContent: ((NativeCode, NativeRichTextActions) -> AnyView)? = nil
     ) {
         self.onImage = onImage
+        self.imageTapUsesOwner = imageTapUsesOwner
+        self.attachmentContent = attachmentContent
         self.onVote = onVote
         self.onStardust = onStardust
         self.onLink = onLink
@@ -105,7 +112,7 @@ private struct NativeRichBlock: View {
         case .paragraph(let inlines):
             NativeInlineContent(inlines: inlines, actions: actions)
         case let .heading(level, inlines):
-            NativeInlineContent(inlines: inlines, actions: actions, font: role.headingFont(level))
+            NativeInlineContent(inlines: inlines, actions: actions, font: role.headingFont(level), headingLevel: level)
                 .accessibilityAddTraits(.isHeader)
         case let .image(url, alt):
             NativeRichImage(url: url, alt: alt, actions: actions)
@@ -177,6 +184,9 @@ private struct NativeRichBlock: View {
 }
 
 private struct NativeRichFold: View {
+    @Environment(\.nativeRichSelectionActive) private var parentActive
+    @Environment(\.nativeRichSelectionLifetimes) private var parentLifetimes
+    @StateObject private var selection = NativeRichSelectionLifetime()
     let title: String
     let children: [NativeRichNode]
     let actions: NativeRichTextActions
@@ -190,8 +200,14 @@ private struct NativeRichFold: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            AnyView(NativeRichTextView(nodes: children, actions: actions)).padding(.top, 8)
+        DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { value in
+            if !value { selection.revoke() }
+            expanded = value
+        })) {
+            AnyView(NativeRichTextView(nodes: children, actions: actions))
+                .environment(\.nativeRichSelectionActive, parentActive && expanded)
+                .environment(\.nativeRichSelectionLifetimes, parentLifetimes + [selection])
+                .padding(.top, 8)
         } label: {
             if title.isEmpty { Text("Details") } else { Text(title) }
         }
@@ -199,6 +215,9 @@ private struct NativeRichFold: View {
 }
 
 private struct NativeRichTabs: View {
+    @Environment(\.nativeRichSelectionActive) private var parentActive
+    @Environment(\.nativeRichSelectionLifetimes) private var parentLifetimes
+    @StateObject private var selection = NativeRichSelectionLifetime()
     let tabs: [NativeRichTab]
     let actions: NativeRichTextActions
     @State private var selected = 0
@@ -208,7 +227,11 @@ private struct NativeRichTabs: View {
             ScrollView(.horizontal) {
                 HStack {
                     ForEach(tabs.indices, id: \.self) { index in
-                        Button { selected = index } label: {
+                        Button {
+                            guard selected != index else { return }
+                            selection.revoke()
+                            selected = index
+                        } label: {
                             Text(tabs[index].title)
                                 .fontWeight(selected == index ? .semibold : .regular)
                                 .padding(.horizontal, 10).padding(.vertical, 6)
@@ -223,6 +246,8 @@ private struct NativeRichTabs: View {
             ZStack(alignment: .topLeading) {
                 ForEach(tabs.indices, id: \.self) { index in
                     AnyView(NativeRichTextView(nodes: tabs[index].children, actions: actions))
+                        .environment(\.nativeRichSelectionActive, parentActive && selected == index)
+                        .environment(\.nativeRichSelectionLifetimes, parentLifetimes + [selection])
                         .frame(height: selected == index ? nil : 0, alignment: .top)
                         .clipped()
                         .opacity(selected == index ? 1 : 0)
@@ -232,21 +257,22 @@ private struct NativeRichTabs: View {
             }
         }
         .onChange(of: tabs.count) { count in
-            if selected >= count { selected = 0 }
+            if selected >= count { selection.revoke(); selected = 0 }
         }
     }
 }
 
-private struct NativeRichImage: View {
+struct NativeRichImage: View {
     let url: String
     let alt: String?
     let actions: NativeRichTextActions
 
     @ViewBuilder var body: some View {
         if NativeRichLinkPolicy.isAllowed(url) {
-            // The platform image already owns tap-to-view, retry, and metered-data consent.
-            // Do not wrap it in a Button: that steals retry gestures or opens two galleries.
-            NativeRemoteImage(url: url, aspectFit: true)
+            // Only the loaded remote leaf is a gallery Button; retry/consent keep their owner.
+            NativeRemoteImage(url: url, aspectFit: true, onOpen: actions.imageTapUsesOwner ? actions.onImage.map { open in
+                { open(url, alt) }
+            } : nil)
                 .accessibilityLabel(alt.flatMap { $0.isEmpty ? nil : $0 } ?? "Image")
                 .contextMenu {
                     if let onImage = actions.onImage {
@@ -267,6 +293,8 @@ private struct NativeInlineContent: View {
     let actions: NativeRichTextActions
     var font: Font? = nil
     var inTable = false
+    var headingLevel: Int? = nil
+    @Environment(\.nativeRichSelectionEnabled) private var nativeSelection
     @ScaledMetric(relativeTo: .body) private var stickerSize = 24.0
     @StateObject private var flowProjection = NativeRenderingMemo<[NativeInlineNode], [NativeInlineNode]>()
 
@@ -277,6 +305,21 @@ private struct NativeInlineContent: View {
     }
 
     var body: some View {
+        Group {
+            #if os(iOS) && canImport(UIKit)
+            if nativeSelection {
+                NativeSelectableParagraph(inlines: inlines, actions: actions, role: role,
+                    headingLevel: headingLevel, inTable: inTable, stickerSize: stickerSize)
+            } else { legacyContent }
+            #else
+            legacyContent
+            #endif
+        }
+        .font(font ?? role.textFont)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var legacyContent: some View {
         Group {
             if hasMedia {
                 NativeInlineLayout(revision: .init(

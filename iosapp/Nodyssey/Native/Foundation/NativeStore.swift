@@ -190,15 +190,20 @@ import NodysseyNativeCore
         // A completed observer cannot recover by refreshing its revision.
         guard state.failure == nil else { return nil }
         failure = nil
+        // Only the explicitly advertised feed contract provides per-command Room receipts.
+        // Search, legacy implementations and an ordinary false Boolean keep their old behavior.
+        let receiptToken = mode == .paging && state.value?["refreshReceiptVersion"]?.int == 1 ? UUID().uuidString : nil
         let flight = NativeRefreshCompletion(operation: name, arguments: arguments, mode: mode,
-                                             revision: state.valueRevision, pager: pager)
+                                             revision: state.valueRevision, pager: pager, receiptToken: receiptToken)
         refreshCompletion = flight
         let token = operation
         let transport = app.transport
         retainedRefresh = Task { [weak self] in
             do {
                 // Read-only: bypass app mutation timestamp invalidation.
-                _ = try await transport.request(name, arguments)
+                var requestArguments = arguments
+                if let receiptToken = flight.receiptToken { requestArguments["refreshToken"] = .string(receiptToken) }
+                _ = try await transport.request(name, requestArguments)
                 try Task.checkCancellation()
                 guard let self, self.operation == token, self.refreshCompletion === flight else { return }
                 flight.acknowledged = true
@@ -228,9 +233,19 @@ import NodysseyNativeCore
         case .paging:
             guard let snapshot = state.value, snapshot.nativeString("pagerId") == flight.pager else { return }
             switch snapshot["refresh"]?.nativeString("status") {
-            case "Loading": flight.sawLoading = true; flight.acceptedTerminal = false
-            case "NotLoading": if flight.sawLoading { flight.acceptedTerminal = true }
+            case "Loading":
+                // A matching receipt has already proven presentation for this flight.
+                // Only legacy completion follows the latest local load cycle.
+                if flight.receiptToken == nil {
+                    flight.sawLoading = true
+                    flight.acceptedTerminal = false
+                }
+            case "NotLoading":
+                if let token = flight.receiptToken {
+                    if snapshot["refreshReceipt"]?.string == token { flight.acceptedTerminal = true }
+                } else if flight.sawLoading { flight.acceptedTerminal = true }
             case "Error":
+                if let token = flight.receiptToken, snapshot["refreshFailure"]?.string != token { return }
                 let detail = snapshot["refresh"]?["error"]
                 finishRetainedRefresh(false, failure: .init(code: detail?.nativeString("code") ?? "PAGING_REFRESH",
                     message: detail?.nativeString("message") ?? "Refresh failed"))

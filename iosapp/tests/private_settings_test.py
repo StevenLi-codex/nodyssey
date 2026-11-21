@@ -36,6 +36,7 @@ coords = [
     ('org.jetbrains.kotlinx', 'kotlinx-coroutines-core-jvm', '1.11.0'),
     ('org.jetbrains.kotlinx', 'kotlinx-serialization-core-jvm', '1.11.0'),
     ('org.jetbrains.kotlinx', 'kotlinx-serialization-json-jvm', '1.11.0'),
+    ('org.jetbrains.kotlinx', 'kotlinx-datetime-jvm', '0.8.0'),
     ('org.jetbrains', 'annotations', '23.0.0'),
     ('junit', 'junit', '4.13.2'), ('org.hamcrest', 'hamcrest-core', '1.3'),
 ]
@@ -46,7 +47,7 @@ for group, artifact, version in coords:
         raise SystemExit(f'Missing pinned dependency: {group}:{artifact}:{version}')
     jars += found
 for group in ['androidx.datastore', 'androidx.paging', 'com.squareup.okio',
-              'androidx.collection', 'androidx.compose.runtime', 'org.jetbrains.compose.runtime']:
+              'androidx.collection', 'androidx.compose.runtime', 'org.jetbrains.compose.runtime', 'androidx.room', 'androidx.sqlite']:
     jars += list((cache / group).rglob('*.jar'))
 for module in ['shared', 'richtext', 'ui', 'designsys']:
     jar = Path(os.environ.get('SETTINGS_REPOSITORY_JARS', str(root))) / f'{module}/build/libs/{module}-jvm.jar'
@@ -119,6 +120,7 @@ sources += [main / f for f in ['NativeSettings.kt', 'NativeSettingsMapping.kt']]
 sources += [common / 'io/github/nodyssey/data/session' / f for f in [
     'PrivateSessionBoundary.kt', 'SessionWorkBarrier.kt', 'PrivateStoreProvenance.kt', 'PrivatePostRepository.kt']]
 sources += [common / 'io/github/nodyssey/data/settings/SettingsRepository.kt']
+sources += [common / 'io/github/nodyssey/data' / name for name in ['PostRepository.kt', 'FeedRemoteMediator.kt']]
 sources += [root / 'iosapp/tests/fixtures/NativePrivateSettingsJvmTest.kt']
 sources += [root / 'iosapp/src/iosTest/kotlin/io/github/nodyssey/ios/native' / f for f in [
     'NativeSettingsMappingTest.kt', 'NativeSettingsPersistenceTest.kt', 'NativeImageHostSelectionTest.kt']]

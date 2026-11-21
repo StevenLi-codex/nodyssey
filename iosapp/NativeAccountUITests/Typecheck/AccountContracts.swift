@@ -41,7 +41,7 @@ struct NativeFailureView: View {
     var retry: (() -> Void)? = nil
     var body: some View { EmptyView() }
 }
-struct NativeRemoteImage: View { let url: String; var aspectFit = true; var body: some View { EmptyView() } }
+struct NativeRemoteImage: View { let url: String; var aspectFit = true; var onOpen: (() -> Void)? = nil; var body: some View { EmptyView() } }
 struct NativeTurnstile: View {
     var darkTheme = false
     var resetSignal = 0

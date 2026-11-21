@@ -6,8 +6,6 @@ struct NativeRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var restart = 0
     @State private var homeTabInteraction = NativeHomeTabInteraction()
-    @Namespace private var postTransitionNamespace
-    @StateObject private var postTransition = NativePostTransition()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,10 +18,7 @@ struct NativeRootView: View {
                     Button("action_close") { app.linkFailure = nil }
                 }
                 if app.settings.nativeBool("onboardingSeen") == false {
-                    NavigationStack(path: pathBinding(.home)) {
-                        NativeWelcomeView()
-                            .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
-                    }
+                    stack(.home) { NativeWelcomeView() }.id(app.generation)
                 } else {
                     tabs.id(app.generation)
                 }
@@ -41,16 +36,7 @@ struct NativeRootView: View {
         .sheet(item: Binding(get: { app.sheet }, set: { value in
             if value == nil { Task { await app.dismissSheet() } }
         })) { destination in
-            NavigationStack(path: pathBinding(.sheet)) {
-                NativeScreen(destination: destination)
-                    .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("action_close") { Task { await app.dismissSheet() } }
-                                .disabled(app.departureRunning)
-                        }
-                    }
-            }
+            stack(.sheet, rootID: destination.id) { NativeScreen(destination: destination) }
             .nativePageCanvas()
             .environmentObject(app)
             .interactiveDismissDisabled(app.sheetRequiresDeparture || app.departureRunning)
@@ -64,21 +50,42 @@ struct NativeRootView: View {
         .onOpenURL { app.openLink($0.absoluteString) }
     }
 
-    private func pathBinding(_ stack: NativeAppModel.Stack) -> Binding<[NativeDestination]> {
-        // Bind this render owner before the setter's unstructured task can yield.
+    @ViewBuilder private func stack<Root: View>(_ stack: NativeAppModel.Stack, rootID: UUID? = nil,
+                                               @ViewBuilder root: () -> Root) -> some View {
+        #if os(iOS)
+        let active: Bool = switch stack {
+        case .home: app.selectedTab == .home && app.sheet == nil
+        case .notifications: app.selectedTab == .notifications && app.sheet == nil
+        case .profile: app.selectedTab == .profile && app.sheet == nil
+        case .sheet: app.sheet?.id == rootID
+        }
+        NativeOwnedNavigation(app: app, stack: stack, rootID: rootID, path: app.path(for: stack),
+                              isActive: active, root: AnyView(root()))
+            // Toolbar preferences stop at a hosting boundary. Keep TabView's
+            // own bar and project the existing detail hide/show rule onto it.
+            .toolbar(stack != .sheet && app.path(for: stack).last?.route == "PostDetail" ? .hidden : .visible, for: .tabBar)
+        #else
         let owner = app.capturePathUpdateOwner()
-        return Binding(get: { app.path(for: stack) }, set: { value in
+        NavigationStack(path: Binding(get: { app.path(for: stack) }, set: { value in
             Task { await app.updatePath(value, for: stack, owner: owner) }
-        })
+        })) {
+            root()
+                .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
+                .toolbar {
+                    if stack == .sheet {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("action_close") { Task { await app.dismissSheet() } }.disabled(app.departureRunning)
+                        }
+                    }
+                }
+        }
+        #endif
     }
 
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
-            NavigationStack(path: pathBinding(.home)) {
+            stack(.home) {
                 NativeScreen(destination: NativeDestination("PostList"))
-                    // Only this root feed can nominate a source. Pushed feeds,
-                    // other tabs and sheets keep the ordinary system push.
-                    .environment(\.nativePostTransition, NativePostTransitionContext(namespace: postTransitionNamespace, handoff: postTransition))
                     #if os(iOS)
                     .background {
                         NativeTabTapObserver(isHomeRoot: { app.homePath.isEmpty && app.sheet == nil }, selected: { wasHome, isHome, wasRoot in
@@ -89,24 +96,16 @@ struct NativeRootView: View {
                         }).allowsHitTesting(false)
                     }
                     #endif
-                    .navigationDestination(for: NativeDestination.self) { destination in
-                        NativeScreen(destination: destination)
-                            .environment(\.nativePostTransition, nil)
-                            .nativePostTransitionDestination(postTransition.source(for: destination,
-                                directDestinationID: app.homePath.first?.id, generation: app.generation), namespace: postTransitionNamespace)
-                    }
             }
             .tabItem { Label("tab_home", systemImage: "house").accessibilityIdentifier("native.tab.home") }
             .tag(NativeTab.home)
-            NavigationStack(path: pathBinding(.notifications)) {
+            stack(.notifications) {
                 NativeScreen(destination: NativeDestination("Notifications"))
-                    .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
             }
             .tabItem { Label("tab_notifications", systemImage: "bell").accessibilityIdentifier("native.tab.notifications") }
             .tag(NativeTab.notifications)
-            NavigationStack(path: pathBinding(.profile)) {
+            stack(.profile) {
                 NativeScreen(destination: NativeDestination("Profile"))
-                    .navigationDestination(for: NativeDestination.self) { NativeScreen(destination: $0) }
             }
             .tabItem { Label("tab_profile", systemImage: "person.crop.circle").accessibilityIdentifier("native.tab.profile") }
             .tag(NativeTab.profile)
@@ -116,8 +115,7 @@ struct NativeRootView: View {
         .onChange(of: app.homePath) { _ in homeTabInteraction.reset() }
         .onChange(of: app.sheet) { _ in homeTabInteraction.reset() }
         .onChange(of: app.generation) { _ in homeTabInteraction.reset() }
-        // System TabView/NavigationStack supplies Liquid Glass on iOS 26;
-        // the canvas sits behind it, not on the bars or their scroll-edge treatment.
+        // System TabView and each page's root chrome still own their bars.
     }
 }
 

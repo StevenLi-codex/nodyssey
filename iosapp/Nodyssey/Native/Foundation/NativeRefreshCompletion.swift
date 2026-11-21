@@ -14,6 +14,7 @@ enum NativeRefreshCompletionMode: Equatable {
     let mode: NativeRefreshCompletionMode
     let revision: UInt64
     let pager: String?
+    let receiptToken: String?
     var sawLoading = false
     var acceptedTerminal = false
     var acknowledged = false
@@ -21,12 +22,13 @@ enum NativeRefreshCompletionMode: Equatable {
     var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     init(operation: String, arguments: [String: JSONValue], mode: NativeRefreshCompletionMode,
-         revision: UInt64, pager: String?) {
+         revision: UInt64, pager: String?, receiptToken: String? = nil) {
         self.operation = operation
         self.arguments = arguments
         self.mode = mode
         self.revision = revision
         self.pager = pager
+        self.receiptToken = receiptToken
     }
 
     func resolve(_ success: Bool) {

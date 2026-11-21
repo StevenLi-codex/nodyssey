@@ -99,6 +99,11 @@ private fun nativeCanonicalArguments(value: JsonElement): String = when (value) 
 }
 
 private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): JsonElement? {
+    if (op == "thread.preview") {
+        // A preview is one ephemeral remote page, never a repository load or cache read-back.
+        if (a.keys != setOf("postId")) throw NativeFailure("INVALID_ARGUMENT")
+        return nativeContentJson(graph.previewThread(a.nativeId("postId")))
+    }
     val posts = graph.postRepository
     return when (op) {
         "categories.get" -> nativeContentArray(graph.categoryRepository.boards.first(), ::nativeContentJson)
@@ -119,7 +124,7 @@ private suspend fun NativeContext.contentExecute(op: String, a: JsonObject): Jso
                     presenter[index] // Paging's access hint is the ONLY append/prepend mechanism.
                 }
 
-                "paging.refresh" -> presenter.refresh()
+                "paging.refresh" -> nativePagingSessions.refresh(a.nativeText("pagerId"), a.nativeOptionalText("refreshToken"))
 
                 else -> presenter.retry()
             }
@@ -329,7 +334,7 @@ internal fun NativeContext.contentObserve(operation: String, args: JsonObject): 
         // One initial mediator refresh, never an additional presenter.refresh(). The caller must
         // omit the one-shot flag on later ordinary observations, keeping its identity separate.
         val forceInitialRefresh = args.nativeBoolean("forceInitialRefresh", false)
-        nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.feed(slug, sort, page, forceInitialRefresh), graph.postRepository.feedTotalPages(slug, sort), page)
+        nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.feedWithRefreshReceipts(slug, sort, page, forceInitialRefresh), graph.postRepository.feedTotalPages(slug, sort), page)
     }
 
     "search.feed" -> nativePagingFlow(args.nativeText("pagerId"), graph.postRepository.searchFeed(args.nativeText("query"), args.nativeOptionalText("categorySlug"), args.nativeEnum("sort", FeedSort.LAST_REPLY)), null, 1)
@@ -391,15 +396,24 @@ private fun JsonObject.nativeStrings(key: String): List<String> = nativeArray(ke
 /** Main-confined handles, not a second post cache. Entries live only while their observation lives. */
 internal class NativePagingSessions {
     private val presenters = mutableMapOf<String, PagingDataPresenter<FeedPost>>()
+    private val refreshActions = mutableMapOf<String, (String?) -> Unit>()
     fun contains(id: String): Boolean = presenters.containsKey(id)
     fun get(id: String): PagingDataPresenter<FeedPost> = presenters[id] ?: throw NativeFailure("PAGER_CLOSED")
-    fun add(id: String, presenter: PagingDataPresenter<FeedPost>) {
+    fun refresh(id: String, token: String?) {
+        val presenter = get(id)
+        refreshActions[id]?.invoke(token) ?: presenter.refresh()
+    }
+    fun add(id: String, presenter: PagingDataPresenter<FeedPost>, refresh: ((String?) -> Unit)? = null) {
         if (id.isBlank()) throw NativeFailure("INVALID_ARGUMENT")
         if (presenters.containsKey(id)) throw NativeFailure("PAGER_IN_USE")
         presenters[id] = presenter
+        if (refresh != null) refreshActions[id] = refresh
     }
     fun remove(id: String, presenter: PagingDataPresenter<FeedPost>) {
-        if (presenters[id] === presenter) presenters.remove(id)
+        if (presenters[id] === presenter) {
+            presenters.remove(id)
+            refreshActions.remove(id)
+        }
     }
 }
 
@@ -416,27 +430,62 @@ internal fun nativePagingFlow(
     // A source receipt is accepted only when that very generation has installed its Refresh list.
     var currentReceipt: kotlinx.coroutines.flow.StateFlow<Boolean>? = null
     var presentedRemoteRefresh = false
+    val requests = (data as? io.github.nodyssey.data.FeedPagingFlow)?.refreshRequests
+    var currentTokenReceipt: kotlinx.coroutines.flow.StateFlow<String?>? = null
+    var presentedToken: String? = null
+    var loadToken: String? = null
+    var mediatorLoading = false
     lateinit var presenter: PagingDataPresenter<FeedPost>
     fun nativeSnapshot(): JsonObject {
         val snapshot = presenter.snapshot()
         val states = presenter.loadStateFlow.value
+        val terminal = states?.mediator?.refresh is LoadState.NotLoading && states.refresh is LoadState.NotLoading && states.source.refresh is LoadState.NotLoading
+        val token = presentedToken.takeIf { terminal }
+        if (token != null) requests?.presented(token)
+        val failureToken = loadToken.takeIf { states?.refresh is LoadState.Error }
         return nativeContentObject(
             "pagerId" to id, "items" to nativeContentArray(snapshot.items, ::nativeContentJson),
             "placeholdersBefore" to snapshot.placeholdersBefore, "placeholdersAfter" to snapshot.placeholdersAfter,
             "itemCount" to snapshot.size, "page" to page, "totalPages" to totalPages,
             "refresh" to nativeLoadState(states?.refresh), "append" to nativeLoadState(states?.append), "prepend" to nativeLoadState(states?.prepend),
             "remoteRefreshComplete" to (presentedRemoteRefresh && states?.mediator?.refresh is LoadState.NotLoading && states.refresh is LoadState.NotLoading),
+            "refreshReceiptVersion" to if (requests != null) 1 else null,
+            "refreshReceipt" to token,
+            "refreshFailure" to failureToken,
         )
     }
     presenter = object : PagingDataPresenter<FeedPost>(mainContext) {
         override suspend fun presentPagingDataEvent(event: PagingDataEvent<FeedPost>) {
             if (event is PagingDataEvent.Refresh) {
                 presentedRemoteRefresh = currentReceipt?.value == true
+                presentedToken = currentTokenReceipt?.value
             }
             send(nativeSnapshot())
         }
     }
-    sessions.add(id, presenter)
+    // A synchronous listener cannot conflate a fast mediator Loading away. This fences failure
+    // only; success requires the post-commit generation's actual Refresh presentation above.
+    presenter.addLoadStateListener { states ->
+        val loading = states.mediator?.refresh is LoadState.Loading
+        if (loading && !mediatorLoading) loadToken = requests?.token
+        mediatorLoading = loading
+        if (states.refresh is LoadState.Error) requests?.failed(loadToken)
+    }
+    sessions.add(
+        id,
+        presenter,
+        if (requests == null) {
+            null
+        } else {
+            { token ->
+                // Overlapping intentions fail explicitly rather than cancelling the held remote request.
+                if (presenter.loadStateFlow.value?.mediator?.refresh is LoadState.Loading) throw NativeFailure("BUSY")
+                if (requests.token != null) throw NativeFailure("BUSY")
+                if (token != null && !requests.begin(token)) throw NativeFailure("BUSY")
+                presenter.refresh()
+            }
+        },
+    )
     try {
         launch { presenter.loadStateFlow.collect { send(nativeSnapshot()) } }
         if (totals != null) {
@@ -450,6 +499,7 @@ internal fun nativePagingFlow(
         if (data is io.github.nodyssey.data.FeedPagingFlow) {
             data.generations.collectLatest { generation ->
                 currentReceipt = generation.afterRemoteRefresh
+                currentTokenReceipt = generation.refreshToken
                 presenter.collectFrom(generation.data)
             }
         } else {

@@ -68,11 +68,15 @@ shared = root / 'shared/src/commonMain/kotlin/io/github/nodyssey/data'
 sources = [out / 'Dispatch.kt', root / 'iosapp/tests/fixtures/FeedInitialRefreshJvmTest.kt', shared / 'PostRepository.kt', shared / 'FeedRemoteMediator.kt', shared / 'session/PrivatePostRepository.kt']
 receipt = shared / 'ThreadReactionRead.kt'
 if receipt.exists(): sources.append(receipt)
-(out / 'source-hashes.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [main / 'NativeContent.kt']}, indent=2))
-java = str(Path.home() / '.cache/nodyssey-build/jdk21/bin/java')
+hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [main / 'NativeContent.kt', main / 'NativeBridge.kt', Path(__file__), *jars]}
+(out / 'source-hashes.json').write_text(json.dumps(hashes, indent=2))
+java = str(Path(os.environ.get('JAVA_HOME', str(Path.home() / '.cache/nodyssey-build/jdk21'))) / 'bin/java')
 print('OUTPUT=' + str(out), flush=True)
+manifest = {'input_sha256': hashes, 'commands': []}
 for name, command in [('compile', [java, '-cp', cp, 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-jvm-target', '21', '-Xfriend-paths=' + str(base / 'shared/build/libs/shared-jvm.jar'), '-classpath', cp, '-d', str(out / 'tests.jar')] + list(map(str, sources))), ('test', [java, '-Djava.io.tmpdir=' + str(out), '-cp', str(out / 'tests.jar') + ':' + cp, 'io.github.nodyssey.ios.native.FeedInitialRefreshJvmTestKt', str(out / 'test.db')])]:
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=150)
     (out / f'{name}.log').write_text(result.stdout)
+    manifest['commands'].append({'name': name, 'argv': command, 'exit_code': result.returncode})
+    (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     print(result.stdout, flush=True)
     if result.returncode: raise SystemExit(result.returncode)

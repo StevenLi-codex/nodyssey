@@ -5,5 +5,5 @@ import SwiftUI
 struct NativeRemoteImage: View {
     let url: String
     var aspectFit: Bool = true
-    var body: some View { EmptyView() }
+    var onOpen: (() -> Void)? = nil; var body: some View { EmptyView() }
 }

@@ -37,7 +37,9 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     }
     @Published var settings: JSONValue = .null
     @Published var generation: Int = 0
-    @Published var selectedTab: NativeTab = .home
+    @Published var selectedTab: NativeTab = .home {
+        didSet { if oldValue != selectedTab { navigationRevision += 1 } }
+    }
     // An ephemeral UI command, not feed/paging state. No replay on tab return.
     let homeScrollToTop = PassthroughSubject<Void, Never>()
     @Published private(set) var homePath: [NativeDestination] = [] { didSet { navigationRevision += 1 } }
@@ -54,6 +56,9 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         let revoke: @MainActor () -> Void
     }
     private var departures: [UUID: Departure] = [:]
+    // Synchronous privacy fence for the live hierarchy, before SwiftUI updates.
+    let navigationIdentityWillRevoke = PassthroughSubject<Void, Never>()
+    private var interactiveDeparture: InteractiveDeparture?
     @Published private(set) var departureRunning = false
     @Published private(set) var site: JSONValue = .null
     @Published private(set) var isReady = false
@@ -472,7 +477,7 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     var sheetRequiresDeparture: Bool { sheetDestinations.contains(where: { requiresDeparture($0) }) }
     private var allDestinations: [NativeDestination] { homePath + notificationsPath + profilePath + sheetDestinations }
     private func requiresDeparture(_ destination: NativeDestination) -> Bool {
-        departures[destination.id] != nil || ["PostComposer", "MessageThread"].contains(destination.route)
+        departures[destination.id] != nil || ["PostDetail", "PostComposer", "MessageThread", "Stardust"].contains(destination.route)
     }
 
     /// Keep ownership across temporary pushes/tab changes. Unregister only the
@@ -494,7 +499,7 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     }
 
     private func depart(_ removed: [NativeDestination], apply: () -> Void) async {
-        guard !departureRunning else { return }
+        guard !departureRunning, interactiveDeparture == nil else { return }
         departureRunning = true
         defer { departureRunning = false }
         let revision = navigationRevision
@@ -550,6 +555,114 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     func capturePathUpdateOwner() -> PathUpdateOwner {
         PathUpdateOwner(identityEpoch: validEpoch(session), generation: generation, revision: navigationRevision)
     }
+
+    struct InteractivePop: Equatable {
+        fileprivate let id: UUID
+        fileprivate let stack: Stack
+        fileprivate let owner: PathUpdateOwner
+        fileprivate let departureToken: UUID?
+        let from: UUID
+        let to: UUID?
+    }
+
+    private struct InteractiveDeparture {
+        enum Phase { case tracking, preparing, abandoned, rejected, ready }
+        let pop: InteractivePop
+        var phase: Phase = .tracking
+    }
+
+    private var activeStack: Stack {
+        if sheet != nil { return .sheet }
+        switch selectedTab {
+        case .home: return .home
+        case .notifications: return .notifications
+        case .profile: return .profile
+        }
+    }
+
+    private func popTarget(in stack: Stack) -> UUID? {
+        path(for: stack).dropLast().last?.id ?? (stack == .sheet ? sheet?.id : nil)
+    }
+
+    func canBeginInteractivePop(stack: Stack, from: UUID) -> Bool {
+        guard activeStack == stack, interactiveDeparture == nil, !departureRunning,
+              let top = path(for: stack).last, top.id == from else { return false }
+        return !requiresDeparture(top) || departures[from] != nil
+    }
+
+    func beginInteractivePop(stack: Stack, from: UUID) -> InteractivePop? {
+        guard canBeginInteractivePop(stack: stack, from: from) else { return nil }
+        let token = departures[from]?.token
+        let pop = InteractivePop(id: UUID(), stack: stack, owner: capturePathUpdateOwner(),
+                                 departureToken: token, from: from, to: popTarget(in: stack))
+        interactiveDeparture = .init(pop: pop)
+        return pop
+    }
+
+    func isInteractivePopCurrent(_ pop: InteractivePop) -> Bool {
+        guard let transaction = interactiveDeparture, transaction.pop == pop,
+              transaction.phase != .abandoned, activeStack == pop.stack, pop.owner == capturePathUpdateOwner(),
+              path(for: pop.stack).last?.id == pop.from, popTarget(in: pop.stack) == pop.to else { return false }
+        return departures[pop.from]?.token == pop.departureToken
+    }
+
+    func prepareInteractivePop(_ pop: InteractivePop) async -> Bool {
+        guard isInteractivePopCurrent(pop), interactiveDeparture?.phase == .tracking else { return false }
+        interactiveDeparture?.phase = .preparing
+        departureRunning = true
+        let owner = departures[pop.from]
+        let accepted = await owner?.prepare() ?? true
+        guard interactiveDeparture?.pop == pop else { return false }
+        if interactiveDeparture?.phase == .abandoned {
+            clearInteractivePop() // The visual rollback already finished.
+            return false
+        }
+        guard accepted, !Task.isCancelled, isInteractivePopCurrent(pop), owner?.validate() != false else {
+            interactiveDeparture?.phase = .rejected // Hold exclusivity until rollback.
+            return false
+        }
+        interactiveDeparture?.phase = .ready
+        return true
+    }
+
+    func canFinishInteractivePop(_ pop: InteractivePop) -> Bool {
+        isInteractivePopCurrent(pop) && interactiveDeparture?.phase == .ready && departures[pop.from]?.validate() != false
+    }
+
+    @discardableResult
+    func commitInteractivePop(_ pop: InteractivePop, visible: UUID?) -> Bool {
+        guard visible == pop.to, canFinishInteractivePop(pop) else { return false }
+        departures.removeValue(forKey: pop.from)?.terminate()
+        setPath(Array(path(for: pop.stack).dropLast()), for: pop.stack)
+        clearInteractivePop()
+        return true
+    }
+
+    func cancelInteractivePop(_ pop: InteractivePop) {
+        guard interactiveDeparture?.pop == pop else { return }
+        switch interactiveDeparture?.phase {
+        case .preparing, .abandoned:
+            // Don't admit a second save while an abandoned request drains.
+            interactiveDeparture?.phase = .abandoned
+        case .tracking, .rejected, .ready, nil: clearInteractivePop()
+        }
+    }
+
+    private func clearInteractivePop() {
+        let wasTracking = interactiveDeparture?.phase == .tracking
+        interactiveDeparture = nil
+        if !wasTracking { departureRunning = false }
+    }
+
+    private func setPath(_ value: [NativeDestination], for stack: Stack) {
+        switch stack {
+        case .home: homePath = value
+        case .notifications: notificationsPath = value
+        case .profile: profilePath = value
+        case .sheet: sheetPath = value
+        }
+    }
+
     func updatePath(_ value: [NativeDestination], for stack: Stack, owner: PathUpdateOwner? = nil) async {
         if let owner, owner != capturePathUpdateOwner() { return }
         let current = path(for: stack)
@@ -557,14 +670,7 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         // never to a delayed setter replaying destinations from an old stack.
         guard value.count <= current.count, Array(current.prefix(value.count)) == value else { return }
         let removed = Array(current.dropFirst(value.count))
-        await depart(removed) {
-            switch stack {
-            case .home: homePath = value
-            case .notifications: notificationsPath = value
-            case .profile: profilePath = value
-            case .sheet: sheetPath = value
-            }
-        }
+        await depart(removed) { setPath(value, for: stack) }
     }
 
     func dismissDestination(_ id: UUID) async {
@@ -597,6 +703,8 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         if !stores.contains(where: { $0.value === store }) { stores.append(WeakNativeStore(store)) }
     }
     private func invalidateSession(preservingAuthentication: Bool = false) {
+        navigationIdentityWillRevoke.send()
+        if interactiveDeparture != nil { clearInteractivePop() }
         let authentication = preservingAuthentication ? sheet.flatMap { destination in
             guard authenticationPresentation?.destinationID == destination.id else { return nil as NativeDestination? }
             return destination.route == "SignIn" || (destination.route == "Web" &&

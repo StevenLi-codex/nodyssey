@@ -1,20 +1,27 @@
 import Foundation
 
-/// Completion-only fallback for the thread's existing simultaneous drag observer.
-/// Native interactive navigation remains primary; never replace its recognizer or
-/// delegate. A short, vertical, interior, reversed or cancelled drag must not pop.
+/// Geometry shared by the owned container's admission, live slide and release.
+/// The start coordinate is bounded to the content, not to a leading-edge strip.
 enum ContentBackSwipe {
+    static func begins(velocityX: Double, velocityY: Double, rightToLeft: Bool) -> Bool {
+        velocityX.isFinite && velocityY.isFinite && directed(velocityX, rightToLeft) > abs(velocityY) * 1.5
+    }
+
+    static func progress(translationX: Double, width: Double, rightToLeft: Bool) -> Double {
+        guard translationX.isFinite, width.isFinite, width > 0 else { return 0 }
+        return min(1, max(0, directed(translationX, rightToLeft) / width))
+    }
+
+    private static func directed(_ value: Double, _ rightToLeft: Bool) -> Double { rightToLeft ? -value : value }
+
     static func shouldReturn(startX: Double, width: Double, translationX: Double,
                              translationY: Double, predictedX: Double,
                              rightToLeft: Bool = false) -> Bool {
         guard [startX, width, translationX, translationY, predictedX].allSatisfy(\.isFinite),
               width > 0, startX >= 0, startX <= width else { return false }
-        let leadingDistance = rightToLeft ? width - startX : startX
-        let direction = rightToLeft ? -1.0 : 1.0
-        let travel = translationX * direction
-        let projected = predictedX * direction
-        guard leadingDistance <= 36, projected >= travel,
-              travel > abs(translationY) * 1.5 else { return false }
+        let travel = directed(translationX, rightToLeft)
+        let projected = directed(predictedX, rightToLeft)
+        guard projected >= travel, begins(velocityX: translationX, velocityY: translationY, rightToLeft: rightToLeft) else { return false }
         let threshold = max(64, min(110, width * 0.22))
         let fastSwipe = travel >= 44 && projected >= max(140, width * 0.4) &&
             projected - travel >= 60

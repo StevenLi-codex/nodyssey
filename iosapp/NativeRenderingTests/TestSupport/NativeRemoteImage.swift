@@ -5,5 +5,5 @@ import SwiftUI
 struct NativeRemoteImage: View {
     let url: String
     var aspectFit: Bool = true
-    var body: Never { fatalError("Image rendering is outside code-slot composition tests") }
+    var onOpen: (() -> Void)? = nil; var body: Never { fatalError("Image rendering is outside code-slot composition tests") }
 }

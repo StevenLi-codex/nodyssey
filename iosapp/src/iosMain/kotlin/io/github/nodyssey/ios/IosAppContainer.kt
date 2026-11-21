@@ -94,6 +94,51 @@ class IosAppContainer internal constructor(
         }
         if (databaseDelegate.isInitialized()) database.close()
     }
+    private val previewSite = io.github.nodyssey.core.ActiveSite.current
+
+    /** iOS-only transient page-one read. Uses this graph's existing authenticated remote. */
+    internal suspend fun previewThread(postId: Long): io.github.nodyssey.model.ThreadSnapshot = lifetime.use {
+        privateBoundary.protect {
+            require(postId > 0)
+            fun checkSite() {
+                // site.select only persists a restart choice. An installed-site drift must never
+                // retarget this graph or export nodes resolved against a different site's origin.
+                if (io.github.nodyssey.core.ActiveSite.current != previewSite) {
+                    throw io.github.nodyssey.data.session.PrivateWorkRevoked()
+                }
+            }
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            checkSite()
+            val detail = remotePosts.loadDetail(postId, 1)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            checkSite()
+            if (detail.postId != postId || detail.page != 1) {
+                throw io.github.plaza.core.net.SiteException(io.github.plaza.core.net.SiteError.Unparsable)
+            }
+            // Preview never offers reveal-blocked actions. Keep server flags/identity, not content.
+            fun visible(content: io.github.nodyssey.model.PostContent) = if (content.isBlocked) {
+                content.copy(nodes = emptyList(), signatureNodes = emptyList())
+            } else {
+                content
+            }
+            io.github.nodyssey.model.ThreadSnapshot(
+                postId = detail.postId,
+                title = detail.title,
+                body = detail.body?.let(::visible),
+                comments = detail.comments.map(::visible),
+                firstLoadedPage = 1,
+                lastLoadedPage = 1,
+                totalPages = detail.totalPages,
+                // Shape compatibility only: this response was never persisted in the cache.
+                cachedAtMillis = 0,
+                commentPages = detail.comments.map { 1 },
+                collected = detail.collected,
+                collectionCount = detail.collectionCount,
+                isAwarded = detail.isAwarded,
+            )
+        }
+    }
+
     override val postRepository: PostRepository by lazy { io.github.nodyssey.data.session.PrivatePostRepository(rawPostRepository, privateBoundary) }
 
     private val rawPostRepository: PostRepository by lazy {
