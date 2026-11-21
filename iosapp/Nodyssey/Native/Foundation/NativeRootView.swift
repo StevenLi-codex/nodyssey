@@ -61,6 +61,7 @@ struct NativeRootView: View {
         }
         NativeOwnedNavigation(app: app, stack: stack, rootID: rootID, path: app.path(for: stack),
                               isActive: active, root: AnyView(root()))
+            .nativePageCanvas()
             // Toolbar preferences stop at a hosting boundary. Keep TabView's
             // own bar and project the existing detail hide/show rule onto it.
             .toolbar(stack != .sheet && app.path(for: stack).last?.route == "PostDetail" ? .hidden : .visible, for: .tabBar)

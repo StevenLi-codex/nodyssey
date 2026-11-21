@@ -28,10 +28,28 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
+/// UIKit owns this scene's lifecycle; a standalone UIHostingController does not
+/// supply the SwiftUI App/Scene environment that NativeRootView observes.
+@MainActor private final class NativeSceneState: ObservableObject {
+    @Published var phase: ScenePhase = .background
+}
+
+private struct NativeSceneRoot: View {
+    let app: NativeAppModel
+    @ObservedObject var sceneState: NativeSceneState
+
+    var body: some View {
+        NativeRootView()
+            .environmentObject(app)
+            .environment(\.scenePhase, sceneState.phase)
+    }
+}
+
 /// Keep the scene lifecycle required by modern UIKit. NativeRootView starts the shared
 /// graph asynchronously through its model; never call the old Compose controller factory.
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private let sceneState = NativeSceneState()
     private var nativeApp: NativeAppModel? {
         (UIApplication.shared.delegate as? AppDelegate)?.nativeApp
     }
@@ -44,8 +62,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene, let app = nativeApp else { return }
         let window = UIWindow(windowScene: windowScene)
         self.window = window
+        switch windowScene.activationState {
+        case .foregroundActive: sceneState.phase = .active
+        case .foregroundInactive: sceneState.phase = .inactive
+        default: sceneState.phase = .background
+        }
         window.rootViewController = UIHostingController(
-            rootView: NativeRootView().environmentObject(app)
+            rootView: NativeSceneRoot(app: app, sceneState: sceneState)
         )
         window.makeKeyAndVisible()
 
@@ -59,6 +82,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             }
         }
     }
+
+    func sceneDidBecomeActive(_ scene: UIScene) { sceneState.phase = .active }
+    func sceneWillResignActive(_ scene: UIScene) { sceneState.phase = .inactive }
+    func sceneWillEnterForeground(_ scene: UIScene) { sceneState.phase = .inactive }
+    func sceneDidEnterBackground(_ scene: UIScene) { sceneState.phase = .background }
+    func sceneDidDisconnect(_ scene: UIScene) { sceneState.phase = .background }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         for context in URLContexts {
