@@ -82,7 +82,8 @@ private struct EditorMessageGeometryKey: PreferenceKey {
 private struct EditorMessageItem: Identifiable {
     let value: JSONValue
     let mine: Bool
-    let showsTime: Bool
+    /// Last bubble of one sender's run: carries the tail, incoming avatar and time.
+    let runEnd: Bool
     let dayLabel: String?
     var id: String? { value["id"]?.string }
 }
@@ -117,7 +118,7 @@ private struct EditorMessageHistory: View {
             let sameRun = next.map { ($0["isMine"]?.bool == true) == mine } ?? false
             let day = editorMessageDay(value["sentAtText"]?.string)
             let previousDay = index > 0 ? editorMessageDay(messages[index - 1]["sentAtText"]?.string) : nil
-            return EditorMessageItem(value: value, mine: mine, showsTime: !sameRun,
+            return EditorMessageItem(value: value, mine: mine, runEnd: !sameRun,
                                      dayLabel: day != nil && day != previousDay ? day : nil)
         }
     }
@@ -129,14 +130,19 @@ private struct EditorMessageHistory: View {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(items) { item in
                             if let day = item.dayLabel {
-                                Text(day).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                Text(day)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(.quaternary, in: Capsule())
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
                             }
                             if let id = item.id {
-                                EditorMessageBubble(value: item.value, mine: item.mine, showsTime: item.showsTime,
-                                                    peer: peer, maxWidth: max(160, viewport.size.width * 0.74),
+                                EditorMessageBubble(value: item.value, mine: item.mine, runEnd: item.runEnd,
+                                                    peer: peer, maxWidth: max(160, viewport.size.width * 0.76),
                                                     quote: quote)
-                                    .padding(.top, item.showsTime ? 8 : 0)
+                                    .padding(.top, item.runEnd ? 8 : 1)
                                     .id(id)
                             }
                         }
@@ -190,10 +196,13 @@ private struct EditorMessageHistory: View {
 /// column without a separate tail view that would clip rich content.
 private struct ChatBubbleShape: Shape {
     let mine: Bool
+    /// Telegram keeps a run of messages reading as one column and only the last
+    /// bubble takes the sender-side tail.
+    var tail: Bool = true
 
     func path(in rect: CGRect) -> Path {
         let big = min(18, rect.height / 2)
-        let small = min(6, rect.height / 2)
+        let small = tail ? min(6, rect.height / 2) : big
         let topLeft = big, topRight = big
         let bottomRight = mine ? small : big
         let bottomLeft = mine ? big : small
@@ -236,7 +245,7 @@ private struct EditorMessageBubble: View {
     @EnvironmentObject private var app: NativeAppModel
     let value: JSONValue
     let mine: Bool
-    let showsTime: Bool
+    let runEnd: Bool
     let peer: String
     let maxWidth: CGFloat
     let quote: (String) -> Void
@@ -248,14 +257,15 @@ private struct EditorMessageBubble: View {
     private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if !mine { ChatAvatar(name: peer) }
-            VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+        HStack(alignment: .bottom, spacing: 6) {
+            // Telegram only shows a face beside the last bubble of a run; an
+            // empty slot keeps the column aligned for the rest.
+            if !mine {
+                if runEnd { ChatAvatar(name: peer, size: 26) } else { Color.clear.frame(width: 26, height: 1) }
+            }
+            VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
                 bubble
                     .frame(maxWidth: maxWidth, alignment: mine ? .trailing : .leading)
-                if showsTime, let clock {
-                    Text(clock).font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 4)
-                }
                 if let failure { Text(failure.message).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)
@@ -275,15 +285,29 @@ private struct EditorMessageBubble: View {
     }
 
     private var bubble: some View {
-        content
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background {
-                ChatBubbleShape(mine: mine)
-                    .fill(mine ? AnyShapeStyle(Color.accentColor.opacity(0.16)) : AnyShapeStyle(.quaternary))
+        VStack(alignment: .trailing, spacing: 3) {
+            content
+            if let clock {
+                HStack(spacing: 3) {
+                    Text(clock)
+                    if mine { Image(systemName: "checkmark") }
+                }
+                .font(.caption2)
+                .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
             }
-            .contentShape(ChatBubbleShape(mine: mine))
-            .contextMenu { Button(EL("quote")) { quote(text) } }
+        }
+        .padding(.horizontal, 11)
+        .padding(.top, 7)
+        .padding(.bottom, 5)
+        .background {
+            ChatBubbleShape(mine: mine, tail: runEnd)
+                // Rich bodies keep the light tint: their own text colours are not
+                // ours to invert, so a solid fill would make them unreadable.
+                .fill(mine ? AnyShapeStyle(value["isMarkdown"]?.bool == true ? Color.accentColor.opacity(0.18) : Color.accentColor)
+                      : AnyShapeStyle(.quaternary))
+        }
+        .contentShape(ChatBubbleShape(mine: mine, tail: runEnd))
+        .contextMenu { Button(EL("quote")) { quote(text) } }
     }
 
     @ViewBuilder private var content: some View {
@@ -292,7 +316,9 @@ private struct EditorMessageBubble: View {
             else if failure != nil { Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
             else { ProgressView().controlSize(.small) }
         } else {
-            Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(text)
+                .foregroundStyle(mine && value["isMarkdown"]?.bool != true ? Color.white : Color.primary)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
