@@ -145,7 +145,7 @@ private struct MediaHostConfiguration: View {
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
             if store.isLoading { ProgressView() }
             if draft != nil {
-                Section(MediaL.text("configuration")) {
+                Section {
                     if capability["needsSiteUrl"]?.bool == true {
                         TextField(MediaL.text("endpoint"), text: field(\.siteURL)).textContentType(.URL)
                     }
@@ -159,6 +159,8 @@ private struct MediaHostConfiguration: View {
                         TextField(MediaL.text("urlPath"), text: field(\.urlPath))
                         TextField(MediaL.text("urlPrefix"), text: field(\.urlPrefix))
                     }
+                } header: {
+                    Text(MediaL.text("configuration"))
                 } footer: {
                     Text(MediaL.text("saveNotTest"))
                 }.disabled(action.busy)
