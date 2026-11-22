@@ -109,7 +109,7 @@ struct ContentNotifications: View {
         Button { app.open("MessageThread", ["uid": .integer(row.id), "userName": .string(row.value.nativeString("userName") ?? "")]) }
         label: { ContentConversationRow(value: row.value) }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
         .listRowBackground(Color.clear)
     }
     private struct NotificationGroup: Identifiable { let id: String; var rows: [Row] }
@@ -226,51 +226,60 @@ struct ContentConversationRow: View {
     let value: JSONValue
     var body: some View {
         let unread = max(0, value.nativeInt("unreadCount") ?? 0)
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             if value.nativeBool("isSystem") == true {
                 Image(systemName: "megaphone.fill").foregroundStyle(.tint)
-                    .frame(width: 46, height: 46)
+                    .frame(width: 44, height: 44)
                     .background(.tint.opacity(0.12), in: Circle())
                     .accessibilityHidden(true)
             } else {
-                ContentAvatar(value: value, size: 46)
+                ContentAvatar(value: value, size: 44)
             }
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(value.nativeString("userName") ?? "")
-                        .font(.body.weight(unread > 0 ? .semibold : .medium))
+                        .font(.headline)
+                        .lineLimit(1)
                         .layoutPriority(1)
                     if value.nativeBool("isSystem") == true {
                         Image(systemName: "pin.fill").font(.caption2)
                             .foregroundStyle(.secondary).accessibilityLabel(Text("messages_pinned"))
                     }
                     Spacer(minLength: 4)
-                    if let date = timestamp { date.font(.caption).foregroundStyle(.secondary) }
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    Text(snippet).font(.subheadline).foregroundStyle(.secondary)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    Spacer(minLength: 0)
+                    if let stamp = timestamp {
+                        Text(stamp).font(.caption).foregroundStyle(.secondary).fixedSize()
+                    }
                     if unread > 0 {
-                        Text(unread, format: .number)
-                            .font(.caption2.weight(.semibold)).monospacedDigit()
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        Circle().fill(Color.accentColor).frame(width: 7, height: 7)
+                            .accessibilityLabel(Text("\(unread)"))
                     }
                 }
+                Text(snippet).font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
+            .frame(minHeight: 44, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+        .contentShape(Rectangle())
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 56 }
     }
 
-    private var timestamp: Text? {
-        if let millis = value.nativeInt("updatedAtMillis"), millis > 0 {
-            let date = Date(timeIntervalSince1970: Double(millis) / 1_000)
-            return Calendar.current.isDateInToday(date)
-                ? Text(date, style: .time)
-                : Text(date, format: .dateTime.month(.abbreviated).day())
+    private var timestamp: String? {
+        guard let millis = value.nativeInt("updatedAtMillis"), millis > 0 else {
+            return value.nativeString("updatedAtText")
         }
-        return value.nativeString("updatedAtText").map { Text(verbatim: $0) }
+        let date = Date(timeIntervalSince1970: Double(millis) / 1_000)
+        let calendar = Calendar.current
+        let now = Date()
+        if calendar.isDateInToday(date) {
+            return date.formatted(.dateTime.hour().minute())
+        }
+        if let cutoff = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)),
+           date >= cutoff, date < now {
+            return date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
     private var snippet: String {

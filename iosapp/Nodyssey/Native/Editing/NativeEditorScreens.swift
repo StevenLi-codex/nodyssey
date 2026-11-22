@@ -123,10 +123,10 @@ private struct EditorHost: View {
     }
     private var composerField: some View {
         NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
-                            hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
-            .frame(minHeight: isMessage ? 48 : 80, maxHeight: isMessage ? 120 : .infinity)
+                            hint: session.mode.showsTitle ? PCL("bodyHint") : EL("messageHint"))
+            .frame(minHeight: isMessage ? 44 : 80, maxHeight: isMessage ? 44 : .infinity)
             .padding(.horizontal, 7)
-            .padding(.top, 8)
+            .padding(.top, isMessage ? 0 : 8)
     }
     private var permissionTitle: String {
         if session.permission == 0 { return PCL("permissionPublic") }
@@ -137,7 +137,7 @@ private struct EditorHost: View {
     var body: some View {
         VStack(spacing: 0) {
             if case .message(let uid) = session.mode {
-                EditorMessageThread(uid: uid, model: model)
+                EditorMessageThread(uid: uid, model: model, showTools: $showMessageTools)
             }
             if !model.ready {
                 if let failure = model.failure { NativeFailureView(failure: failure, retry: { Task { await model.load() } }) }
@@ -187,9 +187,11 @@ private struct EditorHost: View {
                         Button {
                             showMessageAttachments = true
                         } label: {
-                            Image(systemName: "plus").font(.body.weight(.semibold))
+                            Image(systemName: "plus")
+                                .font(.body.weight(.semibold))
                                 .frame(width: 44, height: 44)
-                                .background(.quaternary, in: Circle())
+                                .background { NativeGlassSurface(cornerRadius: 22) }
+                                .contentShape(Circle())
                         }
                         .accessibilityLabel(Text(EL("IMAGE")))
                         .disabled(!model.ready || session.busy)
@@ -208,7 +210,7 @@ private struct EditorHost: View {
                         }
 
                         composerField
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 22))
+                            .background { NativeGlassSurface(cornerRadius: 22) }
 
                         Button {
                             model.focus.handoff { confirmPublish = true }
@@ -216,15 +218,25 @@ private struct EditorHost: View {
                             if session.busy {
                                 ProgressView().frame(width: 44, height: 44)
                             } else {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 32))
+                                Image(systemName: "arrow.up")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(submitDisabled ? Color.secondary : Color.white)
                                     .frame(width: 44, height: 44)
+                                    .background {
+                                        if submitDisabled {
+                                            NativeGlassSurface(cornerRadius: 22)
+                                        } else {
+                                            Circle().fill(Color.accentColor)
+                                        }
+                                    }
+                                    .contentShape(Circle())
                             }
                         }
                         .accessibilityLabel(Text(submitTitle))
                         .disabled(submitDisabled)
                     }
                     .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 } else {
                     composerField
                 }
@@ -260,21 +272,16 @@ private struct EditorHost: View {
                 }.disabled(routeLifetime.closing || session.busy)
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                if isMessage {
-                    Button { showMessageTools.toggle() } label: {
-                        Label(PCL("moreTools"), systemImage: showMessageTools ? "slider.horizontal.3" : "textformat")
-                            .labelStyle(.iconOnly)
+                if !isMessage {
+                    Button {
+                        model.focus.handoff {
+                            if model.previewing { model.previewing = false }
+                            else { Task { await model.showPreview() } }
+                        }
+                    } label: {
+                        Label(EL(model.previewing ? "edit" : "preview"), systemImage: model.previewing ? "pencil" : "eye")
+                            .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                     }
-                    .accessibilityAddTraits(showMessageTools ? [.isSelected] : [])
-                }
-                Button {
-                    model.focus.handoff {
-                        if model.previewing { model.previewing = false }
-                        else { Task { await model.showPreview() } }
-                    }
-                } label: {
-                    Label(EL(model.previewing ? "edit" : "preview"), systemImage: model.previewing ? "pencil" : "eye")
-                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                 }
                 if !isMessage || model.previewing {
                     Button {

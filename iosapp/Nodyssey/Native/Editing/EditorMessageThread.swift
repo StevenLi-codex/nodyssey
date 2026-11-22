@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import NodysseyNativeCore
 
@@ -5,66 +6,101 @@ struct EditorMessageThread: View {
     @EnvironmentObject private var app: NativeAppModel
     let uid: Int64
     @ObservedObject var model: EditorViewModel
+    @Binding var showTools: Bool
     @StateObject private var store = NativeStore()
     @State private var retry = 0
     @State private var reading = false
     @Environment(\.colorScheme) private var colorScheme
     private var messages: [JSONValue] { store.value["messages"]?.array ?? [] }
     private var peerName: String { store.value["userName"]?.string ?? String(uid) }
+    private var peerAvatar: String? { store.value["avatarUrl"]?.string }
+    private var unreadIds: [JSONValue] { store.value["unreadIds"]?.array ?? [] }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
             EditorMessageHistory(scope: .init(generation: app.generation, uid: uid),
-                                 messages: messages, peer: peerName, quote: model.quote)
+                                 messages: messages, quote: model.quote)
                 .id(EditorMessageFollowState.Scope(generation: app.generation, uid: uid))
                 .background(ChatPalette.canvas(colorScheme))
             if store.isLoading { ProgressView() }
         }
-        .task(id: "\(app.generation):\(uid):\(retry)") { await store.observe(app, "messages.thread", ["uid": .integer(uid)]) }
+        .toolbar {
+            ToolbarItem(placement: .principal) { peerTitle }
+            ToolbarItem(placement: .primaryAction) { threadMenu }
+        }
+        .modifier(EditorMessageBarBackground(scheme: colorScheme))
+        .task(id: "\(app.generation):\(uid):\(retry)") {
+            await store.observe(app, "messages.thread", ["uid": .integer(uid)])
+        }
     }
 
-    /// Peer identity and the two thread actions read as one conversation header
-    /// instead of a row of equal-weight text buttons.
-    private var header: some View {
-        HStack(spacing: 10) {
-            Button { app.open("UserSpace", ["uid": .integer(uid)]) } label: {
-                HStack(spacing: 8) {
-                    ChatAvatar(name: peerName, size: 32)
-                    Text(peerName).font(.headline).lineLimit(1)
-                }
-            }.buttonStyle(.plain)
-            Spacer(minLength: 0)
-            Menu {
-                Button {
-                    Task {
-                        do { _ = try await app.request("messages.refresh"); retry += 1 }
-                        catch { model.report(error) }
-                    }
-                } label: { Label(EL("refresh"), systemImage: "arrow.clockwise") }
-                Button {
-                    guard let ids = store.value["unreadIds"]?.array, !ids.isEmpty else { return }
-                    reading = true
-                    Task {
-                        defer { reading = false }
-                        do {
-                            _ = try await app.request("messages.read", ["messageIds": .array(ids)])
-                            let value = try await app.request("messages.thread", ["uid": .integer(uid)])
-                            store.value = value
-                        } catch { model.report(error) }
-                    }
-                } label: { Label(EL("markRead"), systemImage: "checkmark.circle") }
-                .disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
-            } label: {
-                Image(systemName: "ellipsis.circle").font(.title3)
-                    .frame(minWidth: 44, minHeight: 44)
+    /// The peer's name and face belong in the bar, not in a second header row
+    /// under it: tapping either opens the same space.
+    private var peerTitle: some View {
+        Button { app.open("UserSpace", ["uid": .integer(uid)]) } label: {
+            HStack(spacing: 8) {
+                ChatAvatar(name: peerName, url: peerAvatar, size: 28)
+                Text(peerName).font(.headline).lineLimit(1)
             }
-            .accessibilityLabel(Text(PCL("moreTools")))
         }
-        .font(.subheadline)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(peerName))
+    }
+
+    private var threadMenu: some View {
+        Menu {
+            Button {
+                model.focus.handoff {
+                    if model.previewing { model.previewing = false }
+                    else { Task { await model.showPreview() } }
+                }
+            } label: {
+                Label(EL(model.previewing ? "edit" : "preview"),
+                      systemImage: model.previewing ? "pencil" : "eye")
+            }
+            Toggle(isOn: $showTools) {
+                Label(EL("markdown"), systemImage: "textformat")
+            }
+            Divider()
+            Button { Task { await refreshThread() } } label: {
+                Label(EL("refresh"), systemImage: "arrow.clockwise")
+            }
+            Button { markRead() } label: {
+                Label(EL("markRead"), systemImage: "checkmark.circle")
+            }
+            .disabled(reading || unreadIds.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .accessibilityLabel(Text(PCL("moreTools")))
+    }
+
+    private func refreshThread() async {
+        do {
+            _ = try await app.request("messages.refresh")
+            retry += 1
+        } catch {
+            model.report(error)
+        }
+    }
+
+    private func markRead() {
+        guard !unreadIds.isEmpty else { return }
+        reading = true
+        Task {
+            defer { reading = false }
+            do {
+                _ = try await app.request("messages.read", ["messageIds": .array(unreadIds)])
+                // The mutation invalidates the observer; read the exact thread again.
+                let value = try await app.request("messages.thread", ["uid": .integer(uid)])
+                store.value = value
+            } catch {
+                model.report(error)
+            }
+        }
     }
 }
 
@@ -84,15 +120,16 @@ private struct EditorMessageGeometryKey: PreferenceKey {
 private struct EditorMessageItem: Identifiable {
     let value: JSONValue
     let mine: Bool
-    /// Last bubble of one sender's run: carries the tail, incoming avatar and time.
-    let runEnd: Bool
-    let startsRun: Bool
+    let joinsPrevious: Bool
+    let joinsNext: Bool
     let dayLabel: String?
+    let topSpacing: CGFloat
     var id: String? { value["id"]?.string }
 }
 
-/// Conversation palette from the handoff artboard: a cool grey canvas, white
-/// incoming bubbles. Outgoing bubbles use the current app accent overlay.
+/// Conversation palette from the handoff artboard: a cool grey canvas and
+/// white incoming bubbles. Outgoing bubbles keep the card and carry a pale
+/// accent wash instead of a solid fill, so rich text stays readable.
 private enum ChatPalette {
     static func canvas(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(.sRGB, white: 0.07) : Color(.sRGB, red: 0.949, green: 0.949, blue: 0.973)
@@ -100,29 +137,60 @@ private enum ChatPalette {
     static func incoming(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(.sRGB, white: 0.14) : .white
     }
-    static func dayPill(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(.sRGB, white: 0.16) : Color(.sRGB, red: 0.894, green: 0.910, blue: 0.945)
+}
+
+private func editorMessageDate(_ value: JSONValue) -> Date? {
+    if let millis = value["sentAtMillis"]?.int {
+        return Date(timeIntervalSince1970: Double(millis) / 1_000)
     }
-}
-
-private func editorMessageDay(_ text: String?) -> String? {
-    guard let text else { return nil }
+    guard let text = value["sentAtText"]?.string else { return nil }
     let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-    guard parts.count == 2, parts[0].contains("-") else { return nil }
-    return String(parts[0])
+    guard parts.count == 2 else { return nil }
+    let dateParts = parts[0].split(separator: "-").compactMap { Int($0) }
+    let timeParts = parts[1].split(separator: ":").compactMap { Int($0) }
+    guard dateParts.count == 3, timeParts.count >= 2 else { return nil }
+    var components = DateComponents()
+    components.year = dateParts[0]
+    components.month = dateParts[1]
+    components.day = dateParts[2]
+    components.hour = timeParts[0]
+    components.minute = timeParts[1]
+    return Calendar.current.date(from: components)
 }
 
-private func editorMessageClock(_ text: String?) -> String? {
-    guard let text else { return nil }
+private func editorMessageDay(_ value: JSONValue) -> Date? {
+    guard let date = editorMessageDate(value) else { return nil }
+    return Calendar.current.startOfDay(for: date)
+}
+
+private func editorMessageDayKey(_ value: JSONValue) -> String? {
+    if let day = editorMessageDay(value) { return String(day.timeIntervalSince1970) }
+    return value["sentAtText"]?.string?.split(separator: " ").first.map(String.init)
+}
+
+private func editorMessageDayLabel(_ value: JSONValue) -> String? {
+    if let date = editorMessageDate(value) {
+        let sameYear = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+        let style: Date.FormatStyle = sameYear
+            ? .dateTime.month(.abbreviated).day()
+            : .dateTime.year().month(.abbreviated).day()
+        return date.formatted(style)
+    }
+    return value["sentAtText"]?.string?.split(separator: " ").first.map(String.init)
+}
+
+private func editorMessageClock(_ value: JSONValue) -> String? {
+    if let date = editorMessageDate(value) {
+        return date.formatted(.dateTime.hour().minute())
+    }
+    guard let text = value["sentAtText"]?.string else { return nil }
     let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
     return parts.count == 2 ? String(parts[1]) : text
 }
 
 private struct EditorMessageHistory: View {
-    @Environment(\.colorScheme) private var colorScheme
     let scope: EditorMessageFollowState.Scope
     let messages: [JSONValue]
-    let peer: String
     let quote: (String) -> Void
     @StateObject private var follow = EditorMessageFollowObservation()
     private var observation: UUID { follow.observation }
@@ -132,17 +200,25 @@ private struct EditorMessageHistory: View {
         messages.indices.map { index in
             let value = messages[index]
             let mine = value["isMine"]?.bool == true
-            let day = editorMessageDay(value["sentAtText"]?.string)
+            let date = editorMessageDate(value)
             func belongsToRun(_ neighbor: Int) -> Bool {
                 guard messages.indices.contains(neighbor) else { return false }
                 let other = messages[neighbor]
-                return (other["isMine"]?.bool == true) == mine &&
-                    editorMessageDay(other["sentAtText"]?.string) == day
+                guard (other["isMine"]?.bool == true) == mine else { return false }
+                guard let date, let otherDate = editorMessageDate(other) else {
+                    return editorMessageDayKey(other) != nil &&
+                        editorMessageDayKey(other) == editorMessageDayKey(value)
+                }
+                guard Calendar.current.isDate(date, inSameDayAs: otherDate) else { return false }
+                return abs(date.timeIntervalSince(otherDate)) <= 300
             }
-            let previousDay = index > 0 ? editorMessageDay(messages[index - 1]["sentAtText"]?.string) : nil
-            return EditorMessageItem(value: value, mine: mine, runEnd: !belongsToRun(index + 1),
-                                     startsRun: !belongsToRun(index - 1),
-                                     dayLabel: day != nil && day != previousDay ? day : nil)
+            let day = editorMessageDay(value)
+            let previousDay = index > 0 ? editorMessageDay(messages[index - 1]) : nil
+            let label = day != nil && day != previousDay ? editorMessageDayLabel(value) : nil
+            let joinsPrevious = belongsToRun(index - 1)
+            return EditorMessageItem(value: value, mine: mine, joinsPrevious: joinsPrevious,
+                                     joinsNext: belongsToRun(index + 1), dayLabel: label,
+                                     topSpacing: joinsPrevious ? 2 : (label == nil ? 8 : 0))
         }
     }
 
@@ -150,28 +226,28 @@ private struct EditorMessageHistory: View {
         GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(items) { item in
                             if let day = item.dayLabel {
                                 Text(day)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 12).padding(.vertical, 5)
-                                    .background(ChatPalette.dayPill(colorScheme), in: Capsule())
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
+                                    .padding(.top, 16)
+                                    .padding(.bottom, 8)
+                                    .accessibilityAddTraits(.isHeader)
                             }
                             if let id = item.id {
-                                EditorMessageBubble(value: item.value, mine: item.mine, runEnd: item.runEnd,
-                                                    peer: peer, maxWidth: max(150, viewport.size.width * 0.70),
-                                                    quote: quote)
-                                    .padding(.top, item.startsRun && item.dayLabel == nil ? 12 : 4)
+                                EditorMessageBubble(value: item.value, mine: item.mine,
+                                                    joinsPrevious: item.joinsPrevious,
+                                                    joinsNext: item.joinsNext, quote: quote)
+                                    .padding(.top, item.topSpacing)
                                     .id(id)
                             }
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .background {
                         GeometryReader { content in
                             Color.clear.preference(key: EditorMessageGeometryKey.self, value: EditorMessageGeometry(
@@ -183,6 +259,7 @@ private struct EditorMessageHistory: View {
                     }
                 }
                 .coordinateSpace(name: observation)
+                .scrollDismissesKeyboard(.interactively)
                 // iOS 16 has no scroll-position/scroll-geometry API. Observe the
                 // original content's real frame, never LazyVStack row appearances.
                 // Content identity and geometry arrive together, avoiding an
@@ -193,7 +270,7 @@ private struct EditorMessageHistory: View {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .bottom) {
                     if follow.presentation != .following, let id = lastID {
                         Button(action: follow.makeReturnAction(
                             targetID: id,
@@ -205,7 +282,7 @@ private struct EditorMessageHistory: View {
                                   systemImage: follow.presentation == .newMessages ? "arrow.down.to.line.circle.fill" : "arrow.down.to.line")
                         }
                         .buttonStyle(.borderedProminent)
-                        .padding()
+                        .padding(.bottom, 8)
                     }
                 }
             }
@@ -215,18 +292,22 @@ private struct EditorMessageHistory: View {
     }
 }
 
-/// The sender-side bottom corner is tight, so a run of messages reads as one
-/// column without a separate tail view that would clip rich content.
+/// iNod's conversation shape: 16pt corners, with only the corners that touch
+/// the same sender's previous or next bubble pulled in to 6pt.
 private struct ChatBubbleShape: Shape {
     let mine: Bool
-    var tail: Bool = true
+    let joinsPrevious: Bool
+    let joinsNext: Bool
 
     func path(in rect: CGRect) -> Path {
-        let big = min(18, rect.height / 2)
-        let small = tail ? min(6, rect.height / 2) : big
-        let topLeft = big, topRight = big
-        let bottomRight = mine ? small : big
-        let bottomLeft = mine ? big : small
+        let large = min(16, min(rect.width / 2, rect.height / 2))
+        let small = min(5, min(rect.width / 2, rect.height / 2))
+        let top = joinsPrevious ? small : large
+        let bottom = joinsNext ? small : large
+        let topLeft = mine ? large : top
+        let bottomLeft = mine ? large : bottom
+        let topRight = mine ? top : large
+        let bottomRight = mine ? bottom : large
         var path = Path()
         path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
@@ -248,17 +329,24 @@ private struct ChatBubbleShape: Shape {
 
 struct ChatAvatar: View {
     let name: String
+    var url: String? = nil
     var size: CGFloat = 28
 
     private var initial: String { name.first.map { String($0).uppercased() } ?? "?" }
 
     var body: some View {
-        Circle()
-            .fill(Color.accentColor.opacity(0.18))
-            .overlay(Text(initial).font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(Color.accentColor))
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        ZStack {
+            Circle().fill(Color.accentColor.opacity(0.18))
+            if let url, !url.isEmpty {
+                NativeRemoteImage(url: url, aspectFit: true)
+            } else {
+                Text(initial).font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
     }
 }
 
@@ -266,35 +354,27 @@ private struct EditorMessageBubble: View {
     @EnvironmentObject private var app: NativeAppModel
     let value: JSONValue
     let mine: Bool
-    let runEnd: Bool
-    let peer: String
-    let maxWidth: CGFloat
+    let joinsPrevious: Bool
+    let joinsNext: Bool
     let quote: (String) -> Void
     @State private var nodes: [NativeRichNode]?
     @State private var failure: NativeFailure?
     @State private var retry = 0
-
-    private var text: String { value["content"]?.string ?? "" }
-    private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
     @Environment(\.colorScheme) private var colorScheme
 
+    private var text: String { value["content"]?.string ?? "" }
+    private var clock: String? { editorMessageClock(value) }
+
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // Show the avatar at the end of each incoming run. The reserved
-            // space keeps every bubble in the run in the same column.
-            if mine {
-                Spacer(minLength: 0)
-            } else {
-                if runEnd { ChatAvatar(name: peer, size: 28) } else { Color.clear.frame(width: 28, height: 1) }
-            }
-            VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
-                bubble
-                    .frame(maxWidth: maxWidth, alignment: mine ? .trailing : .leading)
-                if let failure { Text(failure.message).font(.caption2).foregroundStyle(.secondary) }
-            }
-            if !mine { Spacer(minLength: 0) }
+        VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
+            bubble
+                .frame(maxWidth: 500, alignment: mine ? .trailing : .leading)
+            if let failure { Text(failure.message).font(.caption2).foregroundStyle(.secondary) }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+        // Leave the same 52pt gutter iNod uses, so the conversation reads as
+        // two columns without an avatar in every incoming run.
+        .padding(mine ? .leading : .trailing, 52)
         .task(id: "\(app.generation):\(retry):\(text)") {
             nodes = nil; failure = nil
             guard value["isMarkdown"]?.bool == true, let raw = value["content"]?.string else { return }
@@ -309,43 +389,73 @@ private struct EditorMessageBubble: View {
     }
 
     private var bubble: some View {
-        VStack(alignment: .trailing, spacing: 3) {
-            content
-            if runEnd, let clock {
-                HStack(spacing: 3) {
-                    Text(clock)
-                    if mine { Image(systemName: "checkmark") }
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 13)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .background {
-            ChatBubbleShape(mine: mine, tail: runEnd)
-                .fill(ChatPalette.incoming(colorScheme))
-                .overlay {
-                    if mine {
-                        ChatBubbleShape(mine: true, tail: runEnd)
-                            .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.27 : 0.16))
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                ChatBubbleShape(mine: mine, joinsPrevious: joinsPrevious, joinsNext: joinsNext)
+                    .fill(ChatPalette.incoming(colorScheme))
+                    .overlay {
+                        if mine {
+                            ChatBubbleShape(mine: true, joinsPrevious: joinsPrevious, joinsNext: joinsNext)
+                                .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.13))
+                        }
                     }
-                }
-        }
-        .contentShape(ChatBubbleShape(mine: mine, tail: runEnd))
-        .contextMenu { Button(EL("quote")) { quote(text) } }
+            }
+            .contentShape(ChatBubbleShape(mine: mine, joinsPrevious: joinsPrevious, joinsNext: joinsNext))
+            .contextMenu { Button(EL("quote")) { quote(text) } }
     }
 
     @ViewBuilder private var content: some View {
         if value["isMarkdown"]?.bool == true {
-            if let nodes { EditorRichPreview(nodes: nodes) }
-            else if failure != nil { Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
-            else { ProgressView().controlSize(.small) }
+            VStack(alignment: .trailing, spacing: 3) {
+                // Show the raw Markdown while the rich tree loads. A spinner
+                // alone would shrink a whole message to a timestamp-high bubble.
+                if let nodes {
+                    ViewThatFits(in: .horizontal) {
+                        EditorRichPreview(nodes: nodes, expandsWidth: false)
+                            .fixedSize(horizontal: true, vertical: true)
+                        EditorRichPreview(nodes: nodes, expandsWidth: false)
+                    }
+                } else { Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
+                if let clock {
+                    Text(clock).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
         } else {
-            Text(text)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            plainBody
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The clock sits on the last text line, the way iNod places its trailing
+    /// label, instead of taking a second line under every bubble.
+    private var plainBody: Text {
+        let body = Text(text)
+        guard let clock else { return body }
+        return body + Text("  \(clock)").font(.caption2).foregroundColor(.secondary)
+    }
+}
+
+/// A conversation scrolls under its bar; leave a real material there so the
+/// oldest visible message cannot read through the peer's name.
+private struct EditorMessageBarBackground: ViewModifier {
+    let scheme: ColorScheme
+
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            content
+                .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+                .toolbarBackground(ChatPalette.canvas(scheme), for: .navigationBar)
+        } else {
+            content
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarBackground(ChatPalette.canvas(scheme), for: .navigationBar)
+        }
+        #else
+        content
+        #endif
     }
 }

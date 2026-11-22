@@ -85,10 +85,14 @@ struct NativeRichTextView: View {
     @Environment(\.nativeRichTextRole) private var role
     let nodes: [NativeRichNode]
     var actions: NativeRichTextActions
+    /// Conversation bubbles hug a short message instead of taking the column;
+    /// posts, previews and Readmes keep the full width they were designed for.
+    var expandsWidth = true
 
-    init(nodes: [NativeRichNode], actions: NativeRichTextActions = .init()) {
+    init(nodes: [NativeRichNode], actions: NativeRichTextActions = .init(), expandsWidth: Bool = true) {
         self.nodes = nodes
         self.actions = actions
+        self.expandsWidth = expandsWidth
     }
 
     var body: some View {
@@ -97,7 +101,7 @@ struct NativeRichTextView: View {
                 NativeRichBlock(node: nodes[index], actions: actions)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: expandsWidth ? .infinity : nil, alignment: .leading)
         .modifier(NativeRichTextPresentation(role: role))
     }
 }

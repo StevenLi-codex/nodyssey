@@ -5,9 +5,11 @@ import NodysseyNativeCore
 struct EditorRichPreview: View {
     @EnvironmentObject private var app: NativeAppModel
     let nodes: [NativeRichNode]
+    var expandsWidth = true
     @State private var vote: EditorPreviewVote?
     var body: some View {
-        NativeRichTextView(nodes: nodes, actions: editorRichActions(app, onVote: { vote = EditorPreviewVote(id: $0) }))
+        NativeRichTextView(nodes: nodes, actions: editorRichActions(app, onVote: { vote = EditorPreviewVote(id: $0) }),
+                           expandsWidth: expandsWidth)
             .sheet(item: $vote) { value in
                 NavigationStack { EditorPollSnapshot(id: value.id) }
             }
