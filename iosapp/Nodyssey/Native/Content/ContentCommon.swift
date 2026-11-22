@@ -151,6 +151,7 @@ struct ContentPostRow: View {
                     }
                 }
             }.buttonStyle(NativeCardPressStyle())
+                .accessibilityIdentifier("native.feed.post")
         }
         else { label() }
     }

@@ -233,7 +233,9 @@ struct ContentPostList: View {
             page = target
         } : nil, pageJumpRequest: active ? $pageJumpRequest : .constant(nil),
                                 homeBoardSlugs: homeBoardSlugs, boardMotion: active ? boardMotion : nil,
-                                selectHomeBoard: { target in
+                                allowsRowActivation: {
+            ownerGeneration == app.generation && board == category && ownerSort == sort
+        }, selectHomeBoard: { target in
             guard ownerGeneration == app.generation, board == category, ownerSort == sort else { return }
             selectBoard(target)
         }, visible: { id, rowPage in
@@ -301,6 +303,7 @@ struct ContentBoardTabs: View {
         }
         .id(slug).buttonStyle(.plain).accessibilityLabel(Text(title))
         .accessibilityAddTraits(selection == slug ? [.isSelected] : [])
+        .accessibilityIdentifier("native.feed.board.\(slug)")
     }
     private struct Board: Identifiable { let id: String; let title: String }
 }
@@ -378,7 +381,9 @@ private struct ContentFeedBoardPan: UIViewRepresentable {
             let pan = UIPanGestureRecognizer(target: self, action: #selector(sample(_:)))
             pan.delegate = self
             pan.maximumNumberOfTouches = 1
-            pan.cancelsTouchesInView = false
+            // Once UIKit recognizes a horizontal board drag, cancel the touch
+            // already delivered to the row under the finger.
+            pan.cancelsTouchesInView = true
             pan.delaysTouchesBegan = false
             pan.delaysTouchesEnded = false
             return pan
@@ -454,10 +459,11 @@ private struct ContentFeedBoardPan: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ recognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
-            // This permission is only for our observer; never set failure
-            // requirements, replace the List pan delegate or delay row controls.
-            recognizer === pan && pan.view === scroll
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            // Keep the list's native vertical pan, without inviting row
+            // activation recognizers to recognize this same horizontal touch.
+            guard recognizer === pan, let scroll, pan.view === scroll else { return false }
+            return other === scroll.panGestureRecognizer
         }
 
         @objc private func sample(_ sender: UIPanGestureRecognizer) {
@@ -573,12 +579,14 @@ struct ContentPagedList: View {
     @Binding private var pageJumpRequest: ContentHomePageJumpIntent?
     private let homeBoardSlugs: [String]
     private let boardMotion: ContentFeedBoardMotion?
+    private let allowsRowActivation: () -> Bool
     private let selectHomeBoard: ((String) -> Void)?
     init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil,
          clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil,
          pageJumpRequest: Binding<ContentHomePageJumpIntent?> = .constant(nil), homeBoardSlugs: [String] = [],
          paging: Bool = false,
          boardMotion: ContentFeedBoardMotion? = nil,
+         allowsRowActivation: @escaping () -> Bool = { true },
          selectHomeBoard: ((String) -> Void)? = nil,
          visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
         self.operation = operation; self.arguments = arguments; self.visible = visible; self.clearSearch = clearSearch
@@ -588,6 +596,7 @@ struct ContentPagedList: View {
         // Inside the pager the page controller owns horizontal travel; leaving
         // the board pan on the list would let it steal the swipe.
         self.boardMotion = paging ? nil : boardMotion
+        self.allowsRowActivation = allowsRowActivation
         self.selectHomeBoard = selectHomeBoard
         self.requestedRestoreID = restoreID
         _restoreID = State(initialValue: restoreID)
@@ -1029,6 +1038,7 @@ struct ContentPagedList: View {
     }
 
     private func openPost(_ id: Int64, _ value: JSONValue) {
+        guard allowsRowActivation() else { return }
         let fromHomeRoot = isHome && postTransition != nil && app.selectedTab == .home && app.homePath.isEmpty && app.sheet == nil
         app.open("PostDetail", ["postId": .integer(id), "preview": value["summary"] ?? .null])
         if fromHomeRoot, let destination = app.homePath.first {

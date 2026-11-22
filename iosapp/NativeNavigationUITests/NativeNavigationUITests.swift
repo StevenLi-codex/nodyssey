@@ -57,6 +57,30 @@ final class NativeNavigationUITests: XCTestCase {
         selectTab("home", route: "PostList")
     }
 
+    func testHorizontalDragFromPostDoesNotOpenIt() {
+        let boardButtons = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "native.feed.board."))
+        let allBoards = element("native.feed.board.")
+        let post = app.buttons.matching(identifier: "native.feed.post").firstMatch
+        assertElementHittable(post)
+        assertElementHittable(allBoards)
+        if !allBoards.isSelected { allBoards.tap() }
+
+        let beginning = post.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.55))
+        let end = post.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.55))
+        beginning.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+
+        let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            boardButtons.allElementsBoundByIndex.contains { $0.identifier != "native.feed.board." && $0.isSelected }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [switched], timeout: 10), .completed)
+        assertScreen("PostList")
+        assertNotHittable("native.screen.PostDetail")
+
+        assertElementHittable(post)
+        post.tap()
+        XCTAssertTrue(element("native.screen.PostDetail").waitForExistence(timeout: 15))
+    }
+
     // Catches a shared NavigationPath, or a path discarded on tab changes.
     // Settings is a deterministic local route: this must work with a failed feed.
     func testSettingsStackSurvivesSwitchingToOtherTabRoots() {
