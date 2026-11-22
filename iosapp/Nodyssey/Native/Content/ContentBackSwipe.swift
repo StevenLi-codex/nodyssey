@@ -20,6 +20,17 @@ enum ContentBackSwipe {
         return min(1, max(0, directed(translationX, rightToLeft) / width))
     }
 
+    /// UIKit can reset translation when the recognizer leaves its possible state.
+    static func initialTranslationCorrection(start: Double, current: Double, reported: Double) -> Double {
+        current - start - reported
+    }
+
+    static func settleDuration(progress: Double, width: Double, velocity: Double, completing: Bool) -> Double {
+        let remaining = width * (completing ? 1 - progress : progress)
+        let speed = max(750, min(2_400, completing ? velocity : -velocity))
+        return min(0.32, max(0.12, remaining / speed))
+    }
+
     private static func directed(_ value: Double, _ rightToLeft: Bool) -> Double { rightToLeft ? -value : value }
 
     static func shouldReturn(startX: Double, width: Double, translationX: Double,

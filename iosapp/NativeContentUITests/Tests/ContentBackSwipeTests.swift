@@ -107,6 +107,21 @@ import Testing
         #expect(ContentBackSwipe.progress(translationX: 10, width: 400, rightToLeft: true) == 0)
     }
 
+    @Test func recognizingPanAfterInitialMovementPreservesFingerTravel() {
+        let correction = ContentBackSwipe.initialTranslationCorrection(start: 120, current: 139, reported: 0)
+        #expect(correction == 19)
+        #expect(ContentBackSwipe.progress(translationX: 81 + correction, width: 400, rightToLeft: false) == 0.25)
+        #expect(ContentBackSwipe.initialTranslationCorrection(start: 280, current: 261, reported: -19) == 0)
+    }
+
+    @Test func settlingRespondsToRemainingTravelAndReleaseDirection() {
+        let long = ContentBackSwipe.settleDuration(progress: 0.2, width: 400, velocity: 0, completing: true)
+        let short = ContentBackSwipe.settleDuration(progress: 0.8, width: 400, velocity: 0, completing: true)
+        let flick = ContentBackSwipe.settleDuration(progress: 0.2, width: 400, velocity: 1_600, completing: true)
+        #expect(short < flick && flick < long)
+        #expect(abs(ContentBackSwipe.settleDuration(progress: 0.8, width: 400, velocity: -1_600, completing: false) - flick) < 0.0001)
+    }
+
     @Test func invalidGeometryFailsClosed() {
         for invalid in [Double.nan, .infinity, -.infinity] {
             #expect(!ContentBackSwipe.shouldReturn(startX: invalid, width: 400,

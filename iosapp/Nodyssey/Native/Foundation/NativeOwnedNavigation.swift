@@ -121,6 +121,9 @@ extension EnvironmentValues {
         let to: Page
         let width: CGFloat
         let rightToLeft: Bool
+        let returnsToHomeFromPost: Bool
+        var translationCorrection = CGPoint.zero
+        var releaseVelocity: CGFloat = 0
         var startX: Double
         var dragOrigin: CGFloat = 0
         var progress: CGFloat = 0
@@ -128,8 +131,9 @@ extension EnvironmentValues {
         var prepare: Task<Void, Never>?
         var watchdog: Task<Void, Never>?
         var cancelling = false
-        init(lease: NativeAppModel.InteractivePop, from: Page, to: Page, width: CGFloat, rtl: Bool, startX: Double) {
+        init(lease: NativeAppModel.InteractivePop, from: Page, to: Page, width: CGFloat, rtl: Bool, startX: Double, returnsToHomeFromPost: Bool) {
             self.lease = lease; self.from = from; self.to = to; self.width = width; rightToLeft = rtl; self.startX = startX
+            self.returnsToHomeFromPost = returnsToHomeFromPost
         }
     }
 
@@ -584,13 +588,18 @@ extension EnvironmentValues {
         case .began:
             if homeEnd.hasLease { homeEnd.clear() } // interactive is not this experiment
             if let motion, let start, resume(motion, at: start.x) {
+                captureTranslationOrigin(motion, sender, start: start)
                 drag(motion, sender)
                 return
             }
             guard let start, let from = visible, let id = from.id, let to = pages.dropLast().last,
                   view.bounds.width > 0, let lease = app.beginInteractivePop(stack: stack, from: id) else { return }
             guard to.id == lease.to else { app.cancelInteractivePop(lease); return }
-            let motion = Motion(lease: lease, from: from, to: to, width: view.bounds.width, rtl: rtl, startX: start.x)
+            let returnsToHomeFromPost = stack == .home && to.id == nil &&
+                app.homePath.last?.route == "PostDetail"
+            let motion = Motion(lease: lease, from: from, to: to, width: view.bounds.width, rtl: rtl, startX: start.x,
+                                returnsToHomeFromPost: returnsToHomeFromPost)
+            captureTranslationOrigin(motion, sender, start: start)
             self.motion = motion
             attach(to)
             to.surface.isUserInteractionEnabled = false
@@ -601,9 +610,11 @@ extension EnvironmentValues {
             if let motion { drag(motion, sender) }
         case .ended:
             guard let motion, !motion.cancelling else { return }
-            let distance = sender.translation(in: view)
+            let distance = translation(motion, sender)
+            let velocity = sender.velocity(in: view).x
+            motion.releaseVelocity = motion.rightToLeft ? -velocity : velocity
             let travel = distance.x + motion.dragOrigin * motion.width * (motion.rightToLeft ? -1 : 1)
-            let projected = travel + sender.velocity(in: view).x * 0.18
+            let projected = travel + velocity * 0.18
             if ContentBackSwipe.shouldReturn(startX: motion.startX, width: motion.width,
                 translationX: travel, translationY: distance.y, predictedX: projected, rightToLeft: motion.rightToLeft) {
                 release(motion)
@@ -614,9 +625,24 @@ extension EnvironmentValues {
         }
     }
 
+    private func captureTranslationOrigin(_ motion: Motion, _ recognizer: UIPanGestureRecognizer, start: CGPoint) {
+        guard motion.returnsToHomeFromPost else { return }
+        let location = recognizer.location(in: view)
+        let reported = recognizer.translation(in: view)
+        motion.translationCorrection = CGPoint(
+            x: ContentBackSwipe.initialTranslationCorrection(start: start.x, current: location.x, reported: reported.x),
+            y: ContentBackSwipe.initialTranslationCorrection(start: start.y, current: location.y, reported: reported.y)
+        )
+    }
+
+    private func translation(_ motion: Motion, _ recognizer: UIPanGestureRecognizer) -> CGPoint {
+        let reported = recognizer.translation(in: view)
+        return CGPoint(x: reported.x + motion.translationCorrection.x, y: reported.y + motion.translationCorrection.y)
+    }
+
     private func drag(_ motion: Motion, _ recognizer: UIPanGestureRecognizer) {
         guard !motion.cancelling, view.bounds.width == motion.width, app.isInteractivePopCurrent(motion.lease) else { cancel(motion); return }
-        let travel = motion.dragOrigin * motion.width * (motion.rightToLeft ? -1 : 1) + recognizer.translation(in: view).x
+        let travel = motion.dragOrigin * motion.width * (motion.rightToLeft ? -1 : 1) + translation(motion, recognizer).x
         motion.progress = ContentBackSwipe.progress(translationX: travel,
                                                      width: motion.width, rightToLeft: motion.rightToLeft)
         render(motion, progress: motion.progress)
@@ -634,6 +660,7 @@ extension EnvironmentValues {
         motion.startX = startX
         motion.progress = progress
         motion.dragOrigin = progress
+        motion.releaseVelocity = 0
         render(motion, progress: progress)
         return true
     }
@@ -641,7 +668,9 @@ extension EnvironmentValues {
     private func render(_ motion: Motion, progress: CGFloat) {
         let span = motion.width * (motion.rightToLeft ? -1 : 1)
         motion.from.surface.transform = CGAffineTransform(translationX: span * progress, y: 0)
-        motion.to.surface.transform = CGAffineTransform(translationX: -span * (1 - progress) * 0.24, y: 0)
+        let remaining = 1 - progress
+        let parallax = motion.returnsToHomeFromPost ? 0.16 : 0.24
+        motion.to.surface.transform = CGAffineTransform(translationX: -span * remaining * parallax, y: 0)
     }
 
     private func release(_ motion: Motion) {
@@ -688,7 +717,11 @@ extension EnvironmentValues {
         // execute a tap against UIKit's already-updated model frames.
         motion.from.surface.isUserInteractionEnabled = false
         motion.from.surface.accessibilityElementsHidden = true
-        let animator = UIViewPropertyAnimator(duration: 0.23, curve: .easeOut) { [weak self, weak motion] in
+        let duration = motion.returnsToHomeFromPost
+            ? ContentBackSwipe.settleDuration(progress: motion.progress, width: motion.width,
+                                              velocity: motion.releaseVelocity, completing: commit)
+            : 0.23
+        let animator = UIViewPropertyAnimator(duration: duration, curve: .easeOut) { [weak self, weak motion] in
             if let motion { self?.render(motion, progress: commit ? 1 : 0) }
         }
         motion.animator = animator
