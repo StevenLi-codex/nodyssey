@@ -15,18 +15,22 @@ struct EditorThreadReplyPresentation: ViewModifier {
         content
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if !covered {
-                    if let model = owner.model {
-                        EditorInlineReply(model: model, owner: owner, onPublished: onPublished)
-                    } else {
-                        Button(action: onOpen) {
-                            HStack {
-                                Image(systemName: "square.and.pencil")
-                                Text(EL("reply")).foregroundStyle(.secondary)
-                                Spacer(minLength: 0)
-                            }.frame(minHeight: 44).contentShape(Rectangle())
-                        }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 4)
-                            .background(.background)
+                    Group {
+                        if let model = owner.model {
+                            EditorInlineReply(model: model, owner: owner, onPublished: onPublished)
+                        } else {
+                            Button(action: onOpen) {
+                                HStack {
+                                    Image(systemName: "square.and.pencil")
+                                    Text(EL("reply")).foregroundStyle(.secondary)
+                                    Spacer(minLength: 0)
+                                }.frame(minHeight: 44).contentShape(Rectangle())
+                            }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 4)
+                        }
                     }
+                    // The inset sits above the home indicator; continue its own
+                    // surface behind it instead of leaving a strip of page canvas.
+                    .background { Rectangle().fill(.background).ignoresSafeArea(edges: .bottom) }
                 }
             }
             #if os(iOS)

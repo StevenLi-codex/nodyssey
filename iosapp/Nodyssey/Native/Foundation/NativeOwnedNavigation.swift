@@ -500,7 +500,13 @@ extension EnvironmentValues {
               admitsStart(at: start) else { return false }
         let velocity = pan.velocity(in: view)
         if motion != nil { return abs(velocity.x) > abs(velocity.y) * 1.5 && velocity.x != 0 }
-        return ContentBackSwipe.begins(velocityX: velocity.x, velocityY: velocity.y, rightToLeft: rtl)
+        // A deliberate horizontal drag must begin on its own direction. iOS only
+        // exposes a gesture recognizer at the first samples, so a slow or slightly
+        // diagonal start has near-zero velocity and would otherwise never begin.
+        let travel = pan.translation(in: view)
+        if ContentBackSwipe.begins(velocityX: velocity.x, velocityY: velocity.y, rightToLeft: rtl) { return true }
+        let directed = rtl ? -travel.x : travel.x
+        return directed > 4 && abs(travel.x) > abs(travel.y) * 1.25
     }
 
     private func admitsStart(at start: CGPoint, actualHit: UIView? = nil) -> Bool {
