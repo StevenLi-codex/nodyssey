@@ -859,8 +859,15 @@ struct ContentPagedList: View {
                 // Both entries choose the same destination before dispatch; a
                 // pull racing a tab pair cannot first refresh page N then page 1.
                 if case .replace = try? ContentFeedTopRefresh.plan(store.value, atTop: true) {
-                    return await refreshHomeFromPageOne(ticket)
+                    return await refreshFromPageOne(ticket)
                 }
+            } else {
+                // A board keeps its own pager id, so paging.refresh only re-reads
+                // the window this client already holds: the list redraws without
+                // fetching anything newer. Refreshing a board means the same
+                // forced page-one read the combined feed uses, against that
+                // board's own arguments.
+                return await refreshFromPageOne(ticket)
             }
             guard !store.isReplacingPagingWindow, let id = store.value.nativeString("pagerId") else { return false }
             // Pull and programmatic entry share the retained Store single-flight.
@@ -945,7 +952,7 @@ struct ContentPagedList: View {
         if let target { selectHomeBoard?(target) }
     }
     #endif
-    private func refreshHomeFromPageOne(_ ticket: ContentFeedTicket) async -> Bool {
+    private func refreshFromPageOne(_ ticket: ContentFeedTicket) async -> Bool {
         guard owns(ticket), isVisible else { return false }
         command.cancel(); jump.cancel(); pageSheet.cancel()
         restored = true; restoreID = nil; visiblePage = 1
