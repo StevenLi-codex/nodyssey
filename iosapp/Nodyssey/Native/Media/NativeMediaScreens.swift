@@ -51,13 +51,29 @@ struct NativeImageHostScreen: View {
             if let failure = current.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
             if providers.isEmpty && capabilities.failure == nil { ProgressView() }
             else {
-                Picker(MediaL.text("provider"), selection: Binding(get: { provider ?? current.value["provider"]?.string ?? "" }, set: { provider = $0 })) {
+                let active = current.value["provider"]?.string
+                HStack(spacing: 12) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.title3).foregroundStyle(.tint)
+                        .frame(width: 38, height: 38)
+                        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 11))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(active.map { MediaL.text($0) } ?? MediaL.text("hosts"))
+                            .font(.headline)
+                        Text(active == nil ? MediaL.text("notConfigured") : MediaL.text("selected"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 6)
+
+                Picker(MediaL.text("provider"), selection: Binding(get: { provider ?? active ?? "" }, set: { provider = $0 })) {
                     ForEach(providers) { row in Text(MediaL.text(row.id)).tag(row.id) }
                 }.pickerStyle(.menu).padding(.horizontal)
-                if let selected = provider ?? current.value["provider"]?.string,
+                if let selected = provider ?? active,
                    let capability = providers.first(where: { $0.id == selected }) {
                     MediaHostConfiguration(provider: selected, capability: capability.value,
-                                           selected: current.value["provider"]?.string == selected).id(selected)
+                                           selected: active == selected).id(selected)
                 }
             }
         }
@@ -99,10 +115,17 @@ private struct MediaHostConfiguration: View {
                         TextField(MediaL.text("urlPath"), text: field(\.urlPath))
                         TextField(MediaL.text("urlPrefix"), text: field(\.urlPrefix))
                     }
-                    Button(MediaL.text("save")) {
+                    Button {
                         if draft?.token == .clear || draft?.headerValue == .clear || draft?.formFields == .clear { clearConfirmation = true }
                         else { save() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if action.busy { ProgressView().controlSize(.small) }
+                            Text(MediaL.text("save")).frame(maxWidth: .infinity)
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }.disabled(action.busy)
                 Section {
                     Label(MediaL.text(store.value["isConfigured"]?.bool == true ? "configured" : "notConfigured"), systemImage: store.value["isConfigured"]?.bool == true ? "checkmark.shield" : "exclamationmark.shield")
