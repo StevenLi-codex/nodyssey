@@ -1,5 +1,8 @@
 import SwiftUI
 import NodysseyNativeCore
+#if os(iOS)
+import UIKit
+#endif
 
 struct ContentPostList: View {
     @EnvironmentObject private var app: NativeAppModel
@@ -8,6 +11,9 @@ struct ContentPostList: View {
     @StateObject private var command = ContentCommand()
     @State private var manageBoards = false
     @State private var category = ""
+    @State private var boardMotion = ContentFeedBoardMotion()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.nativeCardMotionDisabled) private var motionDisabled
     @State private var pageJumpRequest: ContentHomePageJumpIntent?
     private var sort: String { ContentPreferences(settings: app.settings).feedSort }
     @State private var page: Int64 = 1
@@ -19,65 +25,28 @@ struct ContentPostList: View {
         let ownerSort = sort
         let ownerGeneration = app.generation
         VStack(spacing: 0) {
-            // This is now a single glass background. A container around the
-            // foreground hoists its backdrop above the search label on iOS 26.
-            Group {
-                VStack(spacing: 2) {
-                    HStack(spacing: 8) {
-                        // This remains a route entry, not a second search input owner.
-                        Button { app.open("Search") } label: {
-                            Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
-                                .foregroundStyle(NativeFeedLayout.controlForeground)
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                        ContentSortPicker(selection: sortSelection, readableLabel: true).pickerStyle(.menu)
-                            .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
-                    }.padding(.horizontal, 12)
-                        .padding(.vertical, 2)
-                        .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true, role: .homeSearch) }
-                        .padding(.horizontal, NativeFeedLayout.horizontalInset)
-                    HStack(spacing: 0) {
-                        ContentBoardTabs(categories: homeCategories, selection: boardSelection)
-                        Menu {
-                            ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
-                                Button(boardTitle(slug)) { selectBoard(slug) }
-                            }
-                            Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
-                                .foregroundStyle(NativeFeedLayout.controlForeground)
-                                .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
-                        }
-                        #if os(macOS)
-                        .menuStyle(.borderlessButton)
-                        #endif
-                        .menuIndicator(.hidden).fixedSize().tint(NativeFeedLayout.controlForeground)
-                    }
-                    // Secondary text rail sits directly on the page canvas.
-                    .padding(.horizontal, NativeFeedLayout.horizontalInset)
-                }
-                .padding(.bottom, 6)
-            }
+            if !usesHomeSafeAreaBar { homeChrome }
 
             ContentStoreStatus(store: categories) { retry += 1 }
             ContentCommandStatus(command: command)
             if app.site.nativeBool("requiresRestart") == true {
                 Text("native_settings_site_pending", tableName: "Settings").font(.caption).foregroundStyle(.secondary)
             }
-            ContentPagedList(operation: "feed", arguments: arguments,
-                             restoreID: positions.position(board: category, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
-                             replacePage: { target in
-                guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                page = target
-            }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs,
-                             selectHomeBoard: { target in
-                guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                selectBoard(target)
-            }, visible: { id, rowPage in
-                guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
-            })
+            feedWithHomeChrome {
+                ContentPagedList(operation: "feed", arguments: arguments,
+                                 restoreID: positions.position(board: category, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
+                                 replacePage: { target in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    page = target
+                }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs, boardMotion: boardMotion,
+                                 selectHomeBoard: { target in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    selectBoard(target)
+                }, visible: { id, rowPage in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
+                })
+            }
         }
         .background(ContentSurface(canvas: true))
         .navigationTitle(app.siteName ?? String(localized: "content.posts", table: "Content"))
@@ -130,6 +99,66 @@ struct ContentPostList: View {
         .task(id: app.generation) { await refreshCategories() }
         .onDisappear { command.cancel(); pageJumpRequest = nil }
     }
+    private var usesHomeSafeAreaBar: Bool {
+        #if os(iOS)
+        if #available(iOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+    @ViewBuilder private func feedWithHomeChrome<Feed: View>(@ViewBuilder _ feed: () -> Feed) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            feed().safeAreaBar(edge: .top, spacing: 0) { homeChrome }
+        } else {
+            feed()
+        }
+        #else
+        feed()
+        #endif
+    }
+    private var homeChrome: some View {
+        // This is now a single glass background. A container around the
+        // foreground hoists its backdrop above the search label on iOS 26.
+        Group {
+            VStack(spacing: 2) {
+                HStack(spacing: 8) {
+                    // This remains a route entry, not a second search input owner.
+                    Button { app.open("Search") } label: {
+                        Label(String(localized: "content.search", table: "Content"), systemImage: "magnifyingglass")
+                            .foregroundStyle(NativeFeedLayout.controlForeground)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                    ContentSortPicker(selection: sortSelection, readableLabel: true).pickerStyle(.menu)
+                        .frame(minHeight: 44).disabled(command.busy || app.settings == .null)
+                }.padding(.horizontal, 12)
+                    .padding(.vertical, 2)
+                    .background { NativeGlassSurface(cornerRadius: NativeFeedLayout.chromeCornerRadius, opaque: app.settings.nativeBool("einkMode") == true, role: .homeSearch) }
+                    .padding(.horizontal, NativeFeedLayout.horizontalInset)
+                HStack(spacing: 0) {
+                    ContentBoardTabs(categories: homeCategories, selection: boardSelection,
+                                     orderedBoards: homeBoardSlugs, motion: boardMotion)
+                    Menu {
+                        ForEach((recent.value.array?.compactMap(\.string) ?? []).filter { slug in (categories.value.array ?? []).contains { $0.nativeString("slug") == slug } }, id: \.self) { slug in
+                            Button(boardTitle(slug)) { selectBoardFromTap(slug) }
+                        }
+                        Button(String(localized: "content.manageBoards", table: "Content")) { manageBoards = true }
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
+                            .foregroundStyle(NativeFeedLayout.controlForeground)
+                            .accessibilityLabel(Text(String(localized: "content.manageBoards", table: "Content")))
+                    }
+                    #if os(macOS)
+                    .menuStyle(.borderlessButton)
+                    #endif
+                    .menuIndicator(.hidden).fixedSize().tint(NativeFeedLayout.controlForeground)
+                }
+                // Secondary text rail sits directly on the page canvas.
+                .padding(.horizontal, NativeFeedLayout.horizontalInset)
+            }
+            .padding(.bottom, 6)
+        }
+    }
     private func boardTitle(_ slug: String) -> String {
         (categories.value.array ?? []).first { $0.nativeString("slug") == slug }?.nativeString("title") ?? slug
     }
@@ -148,7 +177,16 @@ struct ContentPostList: View {
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
     private var boardSelection: Binding<String> {
-        Binding(get: { category }, set: selectBoard)
+        Binding(get: { category }, set: selectBoardFromTap)
+    }
+    private func selectBoardFromTap(_ slug: String) {
+        let scope = ContentFeedBoardSwipeOwner(generation: app.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"), board: category, orderedBoards: homeBoardSlugs,
+            isHomeRoot: app.selectedTab == .home && app.homePath.isEmpty && app.sheet == nil && !app.departureRunning,
+            site: app.site.nativeString("current"), sort: sort)
+        boardMotion.update { $0.tap(scope: scope, target: slug, now: ProcessInfo.processInfo.systemUptime,
+                                    animated: !reduceMotion && !motionDisabled) }
+        selectBoard(slug)
     }
     private func selectBoard(_ slug: String) {
         guard slug != category else { return }
@@ -180,36 +218,265 @@ struct ContentPostList: View {
 struct ContentBoardTabs: View {
     let categories: JSONValue
     @Binding var selection: String
+    let orderedBoards: [String]
+    let motion: ContentFeedBoardMotion
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    tab(String(localized: "content.all", table: "Content"), slug: "")
-                    ForEach((categories.array ?? []).compactMap { value -> Board? in
-                        guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
-                        return Board(id: slug, title: value.nativeString("title") ?? slug)
-                    }) { board in tab(board.title, slug: board.id) }
-                }.padding(.horizontal, 4)
+                ContentFeedBoardFrame(motion: motion, board: selection) { presentation in
+                    let boardPosition = presentation?.boardPosition
+                    HStack(spacing: 16) {
+                        tab(String(localized: "content.all", table: "Content"), slug: "", position: boardPosition)
+                        ForEach((categories.array ?? []).compactMap { value -> Board? in
+                            guard let slug = value.nativeString("slug"), !slug.isEmpty else { return nil }
+                            return Board(id: slug, title: value.nativeString("title") ?? slug)
+                        }) { board in tab(board.title, slug: board.id, position: boardPosition) }
+                    }.padding(.horizontal, 4)
+                }
             }
-            .onChange(of: selection) { slug in proxy.scrollTo(slug, anchor: .center) }
+            .onChange(of: selection) { slug in
+                withAnimation(motion.isSettling(on: slug) ? .easeOut(duration: ContentFeedBoardSwipeTrace.settleDuration) : nil) {
+                    proxy.scrollTo(slug, anchor: .center)
+                }
+            }
             .onAppear { proxy.scrollTo(selection, anchor: .center) }
         }
     }
-    private func tab(_ title: String, slug: String) -> some View {
+    private func tab(_ title: String, slug: String, position: CGFloat?) -> some View {
         Button { selection = slug } label: {
-            Text(title).font(.subheadline.weight(selection == slug ? .semibold : .regular))
-                .foregroundStyle(NativeFeedLayout.controlForeground)
-                .frame(minWidth: 44, minHeight: 32)
-                .overlay(alignment: .bottom) {
-                    if selection == slug { Capsule().fill(.tint).frame(height: 2) }
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+            let index = orderedBoards.firstIndex(of: slug)
+            let weight = if let position, let index { max(0, 1 - abs(position - CGFloat(index))) }
+                else { selection == slug ? CGFloat(1) : CGFloat(0) }
+            // Both weights reserve their width; the same live rail progress
+            // controls the text and underline without changing measurement.
+            ZStack {
+                Text(title).font(.subheadline.weight(.regular)).opacity(Double(1 - weight))
+                Text(title).font(.subheadline.weight(.semibold)).opacity(Double(weight))
+            }
+            .accessibilityHidden(true)
+            .foregroundStyle(NativeFeedLayout.controlForeground)
+            .frame(minWidth: 44, minHeight: 32)
+            .overlay(alignment: .bottom) {
+                Capsule().fill(.tint).frame(height: 2)
+                    .opacity(Double(weight)).scaleEffect(x: max(0.25, weight), y: 1)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
-        .id(slug).buttonStyle(.plain).accessibilityAddTraits(selection == slug ? [.isSelected] : [])
+        .id(slug).buttonStyle(.plain).accessibilityLabel(Text(title))
+        .accessibilityAddTraits(selection == slug ? [.isSelected] : [])
     }
     private struct Board: Identifiable { let id: String; let title: String }
 }
+
+/// Home retains the owner without observing it. Only the rail and the existing
+/// List's presentation modifier observe drag frames.
+@MainActor
+final class ContentFeedBoardMotion: ObservableObject {
+    @Published private(set) var visual = ContentFeedBoardSwipeTrace()
+    private var trace = ContentFeedBoardSwipeTrace()
+    private var completion: Task<Void, Never>?
+
+    func isSettling(on board: String) -> Bool { trace.isSettling(on: board) }
+
+    func update(_ edit: (inout ContentFeedBoardSwipeTrace) -> Void) {
+        let previous = trace.settleID
+        edit(&trace)
+        if trace.visualChanged(from: visual) { visual = trace }
+        let next = trace.settleID
+        guard previous != next else { return }
+        completion?.cancel()
+        completion = next.map { id in
+            Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: UInt64(ContentFeedBoardSwipeTrace.settleDuration * 1_000_000_000)) }
+                catch { return }
+                self?.update { $0.complete(id) }
+            }
+        }
+    }
+}
+
+private struct ContentFeedBoardFrame<Frame: View>: View {
+    @ObservedObject var motion: ContentFeedBoardMotion
+    let board: String
+    let frame: (ContentFeedBoardPresentation?) -> Frame
+
+    init(motion: ContentFeedBoardMotion, board: String,
+         @ViewBuilder frame: @escaping (ContentFeedBoardPresentation?) -> Frame) {
+        self.motion = motion; self.board = board; self.frame = frame
+    }
+
+    var body: some View {
+        TimelineView(.animation(paused: motion.visual.settleID == nil)) { _ in
+            frame(motion.visual.presentation(board: board, now: ProcessInfo.processInfo.systemUptime))
+        }
+    }
+}
+
+private struct ContentFeedBoardOffset: ViewModifier {
+    let motion: ContentFeedBoardMotion?
+    let board: String
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let motion {
+            ContentFeedBoardFrame(motion: motion, board: board) { pose in
+                let presentation = pose ?? .init(offset: 0, boardPosition: 0)
+                // The owned host clips to the window. Clipping here would
+                // instead crop the List at the tab and toolbar safe areas.
+                content.offset(x: presentation.offset)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+#if os(iOS)
+/// SwiftUI's iOS 16 DragGesture has no cancellation callback. Observe a separate
+/// UIKit pan on the actual List instead of inferring a terminal from GestureState.
+private struct ContentFeedBoardPan: UIViewRepresentable {
+    enum Event {
+        case began(UUID, CGPoint), changed(UUID, CGPoint), ended(UUID, CGPoint), canceled(UUID)
+    }
+    let receive: @MainActor (Event) -> Void
+
+    func makeUIView(context: Context) -> Anchor {
+        let anchor = Anchor()
+        anchor.isUserInteractionEnabled = false
+        anchor.receive = receive
+        return anchor
+    }
+
+    func updateUIView(_ anchor: Anchor, context: Context) { anchor.receive = receive; anchor.resolve() }
+    static func dismantleUIView(_ anchor: Anchor, coordinator: ()) { anchor.detach() }
+
+    @MainActor final class Anchor: UIView, UIGestureRecognizerDelegate {
+        var receive: (@MainActor (Event) -> Void)?
+        private weak var scroll: UIScrollView?
+        private var gesture: UUID?
+        private var touchStart: CGPoint?
+        private var translationCorrection = CGPoint.zero
+        private lazy var pan: UIPanGestureRecognizer = {
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(sample(_:)))
+            pan.delegate = self
+            pan.maximumNumberOfTouches = 1
+            pan.cancelsTouchesInView = false
+            pan.delaysTouchesBegan = false
+            pan.delaysTouchesEnded = false
+            return pan
+        }()
+
+        override func didMoveToSuperview() { super.didMoveToSuperview(); resolve() }
+        override func didMoveToWindow() { super.didMoveToWindow(); resolve() }
+        override func layoutSubviews() { super.layoutSubviews(); resolve() }
+
+        func resolve() {
+            guard let window, let root = owningRoot(), !bounds.isEmpty else { detach(); return }
+            let frame = convert(bounds, to: window)
+            var local = superview
+            while let view = local {
+                // Stop at the nearest unambiguous local viewport. No search in
+                // other hosting controllers, rail scrolls or nested row scrolls.
+                let owners = listOwners(in: view, root: root, frame: frame, window: window)
+                if owners.count == 1, let owner = owners.first {
+                    if scroll !== owner { detach(); scroll = owner; owner.addGestureRecognizer(pan) }
+                    return
+                }
+                if owners.count > 1 || view === root || view is UIScrollView { break }
+                local = view.superview
+            }
+            detach()
+        }
+
+        private func owningRoot() -> UIView? {
+            var responder: UIResponder? = self
+            while let next = responder?.next {
+                if let controller = next as? UIViewController { return controller.viewIfLoaded }
+                responder = next
+            }
+            return nil
+        }
+
+        private func listOwners(in view: UIView, root: UIView, frame: CGRect, window: UIWindow) -> [UIScrollView] {
+            guard view !== self, !view.isHidden, view === root || !(view.next is UIViewController) else { return [] }
+            if let scroll = view as? UIScrollView {
+                guard scroll is UICollectionView || scroll is UITableView else { return [] }
+                let viewport = scroll.convert(scroll.bounds, to: window)
+                guard viewport.contains(CGPoint(x: frame.midX, y: frame.midY)),
+                      abs(viewport.width - frame.width) <= 1 else { return [] }
+                return [scroll]
+            }
+            return view.subviews.flatMap { listOwners(in: $0, root: root, frame: frame, window: window) }
+        }
+
+        func detach() {
+            let previous = scroll
+            let id = gesture
+            gesture = nil; touchStart = nil
+            scroll = nil
+            previous?.removeGestureRecognizer(pan)
+            if let id { receive?(.canceled(id)) }
+        }
+
+        func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard recognizer === pan, let scroll, let window = scroll.window else { return false }
+            var view = touch.view
+            while let current = view, !(current is UIScrollView) { view = current.superview }
+            guard view === scroll else { return false }
+            if gesture == nil { touchStart = touch.location(in: window) }
+            return true
+        }
+
+        override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard recognizer === pan else { return super.gestureRecognizerShouldBegin(recognizer) }
+            guard let window = scroll?.window, let touchStart else { return false }
+            let location = pan.location(in: window)
+            let x = location.x - touchStart.x, y = location.y - touchStart.y
+            return x != 0 && abs(x) >= abs(y) * ContentFeedBoardSwipe.horizontalDominance
+        }
+
+        func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+            // This permission is only for our observer; never set failure
+            // requirements, replace the List pan delegate or delay row controls.
+            recognizer === pan && pan.view === scroll
+        }
+
+        @objc private func sample(_ sender: UIPanGestureRecognizer) {
+            guard sender === pan, sender.view === scroll else { return }
+            switch sender.state {
+            case .began:
+                guard gesture == nil, let window = scroll?.window, let touchStart else { return }
+                let id = UUID()
+                gesture = id
+                let location = sender.location(in: window)
+                let first = CGPoint(x: location.x - touchStart.x, y: location.y - touchStart.y)
+                let raw = sender.translation(in: window)
+                translationCorrection = .init(x: first.x - raw.x, y: first.y - raw.y)
+                receive?(.began(id, first))
+            case .changed:
+                guard let id = gesture, let window = scroll?.window else { return }
+                receive?(.changed(id, translation(sender, in: window)))
+            case .ended, .cancelled, .failed:
+                guard let id = gesture else { return }
+                gesture = nil; touchStart = nil
+                if sender.state == .ended, let window = scroll?.window {
+                    receive?(.ended(id, translation(sender, in: window)))
+                } else {
+                    receive?(.canceled(id))
+                }
+            default: break
+            }
+        }
+
+        private func translation(_ sender: UIPanGestureRecognizer, in window: UIWindow) -> CGPoint {
+            let raw = sender.translation(in: window)
+            return .init(x: raw.x + translationCorrection.x, y: raw.y + translationCorrection.y)
+        }
+    }
+}
+#endif
 
 struct ContentCategoryPicker: View {
     let categories: JSONValue
@@ -288,16 +555,19 @@ struct ContentPagedList: View {
     let visible: (Int64, Int64?) -> Void
     @Binding private var pageJumpRequest: ContentHomePageJumpIntent?
     private let homeBoardSlugs: [String]
+    private let boardMotion: ContentFeedBoardMotion?
     private let selectHomeBoard: ((String) -> Void)?
     init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil,
          clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil,
          pageJumpRequest: Binding<ContentHomePageJumpIntent?> = .constant(nil), homeBoardSlugs: [String] = [],
+         boardMotion: ContentFeedBoardMotion? = nil,
          selectHomeBoard: ((String) -> Void)? = nil,
          visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
         self.operation = operation; self.arguments = arguments; self.visible = visible; self.clearSearch = clearSearch
         self.replacePage = replacePage
         self._pageJumpRequest = pageJumpRequest
         self.homeBoardSlugs = homeBoardSlugs
+        self.boardMotion = boardMotion
         self.selectHomeBoard = selectHomeBoard
         self.requestedRestoreID = restoreID
         _restoreID = State(initialValue: restoreID)
@@ -314,8 +584,6 @@ struct ContentPagedList: View {
     @State private var visiblePage: Int64
     @State private var jump = ContentFeedJump()
     @State private var pageSheet = ContentHomePageJumpSheet()
-    @State private var boardSwipe = ContentFeedBoardSwipeTrace()
-    @GestureState private var feedDragging = false
     @State private var previewMenus: Set<UUID> = []
     private var previewMenuActive: Bool { !previewMenus.isEmpty }
     @State private var homeTopPosition: (ticket: ContentFeedTicket, id: Int64, atTop: Bool)?
@@ -338,13 +606,17 @@ struct ContentPagedList: View {
         isHome && isVisible && app.selectedTab == .home && app.homePath.isEmpty &&
             app.sheet == nil && !app.departureRunning && pageSheet.owner == nil && authorCard == nil
     }
-    private var boardSwipeOwner: ContentFeedBoardSwipeOwner? {
-        ContentFeedBoardSwipeOwner(generation: pageJumpScope.generation,
-            identityEpoch: app.session.nativeString("identityEpoch"),
-            board: pageJumpScope.board, orderedBoards: homeBoardSlugs,
-            isHomeRoot: allowsPostPreview && !previewMenuActive, site: app.site.nativeString("current"))
-            .admitted(scope: pageJumpScope, ticket: owner)
+    private var boardSwipeContext: ContentFeedBoardSwipeContext {
+        let scope = ContentFeedBoardSwipeOwner(generation: pageJumpScope.generation,
+            identityEpoch: app.session.nativeString("identityEpoch"), board: pageJumpScope.board,
+            orderedBoards: homeBoardSlugs, isHomeRoot: allowsPostPreview && !previewMenuActive,
+            site: app.site.nativeString("current"), sort: pageJumpScope.sort)
+        // Until the keyed task owns the rendered arguments, the old pager
+        // cannot authorize a newly started gesture (including same-board pages).
+        let current = observedArguments == arguments ? scope.admitted(scope: pageJumpScope, ticket: owner) : nil
+        return .init(scope: scope, current: current)
     }
+    private var animateBoardSwipe: Bool { !reduceMotion && !motionDisabled }
     private func owns(_ ticket: ContentFeedTicket) -> Bool {
         owner == ticket && ticket.generation == app.generation &&
             ticket.board == (arguments["categorySlug"]?.string ?? "") && ticket.sort == (arguments["sort"]?.string ?? "")
@@ -385,7 +657,7 @@ struct ContentPagedList: View {
                                                    summary: row.value["summary"] ?? row.value, routeIdentity: row.value,
                                                    onCommit: { openPost(row.id, row.value) },
                                                    onMenuStateChanged: { menu, active in
-                                                       if active { previewMenus.insert(menu); boardSwipe.revoke() }
+                                                       if active { previewMenus.insert(menu); boardMotion?.update { $0.revoke() } }
                                                        else { previewMenus.remove(menu) }
                                                    }) : nil)
                             }
@@ -427,35 +699,35 @@ struct ContentPagedList: View {
             }
             .listStyle(.plain).scrollContentBackground(.hidden)
             .background(ContentSurface(canvas: true))
-            // Simultaneous recognizers keep List's vertical pan and row controls native.
+            #if os(iOS)
+            .background {
+                if let boardMotion {
+                    ContentFeedBoardPan { event in handleBoardPan(event, motion: boardMotion) }
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            #endif
+            .modifier(ContentFeedBoardOffset(motion: boardMotion, board: pageJumpScope.board))
+            // This separate gesture only restores the existing vertical Paging hints.
             .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
-                .updating($feedDragging) { _, dragging, _ in dragging = true }
                 .onChanged { gesture in
-                    boardSwipe.record(boardSwipeOwner, x: gesture.translation.width, y: gesture.translation.height)
                     // Programmatic return cannot prefetch a page; genuine new
                     // vertical finger travel restores the existing Paging access hints.
                     if isHome, !previewMenuActive, let ticket = owner, owns(ticket),
                        abs(gesture.translation.height) > abs(gesture.translation.width) {
                         homeTopHintSuppression = nil
                     }
-                }
-                .onEnded { gesture in
-                    guard let target = boardSwipe.finish(current: boardSwipeOwner,
-                        x: gesture.translation.width, y: gesture.translation.height,
-                        rightToLeft: layoutDirection == .rightToLeft) else { return }
-                    selectHomeBoard?(target)
                 })
-            .onChange(of: feedDragging) { dragging in if !dragging { boardSwipe.cancel() } }
-            .onChange(of: homeBoardSlugs) { _ in boardSwipe.revoke() }
-            .onChange(of: boardSwipeOwner) { current in boardSwipe.revoke(unless: current) }
+            .onChange(of: boardSwipeContext) { context in
+                boardMotion?.update { $0.synchronize(context) }
+            }
+            .onChange(of: animateBoardSwipe) { _ in boardMotion?.update { $0.revoke() } }
             .onChange(of: pageJumpRequest) { _ in presentRequestedPageJump() }
             .onChange(of: owner) { _ in presentRequestedPageJump() }
             .onChange(of: pageJumpScope) { scope in
-                boardSwipe.revoke(unless: boardSwipeOwner)
                 if pageJumpRequest?.scope != scope { pageJumpRequest = nil }
                 if let ticket = pageSheet.owner, !scope.contains(ticket) { pageSheet.cancel() }
             }
-            .onChange(of: previewMenuActive) { active in if active { boardSwipe.revoke() } }
             .onPreferenceChange(ContentFeedRowsPreference.self) { rows in
                 let currentWindow = window
                 if isHome, let ticket = owner, owns(ticket), case .success(let currentWindow) = currentWindow, let first = currentWindow.rows.first {
@@ -612,7 +884,7 @@ struct ContentPagedList: View {
                 restoreID = requestedRestoreID
                 restored = requestedRestoreID == nil && observedArguments == nil
                 visiblePage = max(1, arguments["page"]?.int ?? 1)
-                boardSwipe.revoke()
+                boardMotion?.update { $0.synchronize(boardSwipeContext) }
                 homeTopPosition = nil; homeTopHintSuppression = nil
                 authorNavigation = nil; authorCard = nil
             }
@@ -628,8 +900,8 @@ struct ContentPagedList: View {
             command.cancel()
             let ticket = ContentFeedTicket(generation: app.generation, board: arguments["categorySlug"]?.string ?? "",
                                            sort: arguments["sort"]?.string ?? "", observation: UUID())
-            boardSwipe.revoke()
             owner = ticket
+            boardMotion?.update { $0.synchronize(boardSwipeContext) }
             jump = ContentFeedJump(owner: ticket); pageSheet.cancel()
         }
         .sheet(item: $authorCard, onDismiss: {
@@ -643,15 +915,36 @@ struct ContentPagedList: View {
             AccountAuthorQuickCard(uid: row.id, onNavigate: { authorNavigation = $0; authorCard = nil })
         }
         .onChange(of: app.generation) { generation in
-            authorNavigation = nil; authorCard = nil; pageSheet.cancel(); boardSwipe.revoke()
+            authorNavigation = nil; authorCard = nil; pageSheet.cancel(); boardMotion?.update { $0.revoke() }
             if owner?.generation != generation { owner = nil; jump.cancel(); topRefreshFlight.cancel() }
         }
         .onChange(of: store.failure) { failure in
             if failure != nil { topRefreshFlight.cancel() }
         }
-        .onDisappear { command.cancel(); isVisible = false; pageJumpRequest = nil; pageSheet.cancel(); boardSwipe.revoke(); topRefreshFlight.cancel() }
+        .onDisappear { command.cancel(); isVisible = false; pageJumpRequest = nil; pageSheet.cancel(); boardMotion?.update { $0.cancel() }; topRefreshFlight.cancel() }
         .onAppear { isVisible = true }
     }
+    #if os(iOS)
+    private func handleBoardPan(_ event: ContentFeedBoardPan.Event, motion: ContentFeedBoardMotion) {
+        let context = boardSwipeContext
+        let now = ProcessInfo.processInfo.systemUptime
+        var target: String?
+        motion.update { trace in
+            switch event {
+            case .began(let id, let point):
+                trace.begin(gesture: id, context: context, x: point.x, y: point.y,
+                            rightToLeft: layoutDirection == .rightToLeft, now: now, animated: animateBoardSwipe)
+            case .changed(let id, let point):
+                trace.change(gesture: id, context: context, x: point.x, y: point.y)
+            case .ended(let id, let point):
+                target = trace.finish(gesture: id, context: context, x: point.x, y: point.y, now: now)
+            case .canceled(let id):
+                trace.cancel(gesture: id, now: now)
+            }
+        }
+        if let target { selectHomeBoard?(target) }
+    }
+    #endif
     private func refreshHomeFromPageOne(_ ticket: ContentFeedTicket) async -> Bool {
         guard owns(ticket), isVisible else { return false }
         command.cancel(); jump.cancel(); pageSheet.cancel()
@@ -671,7 +964,7 @@ struct ContentPagedList: View {
             guard store.observeRetained(app, operation, args, restart: pagerRestart) else {
                 topRefreshFlight.cancel(); return
             }
-            boardSwipe.revoke()
+            boardMotion?.update { $0.revoke() }
             replacePage?(1)
         })
         return succeeded && owns(ticket) && isVisible && !Task.isCancelled

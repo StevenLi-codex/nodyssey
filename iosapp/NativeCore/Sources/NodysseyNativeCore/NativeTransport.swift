@@ -31,10 +31,34 @@ public final class NativeCancellation: @unchecked Sendable {
     }
 }
 
+/// Witness for the adapter's actual MainActor `requestStart` edge. It is not a
+/// publication timestamp and not a proxy: a missing witness must leave dependent
+/// policy fail-closed.
+public final class NativeDispatchHub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observer: (@MainActor @Sendable (String) -> Void)?
+
+    public init() {}
+
+    @MainActor public func install(_ observer: (@MainActor @Sendable (String) -> Void)?) {
+        lock.lock()
+        self.observer = observer
+        lock.unlock()
+    }
+
+    @MainActor func notify(_ operation: String) {
+        lock.lock()
+        let observer = self.observer
+        lock.unlock()
+        observer?(operation)
+    }
+}
+
 /// Adapts the real Kotlin callback ABI without importing Kotlin, UIKit, or SwiftUI.
 public struct CallbackNativeTransport: NativeTransport {
     public typealias Start = @MainActor @Sendable (String, String, @escaping @Sendable (String) -> Void) -> NativeCancellation
     public typealias DrainingStart = @MainActor @Sendable (String, String, @escaping @Sendable (String) -> Void, @escaping @Sendable () -> Void) -> NativeCancellation
+    public let dispatchHub = NativeDispatchHub()
     private let requestStart: DrainingStart
     private let observeStart: Start
 
@@ -68,6 +92,7 @@ public struct CallbackNativeTransport: NativeTransport {
                 pending.install(continuation)
                 Task { @MainActor in
                     guard pending.isPending else { termination.signal(); return }
+                    dispatchHub.notify(operation) // Sync edge; no other request may run first.
                     let handle = requestStart(operation, json, { response in
                         pending.finish(Result { try NativeEnvelope.decode(response) })
                     }, { termination.signal() })

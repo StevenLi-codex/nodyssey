@@ -2,7 +2,7 @@
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$HERE/Sources"
-for file in NativeDestination NativeAppModel NativeStore NativePresentation NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion; do
+for file in NativeDestination NativeAppModel NativeStore NativePresentation NativeHomeTabInteraction NativeRefreshState NativeRefreshCompletion HomeEndReadMarkPolicy; do
     if [ -f "$HERE/../Nodyssey/Native/Foundation/$file.swift" ]; then
         cp "$HERE/../Nodyssey/Native/Foundation/$file.swift" "$HERE/Sources/"
     fi

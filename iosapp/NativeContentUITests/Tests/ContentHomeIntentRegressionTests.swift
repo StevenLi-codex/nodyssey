@@ -49,31 +49,44 @@ import Testing
         orderedBoards: ["", "a", "b", "c"], isHomeRoot: true)
     let reordered = ContentFeedBoardSwipeOwner(generation: 1, identityEpoch: "epoch", board: "a",
         orderedBoards: ["", "a", "c", "b"], isHomeRoot: true)
+    func context(_ owner: ContentFeedBoardSwipeOwner?) -> ContentFeedBoardSwipeContext {
+        .init(scope: owner?.scope ?? a.scope, current: owner)
+    }
     var trace = ContentFeedBoardSwipeTrace()
-    trace.record(a, x: -18, y: 2)
+    let gesture1 = UUID()
+    trace.begin(gesture: gesture1, context: context(a), x: -18, y: 2, rightToLeft: false, now: 1)
     trace.revoke()
-    trace.record(reordered, x: -68, y: 4)
-    #expect(trace.finish(current: reordered, x: -90, y: 5, rightToLeft: false) == nil)
-    trace.record(reordered, x: -18, y: 2)
-    #expect(trace.finish(current: reordered, x: -90, y: 5, rightToLeft: false) == "c")
-    trace.record(a, x: -18, y: 2)
-    trace.record(a, x: -68, y: 4)
-    #expect(trace.finish(current: a, x: -90, y: 5, rightToLeft: false) == "b")
+    trace.change(gesture: gesture1, context: context(reordered), x: -68, y: 4)
+    #expect(trace.finish(gesture: gesture1, context: context(reordered), x: -90, y: 5, now: 1) == nil)
+    let gesture2 = UUID()
+    trace.begin(gesture: gesture2, context: context(reordered), x: -18, y: 2, rightToLeft: false, now: 2)
+    #expect(trace.finish(gesture: gesture2, context: context(reordered), x: -90, y: 5, now: 2) == "c")
+    let gesture3 = UUID()
+    trace.begin(gesture: gesture3, context: context(a), x: -18, y: 2, rightToLeft: false, now: 3)
+    trace.change(gesture: gesture3, context: context(a), x: -68, y: 4)
+    #expect(trace.finish(gesture: gesture3, context: context(a), x: -90, y: 5, now: 3) == "b")
 }
 
 @Test func homeSwipeVerticalGateCycleStaysRejectedUntilRealCancellation() {
     let owner = ContentFeedBoardSwipeOwner(generation: 1, identityEpoch: "epoch", board: "a",
         orderedBoards: ["", "a", "b", "c"], isHomeRoot: true)
+    let scope = owner.scope
+    func context(_ owner: ContentFeedBoardSwipeOwner?) -> ContentFeedBoardSwipeContext {
+        .init(scope: owner?.scope ?? scope, current: owner)
+    }
     var trace = ContentFeedBoardSwipeTrace()
-    trace.record(owner, x: -2, y: 18)
+    let gesture1 = UUID()
+    trace.begin(gesture: gesture1, context: context(owner), x: -2, y: 18, rightToLeft: false, now: 1)
     trace.revoke()
-    trace.record(owner, x: -68, y: 25)
-    #expect(trace.finish(current: owner, x: -90, y: 30, rightToLeft: false) == nil)
-    trace.record(owner, x: -18, y: 2)
+    trace.change(gesture: gesture1, context: context(owner), x: -68, y: 25)
+    #expect(trace.finish(gesture: gesture1, context: context(owner), x: -90, y: 30, now: 1) == nil)
+    let gesture2 = UUID()
+    trace.begin(gesture: gesture2, context: context(owner), x: -18, y: 2, rightToLeft: false, now: 2)
     trace.revoke()
-    trace.cancel() // GestureState reset: a genuinely cancelled recognizer.
-    trace.record(owner, x: -18, y: 2)
-    #expect(trace.finish(current: owner, x: -90, y: 5, rightToLeft: false) == "b")
+    trace.cancel(gesture: gesture2, now: 2)
+    let gesture3 = UUID()
+    trace.begin(gesture: gesture3, context: context(owner), x: -18, y: 2, rightToLeft: false, now: 3)
+    #expect(trace.finish(gesture: gesture3, context: context(owner), x: -90, y: 5, now: 3) == "b")
 }
 
 @Test func homeJumpOldActionsLeaveReopenedOrReplacementSheetIntact() {
@@ -133,13 +146,18 @@ import Testing
     let next = context.admitted(scope: scope, ticket: replacement)
     #expect(notInstalled == nil)
     #expect(next != nil)
+    func swipeContext(_ owner: ContentFeedBoardSwipeOwner?) -> ContentFeedBoardSwipeContext {
+        .init(scope: first?.scope ?? context.scope, current: owner)
+    }
     for changed in [notInstalled, next] {
         var trace = ContentFeedBoardSwipeTrace()
-        trace.record(first, x: -18, y: 2)
-        trace.record(changed, x: -68, y: 4)
-        #expect(trace.finish(current: changed, x: -90, y: 5, rightToLeft: false) == nil)
-        trace.record(first, x: -18, y: 2)
-        #expect(trace.finish(current: first, x: -90, y: 5, rightToLeft: false) == "b")
+        let gesture1 = UUID()
+        trace.begin(gesture: gesture1, context: swipeContext(first), x: -18, y: 2, rightToLeft: false, now: 1)
+        trace.change(gesture: gesture1, context: swipeContext(changed), x: -68, y: 4)
+        #expect(trace.finish(gesture: gesture1, context: swipeContext(changed), x: -90, y: 5, now: 1) == nil)
+        let gesture2 = UUID()
+        trace.begin(gesture: gesture2, context: swipeContext(first), x: -18, y: 2, rightToLeft: false, now: 2)
+        #expect(trace.finish(gesture: gesture2, context: swipeContext(first), x: -90, y: 5, now: 2) == "b")
     }
 }
 
@@ -151,15 +169,20 @@ import Testing
     let menuOpen = ContentFeedBoardSwipeOwner(generation: 1, identityEpoch: "epoch", board: "a",
         orderedBoards: ["", "a", "b", "c"], isHomeRoot: false)
     let admitted = context.admitted(scope: scope, ticket: ticket)
-    for blocked in [context.admitted(scope: scope, ticket: nil), menuOpen.admitted(scope: scope, ticket: ticket)] {
-        #expect(blocked == nil)
+    let open = ContentFeedBoardSwipeContext(scope: admitted?.scope ?? context.scope, current: admitted)
+    for blocked in [ContentFeedBoardSwipeContext(scope: open.scope, current: context.admitted(scope: scope, ticket: nil)),
+                    ContentFeedBoardSwipeContext(scope: menuOpen.scope, current: menuOpen.admitted(scope: scope, ticket: ticket))] {
+        #expect(blocked.current == nil)
         var trace = ContentFeedBoardSwipeTrace()
-        trace.record(blocked, x: -2, y: 18)
-        trace.record(admitted, x: -68, y: 25)
-        #expect(trace.finish(current: admitted, x: -90, y: 30, rightToLeft: false) == nil)
-        trace.record(blocked, x: -2, y: 18)
-        trace.cancel() // GestureState reset, not a transient gate change.
-        trace.record(admitted, x: -18, y: 2)
-        #expect(trace.finish(current: admitted, x: -90, y: 5, rightToLeft: false) == "b")
+        let gesture1 = UUID()
+        trace.begin(gesture: gesture1, context: blocked, x: -18, y: 2, rightToLeft: false, now: 1)
+        trace.change(gesture: gesture1, context: open, x: -68, y: 4)
+        #expect(trace.finish(gesture: gesture1, context: open, x: -90, y: 5, now: 1) == nil)
+        let gesture2 = UUID()
+        trace.begin(gesture: gesture2, context: blocked, x: -18, y: 2, rightToLeft: false, now: 2)
+        trace.cancel(gesture: gesture2, now: 2)
+        let gesture3 = UUID()
+        trace.begin(gesture: gesture3, context: open, x: -18, y: 2, rightToLeft: false, now: 3)
+        #expect(trace.finish(gesture: gesture3, context: open, x: -90, y: 5, now: 3) == "b")
     }
 }

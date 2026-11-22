@@ -556,7 +556,13 @@ struct ContentPostDetail: View {
             try Task.checkCancellation()
             if command.failure == nil {
                 let cached = try await app.request("thread.get", args)
-                if cached != .null { _ = try await app.request("thread.markRead", args) }
+                if cached != .null {
+                    #if os(iOS)
+                    try await app.markOpeningThreadRead(postID, destinationID: destinationID)
+                    #else
+                    _ = try await app.request("thread.markRead", args)
+                    #endif
+                }
             }
         } catch is CancellationError { }
         catch { command.failure = contentFailure(error) }

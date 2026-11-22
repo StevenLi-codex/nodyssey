@@ -22,6 +22,22 @@ import NodysseyNativeCore
     private let now: () -> TimeInterval
     private var receivedAt: TimeInterval?
     private var valueRevision: UInt64 = 0
+    private var homeFeedRefreshEpoch: UInt64 = 0
+    private var homeFeedPublishedRevision: UInt64 = 0
+    private weak var paintApp: NativeAppModel?
+    #if os(iOS)
+    private weak var homeEndReadPaint: HomeEndReadPaint?
+
+    func armHomeEndReadPaint(in app: NativeAppModel, route: UUID, post: Int64,
+                             baseline: HomeFeedPresentation) -> HomeEndReadPaint? {
+        guard homeFeedPresentation(in: app) == baseline, state.value == value else { return nil }
+        homeEndReadPaint?.revoke()
+        let paint = HomeEndReadPaint(route: route, post: post, baseline: baseline, store: self)
+        homeEndReadPaint = paint
+        app.armHomeEndReadPaint(paint)
+        return paint
+    }
+    #endif
     private var loadingTask: Task<Void, Never>?
     private var freshnessWait: Task<Void, Never>?
     private var pagingHandle: String?
@@ -36,6 +52,28 @@ import NodysseyNativeCore
     private var isPaging: Bool { key?.operation == "feed" || key?.operation == "search.feed" }
     var hasValue: Bool { isPaging ? hasPagingValue : state.value != nil }
 
+    /// Read-only authority for the mounted Home List. Paint equality is insufficient:
+    /// use the accepted snapshot revision and observation even for equal data or A→B→A.
+    struct HomeFeedPresentation: Equatable {
+        let store: ObjectIdentifier
+        let observation: UUID
+        let pager: String
+        let snapshot: UInt64
+        let refreshEpoch: UInt64
+    }
+
+    func homeFeedPresentation(in app: NativeAppModel, rendering input: JSONValue? = nil) -> HomeFeedPresentation? {
+        guard let key, key.operation == "feed", key.app == ObjectIdentifier(app), key.generation == app.generation,
+              observing, retainedObservation != nil, !isReplacingPagingWindow, refreshCompletion == nil,
+              failure == nil, state.failure == nil, let pager = pagingHandle,
+              homeFeedPublishedRevision == state.valueRevision,
+              let snapshot = state.value, snapshot["pagerId"]?.string == pager,
+              value["pagerId"]?.string == pager, input.map({ $0 == snapshot && $0 == value }) ?? true,
+              ["refresh", "prepend", "append"].allSatisfy({ snapshot[$0]?["status"]?.string == "NotLoading" }) else { return nil }
+        return .init(store: ObjectIdentifier(self), observation: operation, pager: pager,
+                     snapshot: state.valueRevision, refreshEpoch: homeFeedRefreshEpoch)
+    }
+
     deinit { retainedObservation?.cancel(); retainedRefresh?.cancel(); refreshWatchdog?.cancel() }
 
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, refreshTimeout: TimeInterval = 30) {
@@ -43,7 +81,8 @@ import NodysseyNativeCore
         self.refreshTimeout = refreshTimeout
         state.onChange = { [weak self] in
             guard let self else { return }
-            if self.valueRevision != self.state.valueRevision {
+            let newRevision = self.valueRevision != self.state.valueRevision
+            if newRevision {
                 self.valueRevision = self.state.valueRevision
                 self.receivedAt = self.now()
             }
@@ -69,7 +108,14 @@ import NodysseyNativeCore
             else if self.isPaging, !next.nativeArray("items").isEmpty || next["refresh"]?.nativeString("status") == "NotLoading" {
                 self.hasPagingValue = true
             }
+            #if os(iOS)
+            let paint = self.homeEndReadPaint
+            let before = paint?.needsComparator == true ? self.value : nil
+            #endif
             if self.value != next { self.value = next }
+            // Do not stamp a new receipt onto old published rows during a
+            // reentrant @Published willSet/layout callback.
+            if self.key?.operation == "feed" { self.homeFeedPublishedRevision = self.state.valueRevision }
             if self.failure != self.state.failure { self.failure = self.state.failure }
             let pagingPending = self.isPaging && self.observing && self.state.value != nil && next["refresh"]?.nativeString("status") != "Error"
             let loading = !self.hasValue && self.state.failure == nil && (self.state.isLoading || pagingPending)
@@ -77,6 +123,14 @@ import NodysseyNativeCore
             if self.isLoading != loading { self.isLoading = loading }
             if self.isRefreshing != refreshing { self.isRefreshing = refreshing }
             self.acceptRefreshObservation()
+            #if os(iOS)
+            if let paint, paint.isActive, let app = self.paintApp {
+                let published = self.value
+                if let receipt = self.homeFeedPresentation(in: app, rendering: published) {
+                    if newRevision { paint.accepted(receipt, before: before, value: published) }
+                } else { paint.revoke() }
+            }
+            #endif
         }
     }
 
@@ -90,6 +144,7 @@ import NodysseyNativeCore
         }
         let next = Key(app: ObjectIdentifier(app), generation: app.generation, operation: name, arguments: identity)
         if key != next { invalidate(); key = next }
+        paintApp = app
         app.register(self)
     }
 
@@ -122,6 +177,9 @@ import NodysseyNativeCore
             guard !Task.isCancelled else { return }
             await state.observe(using: transport, operation: name, arguments: arguments)
             guard let self, self.operation == token else { return }
+            #if os(iOS)
+            self.homeEndReadPaint?.revoke()
+            #endif
             self.retainedObservation = nil
             self.observing = false
             if self.isLoading { self.isLoading = false }
@@ -189,6 +247,12 @@ import NodysseyNativeCore
         }
         // A completed observer cannot recover by refreshing its revision.
         guard state.failure == nil else { return nil }
+        if key.operation == "feed", mode == .paging {
+            #if os(iOS)
+            homeEndReadPaint?.revoke()
+            #endif
+            homeFeedRefreshEpoch &+= 1
+        }
         failure = nil
         // Only the explicitly advertised feed contract provides per-command Room receipts.
         // Search, legacy implementations and an ordinary false Boolean keep their old behavior.
@@ -373,6 +437,9 @@ import NodysseyNativeCore
 
     /// Temporary navigation-away: retire callbacks, keep this identity's rows.
     func cancel() {
+        #if os(iOS)
+        homeEndReadPaint?.revoke()
+        #endif
         operation = UUID()
         observing = false
         retainedObservation?.cancel(); retainedObservation = nil

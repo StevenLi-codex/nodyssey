@@ -28,12 +28,15 @@ import NodysseyNativeCore
         #expect(app.homePath == [parent, detail] && !editor.isClosed)
 
         let lease = try #require(app.beginInteractivePop(stack: .home, from: detail.id))
+        #expect(app.canResumeInteractivePop(lease))
         let release = Task { await app.prepareInteractivePop(lease) }
         try await eventually { transport.hasRequest("draft.comment.save") }
+        #expect(!app.canResumeInteractivePop(lease), "A held draft save cannot be interrupted by a second release")
         await app.dismissDestination(detail.id) // Competing explicit back must not close it.
         #expect(app.homePath == [parent, detail] && !editor.isClosed)
         transport.resolve("draft.comment.save", .success(.null))
         #expect(await release.value)
+        #expect(app.canResumeInteractivePop(lease), "A prepared visual settle can be re-grabbed on the same lease")
         #expect(app.homePath == [parent, detail] && !editor.isClosed,
                 "A successful draft flush is not a matching visual commit")
         #expect(!app.commitInteractivePop(lease, visible: detail.id))
@@ -67,6 +70,7 @@ import NodysseyNativeCore
         transport.resolve("draft.comment.save", .failure(NativeFailure(code: "NETWORK", message: "fixture")))
         #expect(await save.value == false)
         #expect(!app.canFinishInteractivePop(pop))
+        #expect(!app.canResumeInteractivePop(pop))
         #expect(app.beginInteractivePop(stack: .home, from: detail.id) == nil)
         app.cancelInteractivePop(pop)
         #expect(app.homePath == [detail] && !editor.isClosed && reply.visible)
@@ -87,6 +91,7 @@ import NodysseyNativeCore
         let pop = try #require(app.beginInteractivePop(stack: .home, from: id))
         #expect(await app.prepareInteractivePop(pop))
         valid = false
+        #expect(!app.canResumeInteractivePop(pop))
         #expect(!app.commitInteractivePop(pop, visible: nil))
         app.cancelInteractivePop(pop)
         valid = true

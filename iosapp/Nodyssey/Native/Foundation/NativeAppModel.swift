@@ -9,7 +9,10 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
 }
 
 @MainActor final class NativeAppModel: ObservableObject {
-    let transport: any NativeTransport
+    private let baseTransport: any NativeTransport
+    /// Every direct transport user is fenced for read-mark producers; the wrapper
+    /// forwards everything else untouched.
+    var transport: any NativeTransport { PaintObservedTransport(base: baseTransport, app: self) }
     @Published var session: JSONValue = .null {
         didSet {
             // Epoch is opaque and process-local. Reload/clearance revisions do not
@@ -92,7 +95,45 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
     private var sessionReady = false
     private var settingsReady = false
     private var pendingLinks: [String] = []
-    private var requests: [UUID: (changesSession: Bool, task: Task<JSONValue, Error>)] = [:]
+    private var requests: [UUID: (changesSession: Bool, task: Task<JSONValue, Error>, paintConflict: Bool)] = [:]
+    #if os(iOS)
+    private weak var homeEndReadPaint: HomeEndReadPaint?
+
+    func armHomeEndReadPaint(_ paint: HomeEndReadPaint) {
+        homeEndReadPaint?.revoke()
+        if requests.values.contains(where: { $0.paintConflict }) || paintObservedInFlight > 0 { paint.revoke() }
+        homeEndReadPaint = paint
+    }
+
+    #endif
+
+    /// Conflicting writes started on a publish-capable editor transport. They are
+    /// counted, so an arm cannot ignore one already inside the Markdown editor.
+    /// Platform-neutral: the fence itself is verified off-device.
+    private(set) var paintObservedInFlight = 0
+
+    func beginPaintObserved(_ operation: String) -> Bool {
+        guard HomeEndReadMarkPolicy.conflicts(operation) else { return false }
+        paintObservedInFlight += 1
+        #if os(iOS)
+        homeEndReadPaint?.revoke()
+        #endif
+        return true
+    }
+
+    func endPaintObserved(_ operation: String) {
+        guard HomeEndReadMarkPolicy.conflicts(operation), paintObservedInFlight > 0 else { return }
+        paintObservedInFlight -= 1
+    }
+
+    #if os(iOS)
+    private func paintDispatchBegan(_ operation: String) {
+        guard let paint = homeEndReadPaint else { return }
+        if operation == "thread.markRead" { paint.dispatchBegan(operation); return }
+        if HomeEndReadMarkPolicy.conflicts(operation) { paint.revoke() }
+    }
+    #endif
+
     private var foregroundTask: Task<Void, Never>?
     private var foregroundRunning = false
     private var authenticationPresentation: (token: UUID, destinationID: UUID)?
@@ -336,6 +377,9 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
             throw NativeFailure(code: "INVALID_DATA", message: "Invalid active site")
         }
         if let previous = site.nativeString("current"), previous != raw {
+            #if os(iOS)
+            homeEndReadPaint?.revoke()
+            #endif
             privateBoundary = .null
             session = .null
         }
@@ -355,15 +399,36 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         return try await performRequest(operation, arguments)
     }
 
-    private func performRequest(_ operation: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
+    #if os(iOS)
+    func markOpeningThreadRead(_ post: Int64, destinationID: UUID?) async throws {
+        _ = try await performRequest("thread.markRead", ["postId": .integer(post)], openingReadRoute: destinationID)
+    }
+    #endif
+
+    private func performRequest(_ operation: String, _ arguments: [String: JSONValue],
+                                openingReadRoute: UUID? = nil) async throws -> JSONValue {
         try Task.checkCancellation()
         let capturedGeneration = generation
         let capturedBoundaryRevision = boundaryRevision
         let id = UUID()
         let changesSession = ["session.sync", "session.signIn", "session.verifyTwoFactor", "session.signOut"].contains(operation)
+        #if os(iOS)
+        let paintConflict = HomeEndReadMarkPolicy.conflicts(operation)
+        let mark = homeEndReadPaint.flatMap { paint -> HomeEndReadPaint? in
+            if operation == "thread.markRead" {
+                return paint.beginMark(route: openingReadRoute, post: arguments["postId"]?.int, in: self) ? paint : nil
+            }
+            if paintConflict { paint.revoke() }
+            return nil
+        }
+        var markSucceeded = false
+        defer { mark?.finishMark(success: markSucceeded, in: self) }
+        #else
+        let paintConflict = false
+        #endif
         let transport = self.transport
         let task = Task { try await transport.request(operation, arguments) }
-        requests[id] = (changesSession, task)
+        requests[id] = (changesSession, task, paintConflict)
         defer {
             requests[id] = nil
             // Even a failed/cancelled write may have reached the server. Keep
@@ -412,6 +477,9 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
             }
         }
         if operation == "site.get" || operation == "site.select" { try applySite(value) }
+        #if os(iOS)
+        markSucceeded = capturedBoundaryRevision == boundaryRevision && value == .null && !Task.isCancelled
+        #endif
         return value
     }
 
@@ -445,7 +513,16 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         open(destination.route, destination.arguments)
     }
 
-    init(transport: any NativeTransport) { self.transport = transport }
+    init(transport: any NativeTransport) {
+        baseTransport = transport
+        #if os(iOS)
+        // Without this witness the paint can never become eligible, so an unknown
+        // adapter fails closed instead of trusting task creation.
+        (transport as? CallbackNativeTransport)?.dispatchHub.install { [weak self] operation in
+            self?.paintDispatchBegan(operation)
+        }
+        #endif
+    }
     var isSignedIn: Bool { session.nativeBool("isSignedIn") == true }
 
     func open(_ route: String, _ arguments: [String: JSONValue] = [:]) {
@@ -629,6 +706,10 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         isInteractivePopCurrent(pop) && interactiveDeparture?.phase == .ready && departures[pop.from]?.validate() != false
     }
 
+    func canResumeInteractivePop(_ pop: InteractivePop) -> Bool {
+        isInteractivePopCurrent(pop) && (interactiveDeparture?.phase == .tracking || canFinishInteractivePop(pop))
+    }
+
     @discardableResult
     func commitInteractivePop(_ pop: InteractivePop, visible: UUID?) -> Bool {
         guard visible == pop.to, canFinishInteractivePop(pop) else { return false }
@@ -663,14 +744,25 @@ struct NativePrivateResetConfirmation: Identifiable, Equatable {
         }
     }
 
-    func updatePath(_ value: [NativeDestination], for stack: Stack, owner: PathUpdateOwner? = nil) async {
+    func updatePath(_ value: [NativeDestination], for stack: Stack, owner: PathUpdateOwner? = nil,
+                    beforeOrdinaryHomeReturn: (@MainActor (UUID) -> Void)? = nil) async {
         if let owner, owner != capturePathUpdateOwner() { return }
         let current = path(for: stack)
         // NavigationStack writes are pops only. Route creation belongs to open(),
         // never to a delayed setter replaying destinations from an old stack.
         guard value.count <= current.count, Array(current.prefix(value.count)) == value else { return }
         let removed = Array(current.dropFirst(value.count))
-        await depart(removed) { setPath(value, for: stack) }
+        await depart(removed) {
+            // Only the owned Back action supplies this layout signal. Emit it
+            // after successful draft departure and immediately before publishing
+            // the matching path. Resets, dismissals and interactive commits do not.
+            if let owner, owner == capturePathUpdateOwner(), stack == .home, activeStack == .home,
+               value.isEmpty, current.count == 1, homePath == current,
+               let detail = removed.first, detail.route == "PostDetail" {
+                beforeOrdinaryHomeReturn?(detail.id)
+            }
+            setPath(value, for: stack)
+        }
     }
 
     func dismissDestination(_ id: UUID) async {

@@ -59,8 +59,14 @@ struct NativeRootView: View {
         case .profile: app.selectedTab == .profile && app.sheet == nil
         case .sheet: app.sheet?.id == rootID
         }
+        // Keep the native tab bar. Only the Home root's scroll surface needs
+        // to reach behind it; destinations and sheet keyboard layout do not.
+        let scrollEdges: Edge.Set = if #available(iOS 26.0, *), stack == .home, app.homePath.isEmpty, app.sheet == nil {
+            [.top, .bottom]
+        } else { [] }
         NativeOwnedNavigation(app: app, stack: stack, rootID: rootID, path: app.path(for: stack),
                               isActive: active, root: AnyView(root()))
+            .ignoresSafeArea(.container, edges: scrollEdges)
             .nativePageCanvas()
             // Toolbar preferences stop at a hosting boundary. Keep TabView's
             // own bar and project the existing detail hide/show rule onto it.

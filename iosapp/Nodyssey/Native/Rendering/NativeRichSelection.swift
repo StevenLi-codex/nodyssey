@@ -42,11 +42,13 @@ import UIKit
         }
     }
 
-    static func containsInteraction(at point: CGPoint, in root: UIView) -> Bool {
+    static func containsInteraction(at point: CGPoint, in root: UIView, includePlainText: Bool = true) -> Bool {
         descendants(root).contains { view in
-            let isText = (view as? NativeSelectableTextView)?.selectionActive == true
-            guard isText || view is NativeRichInteractionMarkerView, visible(view, in: root),
-                  view.bounds.contains(view.convert(point, from: root)) else { return false }
+            let local = view.convert(point, from: root)
+            guard visible(view, in: root), view.bounds.contains(local) else { return false }
+            if let text = view as? NativeSelectableTextView, text.selectionActive {
+                if !includePlainText && !text.hasInlineAction(at: local) { return false }
+            } else if !(view is NativeRichInteractionMarkerView) { return false }
             var ancestor = view.superview
             while let parent = ancestor {
                 if parent.clipsToBounds && !parent.bounds.contains(parent.convert(point, from: root)) { return false }
@@ -118,6 +120,17 @@ struct NativeSelectableParagraph: UIViewControllerRepresentable {
 
 final class NativeSelectableTextView: UITextView {
     var selectionActive = true
+
+    // Read-only text keeps its system tap and long-press recognizers. Only
+    // inline actions, not the paragraph's entire rectangle, own a drag start.
+    func hasInlineAction(at point: CGPoint) -> Bool {
+        guard let character = characterRange(at: point), let attributedText else { return false }
+        let offset = offset(from: beginningOfDocument, to: character.start)
+        guard offset >= 0, offset < attributedText.length else { return false }
+        return attributedText.attribute(.link, at: offset, effectiveRange: nil) != nil ||
+            attributedText.attribute(.attachment, at: offset, effectiveRange: nil) != nil
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { selectedRange = NSRange(location: 0, length: 0); resignFirstResponder() }

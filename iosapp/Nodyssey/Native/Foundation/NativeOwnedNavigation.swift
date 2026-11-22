@@ -61,10 +61,23 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         content.transformEnvironment(\.self) { values in
             let pageActive = values.nativeRichSelectionActive
             let pageLifetimes = values.nativeRichSelectionLifetimes
+            let homeEndPageScope = values.homeEndPageScope
             values = inherited
+            values.homeEndPageScope = homeEndPageScope
             values.nativeRichSelectionActive = pageActive && inherited.nativeRichSelectionActive
             values.nativeRichSelectionLifetimes = inherited.nativeRichSelectionLifetimes + pageLifetimes
         }
+    }
+}
+
+private struct HomeEndPageScopeKey: EnvironmentKey {
+    static let defaultValue: HomeEndRetentionMarker.Scope? = nil
+}
+
+extension EnvironmentValues {
+    var homeEndPageScope: HomeEndRetentionMarker.Scope? {
+        get { self[HomeEndPageScopeKey.self] }
+        set { self[HomeEndPageScopeKey.self] = newValue }
     }
 }
 
@@ -73,13 +86,20 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         let id: UUID?
         let surface = UIView()
         let selection: NativeRichSelectionLifetime
+        let homeEndScope: HomeEndRetentionMarker.Scope?
         private var content: AnyView
         private var selectionActive = false
-        init(id: UUID?, content: AnyView) {
+        var homeDidLayout: (() -> Void)?
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            homeDidLayout?()
+        }
+        init(id: UUID?, content: AnyView, scopedHome: Bool) {
             let lifetime = NativeRichSelectionLifetime()
-            self.id = id; self.content = content; selection = lifetime
+            let scope = scopedHome ? HomeEndRetentionMarker.Scope() : nil
+            self.id = id; self.content = content; selection = lifetime; homeEndScope = scope
             super.init(rootView: AnyView(content.environment(\.nativeRichSelectionActive, false)
-                .environment(\.nativeRichSelectionLifetimes, [lifetime])))
+                .environment(\.nativeRichSelectionLifetimes, [lifetime]).environment(\.homeEndPageScope, scope)))
         }
         @MainActor required dynamic init?(coder: NSCoder) { nil }
         func updateContent(_ content: AnyView) { self.content = content; refreshContent() }
@@ -91,7 +111,7 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         }
         private func refreshContent() {
             rootView = AnyView(content.environment(\.nativeRichSelectionActive, selectionActive)
-                .environment(\.nativeRichSelectionLifetimes, [selection]))
+                .environment(\.nativeRichSelectionLifetimes, [selection]).environment(\.homeEndPageScope, homeEndScope))
         }
     }
 
@@ -101,7 +121,8 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         let to: Page
         let width: CGFloat
         let rightToLeft: Bool
-        let startX: Double
+        var startX: Double
+        var dragOrigin: CGFloat = 0
         var progress: CGFloat = 0
         var animator: UIViewPropertyAnimator?
         var prepare: Task<Void, Never>?
@@ -125,12 +146,45 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     private var subscriptions = Set<AnyCancellable>()
     private var start: CGPoint?
     private var ordinaryBack: Task<Void, Never>?
+    private let homeEnd = HomeEndRetention()
     private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(track(_:)))
 
     init(app: NativeAppModel, stack: NativeAppModel.Stack) {
         self.app = app; self.stack = stack
         super.init(nibName: nil, bundle: nil)
         app.navigationIdentityWillRevoke.sink { [weak self] in self?.revokeIdentity() }.store(in: &subscriptions)
+        if #available(iOS 26.0, *), stack == .home {
+            // @Published supplies the new path synchronously before assignment.
+            // Sample the still-visible root before SwiftUI projects tab hiding.
+            app.$homePath.dropFirst().sink { [weak self] next in
+                self?.homePathWillChange(to: next)
+            }.store(in: &subscriptions)
+            // Use the incoming values, not a deferred SwiftUI active update.
+            // Away→back before projection cannot restore an already revoked lease.
+            app.$selectedTab.dropFirst().sink { [weak self] next in
+                if next != .home { self?.homeEnd.clear() }
+            }.store(in: &subscriptions)
+            app.$sheet.dropFirst().sink { [weak self] next in
+                if next != nil { self?.homeEnd.clear() }
+            }.store(in: &subscriptions)
+            app.$generation.dropFirst().sink { [weak self] _ in self?.homeEnd.clear() }.store(in: &subscriptions)
+            app.$settings.dropFirst().sink { [weak self] next in
+                guard let self else { return }
+                if next != self.app.settings { self.homeEnd.revokeReadPaint() }
+                if next["einkMode"]?.bool == true || next["feedSort"] != self.app.settings["feedSort"] ||
+                    next["onboardingSeen"] != self.app.settings["onboardingSeen"] {
+                    self.homeEnd.clear()
+                }
+            }.store(in: &subscriptions)
+            NotificationCenter.default.publisher(for: UIAccessibility.reduceMotionStatusDidChangeNotification)
+                .sink { [weak self] _ in self?.homeEnd.clear() }.store(in: &subscriptions)
+            NotificationCenter.default.publisher(for: UIScene.willDeactivateNotification)
+                .sink { [weak self] notice in
+                    guard let self, let scene = self.viewIfLoaded?.window?.windowScene,
+                          (notice.object as? UIScene) === scene else { return }
+                    self.homeEnd.clear()
+                }.store(in: &subscriptions)
+        }
         app.objectWillChange.sink { [weak self] in
             // @Published fires before assignment; read the completed model mutation.
             Task { @MainActor [weak self] in
@@ -150,11 +204,61 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         view.addGestureRecognizer(pan)
     }
 
+    private var homeEndMotionAllowed: Bool {
+        !reduceMotion && !UIAccessibility.isReduceMotionEnabled && app.settings["einkMode"]?.bool != true
+    }
+
+    private func scopedHomeOwner(_ page: Page) -> HomeEndRetention.Owner? {
+        guard let host = page.viewIfLoaded, let scope = page.homeEndScope else { return nil }
+        return scope.lookup(in: host).0
+    }
+
+    private func homePathWillChange(to next: [NativeDestination]) {
+        let previous = app.homePath
+        // An interactive drag already presents Home while the detail route is
+        // still active. This experiment cannot correct that surface in time.
+        guard motion == nil, homeEndMotionAllowed else { homeEnd.clear(); return }
+        if previous.isEmpty, next.count == 1, let detail = next.first {
+            homeEnd.clear()
+            guard detail.route == "PostDetail", let post = detail.arguments["postId"]?.int,
+                  active, app.selectedTab == .home, app.sheet == nil, !identityRevoked,
+                  projection == nil, let home = pages.first, visible === home,
+                  let window = viewIfLoaded?.window, home.surface.window === window,
+                  let owner = scopedHomeOwner(home) else { return }
+            homeEnd.departing(to: detail.id, post: post, owner: owner, window: window, app: app)
+        } else {
+            homeEnd.pathChanged(next: next.last?.id, count: next.count)
+        }
+    }
+
+    private func restoreHomeEnd(_ page: Page) {
+        guard homeEnd.pendingReturn else { return }
+        guard homeEndMotionAllowed else { homeEnd.clear(); return }
+        guard active, !identityRevoked, pages.first === page,
+              app.homePath.isEmpty, app.selectedTab == .home, app.sheet == nil,
+              let window = viewIfLoaded?.window, page.surface.window === window else { return }
+        // attach() has mounted the surface but may still be inside UIKit's
+        // first propagation pass. A truly missing owner on a mounted page
+        // is terminal; a still-detached hosted view is not a sample.
+        guard page.viewIfLoaded?.window === window, page.homeEndScope?.movingSurface != true else { return }
+        guard let owner = scopedHomeOwner(page) else { homeEnd.clear(); return }
+        _ = homeEnd.restore(owner: owner, window: window, generation: app.generation, currentOwner: {
+            guard let host = page.viewIfLoaded else { return nil }
+            return page.homeEndScope?.lookup(in: host).0
+        })
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if homeEnd.pendingReturn, let home = pages.first { restoreHomeEnd(home) }
+    }
+
     func apply(rootID: UUID?, path: [NativeDestination], active: Bool, rightToLeft: Bool, reduceMotion: Bool,
                content: @escaping (UUID?, NativeDestination?) -> AnyView) {
         loadViewIfNeeded()
         let motionBecameReduced = reduceMotion && !self.reduceMotion
         self.active = active; rtl = rightToLeft; self.reduceMotion = reduceMotion
+        if !active || reduceMotion { homeEnd.clear() }
         if !active { deactivateSelections() }
         if let motion {
             // A synchronous finish must replay this update, not an older policy
@@ -178,7 +282,8 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         if ids != pages.map(\.id) {
             let oldPages = pages
             pages = ids.enumerated().map { index, id in
-                oldPages.first { $0.id == id } ?? Page(id: id, content: content(id, index == 0 ? nil : path[index - 1]))
+                oldPages.first { $0.id == id } ?? Page(id: id, content: content(id, index == 0 ? nil : path[index - 1]),
+                    scopedHome: stack == .home && index == 0)
             }
             let isPush = pages.count > oldPages.count && pages.dropLast(pages.count - oldPages.count).map(\.id) == oldPages.map(\.id)
             project(to: pages.last, forward: isPush, animated: active && !identityRevoked && !reduceMotion)
@@ -197,10 +302,12 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     }
 
     private func attach(_ page: Page) {
+        page.homeEndScope?.beginAttach()
         page.setSelectionActive(active && !identityRevoked)
         let isNewChild = page.parent == nil
         if isNewChild {
             addChild(page)
+            page.homeEndScope?.bind(root: page.view, surface: page.surface)
             page.view.backgroundColor = .clear
             page.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             page.surface.backgroundColor = .systemBackground
@@ -212,19 +319,34 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
             page.surface.frame = view.bounds
             page.view.frame = page.surface.bounds
             page.surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            view.addSubview(page.surface)
+            if homeEnd.pendingReturn, motion == nil, pages.first === page, !isNewChild, let scope = page.homeEndScope {
+                scope.addReturningSurface(page.surface, to: view)
+            } else {
+                view.addSubview(page.surface)
+            }
         }
         if isNewChild { page.didMove(toParent: self) }
+        page.homeEndScope?.finishAttach()
         // A retained hidden paragraph has synchronously discarded copy data.
         // Rebuild its live content before the first drag frame reveals it.
         page.view.setNeedsLayout()
+        if stack == .home, pages.first === page {
+            page.homeDidLayout = { [weak self, weak page] in
+                if let page { self?.restoreHomeEnd(page) }
+            }
+        }
         page.view.layoutIfNeeded()
+        restoreHomeEnd(page)
     }
 
     private func detach(_ page: Page) {
         page.setSelectionActive(false)
+        let retained = pages.contains(where: { $0 === page })
+        if retained { page.homeEndScope?.park() }
+        else { page.homeEndScope?.retire() }
         page.surface.removeFromSuperview()
-        guard !pages.contains(where: { $0 === page }), page.parent === self else { return }
+        page.homeEndScope?.finishParking()
+        guard !retained, page.parent === self else { return }
         page.willMove(toParent: nil)
         page.view.removeFromSuperview()
         page.removeFromParent()
@@ -237,6 +359,8 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         page.surface.accessibilityElementsHidden = false
         view.bringSubviewToFront(page.surface)
         visible = page
+        // Do not leave a lease that can fire on a later, unrelated Home layout.
+        if pages.count == 1, pages.first === page { homeEnd.clear() }
         for case let other as Page in children where other !== page { detach(other) }
     }
 
@@ -284,7 +408,10 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
             guard let self else { return }
             defer { self.ordinaryBack = nil }
             guard !Task.isCancelled, self.active, self.visible?.id == id else { return }
-            await app.updatePath(Array(app.path(for: stack).dropLast()), for: stack, owner: owner)
+            await app.updatePath(Array(app.path(for: stack).dropLast()), for: stack, owner: owner,
+                                 beforeOrdinaryHomeReturn: { [weak self] id in
+                self?.homeEnd.authorizeBack(from: id)
+            })
         }
     }
 
@@ -295,11 +422,13 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+        homeEnd.clear()
         if let motion { cancel(motion, immediate: true) }
         super.viewWillTransition(to: size, with: coordinator)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        homeEnd.clear()
         if let motion { cancel(motion, immediate: true) }
         deactivateSelections()
         super.viewWillDisappear(animated)
@@ -322,6 +451,7 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         // rotation. Never leave a pushed/private surface visible during revoke.
         let publicRoot = stack == .sheet && pages.count == 1 && app.ownsAuthenticationPresentation
         identityRevoked = true
+        homeEnd.clear()
         deactivateSelections()
         view.isHidden = !publicRoot
         deferredProjection = nil
@@ -332,6 +462,8 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     }
 
     func detach() {
+        homeEnd.clear()
+        for page in pages { page.homeEndScope?.retire() }
         active = false
         deactivateSelections()
         deferredProjection = nil
@@ -343,8 +475,11 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
 
     private var canReceive: Bool {
         guard active, !identityRevoked, view.window != nil, let id = visible?.id,
-              pages.count > 1, motion == nil, projection == nil, ordinaryBack == nil,
-              app.canBeginInteractivePop(stack: stack, from: id) else { return false }
+              pages.count > 1, projection == nil, ordinaryBack == nil else { return false }
+        if let motion {
+            guard motion.from.id == id, motion.width == view.bounds.width, motion.animator?.state == .active,
+                  app.canResumeInteractivePop(motion.lease) else { return false }
+        } else if !app.canBeginInteractivePop(stack: stack, from: id) { return false }
         var controller: UIViewController? = visible
         while let node = controller {
             if node.presentedViewController != nil { return false }
@@ -354,29 +489,43 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard gestureRecognizer === pan, canReceive, let root = visible?.view, let hit = touch.view,
-              hit === root || hit.isDescendant(of: root), !blocks(hit: hit, point: touch.location(in: root), root: root) else { return false }
-        start = touch.location(in: view)
+        let point = touch.location(in: view)
+        guard gestureRecognizer === pan, canReceive, admitsStart(at: point, actualHit: touch.view) else { return false }
+        start = point
         return true
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === pan, canReceive, pan.numberOfTouches == 1, let start, let root = visible?.view else { return false }
-        let point = root.convert(start, from: view)
-        guard let hit = root.hitTest(point, with: nil), !blocks(hit: hit, point: point, root: root) else { return false }
+        guard gestureRecognizer === pan, canReceive, pan.numberOfTouches == 1, let start,
+              admitsStart(at: start) else { return false }
         let velocity = pan.velocity(in: view)
+        if motion != nil { return abs(velocity.x) > abs(velocity.y) * 1.5 && velocity.x != 0 }
         return ContentBackSwipe.begins(velocityX: velocity.x, velocityY: velocity.y, rightToLeft: rtl)
+    }
+
+    private func admitsStart(at start: CGPoint, actualHit: UIView? = nil) -> Bool {
+        // During settle, both live pages are noninteractive. The parent pan
+        // can catch the animation anywhere in its viewport, including the
+        // revealed predecessor where the outgoing page no longer draws.
+        if motion != nil { return view.bounds.contains(start) }
+        guard let root = visible?.view else { return false }
+        let point = root.convert(start, from: view)
+        let hit = actualHit ?? root.hitTest(point, with: nil)
+        guard let hit, hit === root || hit.isDescendant(of: root) else { return false }
+        return !blocks(hit: hit, point: point, root: root)
     }
 
     private func blocks(hit: UIView, point: CGPoint, root: UIView) -> Bool {
         if NativeRichInteractionBoundary.hasActiveTextSelection(in: root) ||
-            NativeRichInteractionBoundary.containsInteraction(at: point, in: root) || hasTextInteraction(in: root) { return true }
+            NativeRichInteractionBoundary.containsInteraction(at: point, in: root, includePlainText: false) ||
+            hasTextInteraction(in: root) { return true }
         // SwiftUI Slider may expose an adjustable accessibility element instead
         // of a UISlider. The Settings route owns the app's only such slider.
         if app.path(for: stack).last?.route == "Settings", hitsAdjustableElement(point, in: root) { return true }
         var cursor: UIView? = hit
         while let node = cursor {
-            if node is UITextView || node is UITextField || node is UIControl || node.accessibilityTraits.contains(.adjustable) { return true }
+            if (node is UITextView && !(node is NativeSelectableTextView)) || node is UITextField ||
+                node is UIControl || node.accessibilityTraits.contains(.adjustable) { return true }
             if let scroll = node as? UIScrollView, Self.ownsHorizontalDrag(scroll) { return true }
             if node === root { break }
             cursor = node.superview
@@ -425,6 +574,11 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     @objc private func track(_ sender: UIPanGestureRecognizer) {
         switch sender.state {
         case .began:
+            if homeEnd.hasLease { homeEnd.clear() } // interactive is not this experiment
+            if let motion, let start, resume(motion, at: start.x) {
+                drag(motion, sender)
+                return
+            }
             guard let start, let from = visible, let id = from.id, let to = pages.dropLast().last,
                   view.bounds.width > 0, let lease = app.beginInteractivePop(stack: stack, from: id) else { return }
             guard to.id == lease.to else { app.cancelInteractivePop(lease); return }
@@ -440,9 +594,10 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
         case .ended:
             guard let motion, !motion.cancelling else { return }
             let distance = sender.translation(in: view)
-            let projected = distance.x + sender.velocity(in: view).x * 0.18
+            let travel = distance.x + motion.dragOrigin * motion.width * (motion.rightToLeft ? -1 : 1)
+            let projected = travel + sender.velocity(in: view).x * 0.18
             if ContentBackSwipe.shouldReturn(startX: motion.startX, width: motion.width,
-                translationX: distance.x, translationY: distance.y, predictedX: projected, rightToLeft: motion.rightToLeft) {
+                translationX: travel, translationY: distance.y, predictedX: projected, rightToLeft: motion.rightToLeft) {
                 release(motion)
             } else { cancel(motion) }
         case .cancelled, .failed:
@@ -453,9 +608,26 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
 
     private func drag(_ motion: Motion, _ recognizer: UIPanGestureRecognizer) {
         guard !motion.cancelling, view.bounds.width == motion.width, app.isInteractivePopCurrent(motion.lease) else { cancel(motion); return }
-        motion.progress = ContentBackSwipe.progress(translationX: recognizer.translation(in: view).x,
+        let travel = motion.dragOrigin * motion.width * (motion.rightToLeft ? -1 : 1) + recognizer.translation(in: view).x
+        motion.progress = ContentBackSwipe.progress(translationX: travel,
                                                      width: motion.width, rightToLeft: motion.rightToLeft)
         render(motion, progress: motion.progress)
+    }
+
+    @discardableResult private func resume(_ motion: Motion, at startX: Double) -> Bool {
+        guard self.motion === motion, let animator = motion.animator, animator.state == .active,
+              app.canResumeInteractivePop(motion.lease) else { return false }
+        let translation = motion.from.surface.layer.presentation()?.affineTransform().tx
+        let progress = translation.map { ContentBackSwipe.progress(translationX: $0,
+            width: motion.width, rightToLeft: motion.rightToLeft) } ?? motion.progress
+        motion.animator = nil
+        animator.stopAnimation(true)
+        motion.cancelling = false
+        motion.startX = startX
+        motion.progress = progress
+        motion.dragOrigin = progress
+        render(motion, progress: progress)
+        return true
     }
 
     private func render(_ motion: Motion, progress: CGFloat) {
@@ -465,6 +637,10 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     }
 
     private func release(_ motion: Motion) {
+        if app.canFinishInteractivePop(motion.lease) {
+            settle(motion, commit: true)
+            return
+        }
         // Lock pointer interaction only after release. The old live editor
         // stays mounted; draft prepare may now perform its normal IME handoff.
         motion.from.surface.isUserInteractionEnabled = false
@@ -500,12 +676,16 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
             complete(motion, committed: commit)
             return
         }
+        // The parent receives a second drag, but neither moving page should
+        // execute a tap against UIKit's already-updated model frames.
+        motion.from.surface.isUserInteractionEnabled = false
+        motion.from.surface.accessibilityElementsHidden = true
         let animator = UIViewPropertyAnimator(duration: 0.23, curve: .easeOut) { [weak self, weak motion] in
             if let motion { self?.render(motion, progress: commit ? 1 : 0) }
         }
         motion.animator = animator
-        animator.addCompletion { [weak self, weak motion] position in
-            guard let self, let motion, self.motion === motion else { return }
+        animator.addCompletion { [weak self, weak motion, weak animator] position in
+            guard let self, let motion, let animator, self.motion === motion, motion.animator === animator else { return }
             let reachedTarget = position == .end && commit && !motion.cancelling
             if !reachedTarget && commit {
                 motion.animator = nil
@@ -543,3 +723,4 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
     private var deferredProjection: (() -> Void)?
 }
 #endif
+
