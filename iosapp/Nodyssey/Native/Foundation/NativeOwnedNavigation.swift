@@ -575,10 +575,35 @@ extension EnvironmentValues {
                 rightInset: scroll.adjustedContentInset.right))
     }
 
+    private var isPostDetail: Bool { app.path(for: stack).last?.route == "PostDetail" }
+
+    private func threadScrollOwning(_ recognizer: UIGestureRecognizer) -> UIScrollView? {
+        guard isPostDetail, let root = visible?.view, let owner = recognizer.view,
+              owner === root || owner.isDescendant(of: root) else { return nil }
+        var candidate: UIView? = owner
+        while let node = candidate {
+            if let scroll = node as? UIScrollView, scroll.isScrollEnabled {
+                return Self.ownsHorizontalDrag(scroll) ? nil : scroll
+            }
+            if node === root { break }
+            candidate = node.superview
+        }
+        return nil
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === pan, let scroll = threadScrollOwning(other) else { return false }
+        // A reader scroll can recognize before the outer UIKit pan. Keep both
+        // alive until our own direction and rich-content checks admit Back.
+        // Leave text selection, link taps and horizontal/zoom views independent.
+        return other === scroll.panGestureRecognizer || other is UIPanGestureRecognizer
+    }
+
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === pan, let scroll = other.view as? UIScrollView else { return false }
-        // Vertical scrolling waits for the directional decision to begin this
-        // pan. Horizontal/zoom owners are never made to wait.
+        if threadScrollOwning(other) != nil { return false }
+        // Other routes retain the directional failure relationship.
         return other === scroll.panGestureRecognizer && scroll.isDescendant(of: visible?.view ?? view) && !Self.ownsHorizontalDrag(scroll)
     }
 
