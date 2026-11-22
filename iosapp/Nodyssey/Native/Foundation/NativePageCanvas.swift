@@ -26,3 +26,26 @@ extension View {
         }
     }
 }
+
+private struct NativeClearNavigationBar: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            // The older toolbarBackground(.hidden) no longer removes the glass
+            // band on iOS 26, so the bar kept painting a tinted strip over the
+            // page canvas. Visibility is the API that actually clears it.
+            content.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        } else {
+            content.toolbarBackground(.hidden, for: .navigationBar)
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+extension View {
+    /// Leave the navigation bar as the bare glass island so page content shows
+    /// through the rest of the strip.
+    func nativeClearNavigationBar() -> some View { modifier(NativeClearNavigationBar()) }
+}

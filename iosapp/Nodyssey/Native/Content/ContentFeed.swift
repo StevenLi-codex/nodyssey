@@ -55,6 +55,7 @@ struct ContentPostList: View {
         }
         .background(ContentSurface(canvas: true))
         .navigationTitle(app.siteName ?? String(localized: "content.posts", table: "Content"))
+        .nativeClearNavigationBar()
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

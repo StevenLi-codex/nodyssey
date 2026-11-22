@@ -200,7 +200,7 @@ jobs:
                      '-archivePath', str(root / 'Nodyssey.xcarchive'),
                      '-resultBundlePath', str(root / 'archive.xcresult'), '-jobs', '2', 'archive',
                      'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=',
-                     'SWIFT_OPTIMIZATION_LEVEL=-O', 'MARKETING_VERSION=1.2.34', 'CURRENT_PROJECT_VERSION=83']
+                     'SWIFT_OPTIMIZATION_LEVEL=-O', 'MARKETING_VERSION=1.2.34', 'CURRENT_PROJECT_VERSION=84']
           (root / 'archive-command.json').write_text(json.dumps(command, indent=2))
           with (root / 'xcodebuild-archive.log').open('wb') as log:
               code = subprocess.call(command, stdout=log, stderr=subprocess.STDOUT)
@@ -224,12 +224,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
-          (cd "$RUNNER_TEMP" && zip -qry Nodyssey-1.2.34-build83-unsigned.ipa Payload)
-          shasum -a 256 "$RUNNER_TEMP/Nodyssey-1.2.34-build83-unsigned.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry Nodyssey-1.2.34-build84-unsigned.ipa Payload)
+          shasum -a 256 "$RUNNER_TEMP/Nodyssey-1.2.34-build84-unsigned.ipa"
           python3 - <<'PY'
           import hashlib, json, os, pathlib, plistlib
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          ipa = root / 'Nodyssey-1.2.34-build83-unsigned.ipa'
+          ipa = root / 'Nodyssey-1.2.34-build84-unsigned.ipa'
           info = plistlib.loads((root / 'Payload/Nodyssey.app/Info.plist').read_bytes())
           (root / 'ipa-manifest.json').write_text(json.dumps({'filename': ipa.name, 'bytes': ipa.stat().st_size, 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(), 'bundleIdentifier': info['CFBundleIdentifier'], 'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'configuration': 'Release', 'swiftOptimization': '-O', 'testsRun': False}, indent=2))
           PY
@@ -237,7 +237,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.archive && (inputs.archive_only || steps.native_compile.outcome == 'success')
         with:
           name: nodyssey-swiftui-unsigned
-          path: ${{ runner.temp }}/Nodyssey-1.2.34-build83-unsigned.ipa
+          path: ${{ runner.temp }}/Nodyssey-1.2.34-build84-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
       - name: Upload verification evidence

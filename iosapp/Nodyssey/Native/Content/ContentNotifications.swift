@@ -60,7 +60,7 @@ struct ContentNotifications: View {
         }
         .nativePageCanvas()
         .navigationTitle(Text(String(localized: "content.notifications", table: "Content")))
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .nativeClearNavigationBar()
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(String(localized: "content.readAll", table: "Content")) { confirmReadAll = true }.disabled(!app.isSignedIn || command.busy || selectedUnread == 0)

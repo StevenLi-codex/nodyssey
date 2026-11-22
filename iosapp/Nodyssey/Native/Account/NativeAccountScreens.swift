@@ -236,7 +236,7 @@ struct AccountProfileScreen: View {
         }
         .nativePageCanvas()
         .navigationTitle("")
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .nativeClearNavigationBar()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { app.open("Settings") } label: { Label("settings_title", systemImage: "gearshape") }
