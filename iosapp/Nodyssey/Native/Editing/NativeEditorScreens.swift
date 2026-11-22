@@ -170,9 +170,12 @@ private struct EditorHost: View {
             } else {
                 NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
                                     hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
-                    .frame(minHeight: isMessage ? 100 : 80, maxHeight: isMessage ? 180 : .infinity)
+                    .frame(minHeight: isMessage ? 48 : 80, maxHeight: isMessage ? 120 : .infinity)
                     .padding(.horizontal, 7)
                     .padding(.top, 8)
+                    // A conversation answers in a single field, not a page body:
+                    // keep every control, give the input its own rounded surface.
+                    .modifier(MessageInputSurface(enabled: isMessage))
             }
             if isMessage {
                 Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() })).padding(.horizontal)
@@ -371,3 +374,13 @@ private struct EditorHost: View {
         onQuoteReference: { _, floor, url in app.openLink(url + (url.contains("#") ? "" : "#" + floor.trimmingCharacters(in: CharacterSet(charactersIn: "#")))) })
 }
 #endif
+
+private struct MessageInputSurface: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        content.background {
+            if enabled { RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.quaternary) }
+        }
+    }
+}

@@ -9,38 +9,60 @@ struct EditorMessageThread: View {
     @State private var retry = 0
     @State private var reading = false
     private var messages: [JSONValue] { store.value["messages"]?.array ?? [] }
+    private var peerName: String { store.value["userName"]?.string ?? String(uid) }
 
     var body: some View {
-        VStack {
-            HStack {
-                Button(store.value["userName"]?.string ?? String(uid)) { app.open("UserSpace", ["uid": .integer(uid)]) }
-                Spacer()
-                Button(EL("refresh")) {
-                    Task {
-                        do { _ = try await app.request("messages.refresh"); retry += 1 }
-                        catch { model.report(error) }
-                    }
-                }
-                Button(EL("markRead")) {
-                    guard let ids = store.value["unreadIds"]?.array, !ids.isEmpty else { return }
-                    reading = true
-                    Task {
-                        defer { reading = false }
-                        do {
-                            _ = try await app.request("messages.read", ["messageIds": .array(ids)])
-                            // Mutation invalidates observer. Re-read exact authoritative thread too.
-                            let value = try await app.request("messages.thread", ["uid": .integer(uid)])
-                            store.value = value
-                        } catch { model.report(error) }
-                    }
-                }.disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
-            }.padding(.horizontal)
+        VStack(spacing: 0) {
+            header
             if let failure = store.failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
-            EditorMessageHistory(scope: .init(generation: app.generation, uid: uid), messages: messages, quote: model.quote)
+            EditorMessageHistory(scope: .init(generation: app.generation, uid: uid),
+                                 messages: messages, peer: peerName, quote: model.quote)
                 .id(EditorMessageFollowState.Scope(generation: app.generation, uid: uid))
             if store.isLoading { ProgressView() }
         }
         .task(id: "\(app.generation):\(uid):\(retry)") { await store.observe(app, "messages.thread", ["uid": .integer(uid)]) }
+    }
+
+    /// Peer identity and the two thread actions read as one conversation header
+    /// instead of a row of equal-weight text buttons.
+    private var header: some View {
+        HStack(spacing: 10) {
+            Button { app.open("UserSpace", ["uid": .integer(uid)]) } label: {
+                HStack(spacing: 8) {
+                    ChatAvatar(name: peerName, size: 26)
+                    Text(peerName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                }
+            }.buttonStyle(.plain)
+            Spacer(minLength: 0)
+            Button {
+                Task {
+                    do { _ = try await app.request("messages.refresh"); retry += 1 }
+                    catch { model.report(error) }
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise").frame(minWidth: 30, minHeight: 30)
+            }.accessibilityLabel(Text(EL("refresh")))
+            Button {
+                guard let ids = store.value["unreadIds"]?.array, !ids.isEmpty else { return }
+                reading = true
+                Task {
+                    defer { reading = false }
+                    do {
+                        _ = try await app.request("messages.read", ["messageIds": .array(ids)])
+                        // Mutation invalidates observer. Re-read exact authoritative thread too.
+                        let value = try await app.request("messages.thread", ["uid": .integer(uid)])
+                        store.value = value
+                    } catch { model.report(error) }
+                }
+            } label: {
+                Image(systemName: "checkmark.circle").frame(minWidth: 30, minHeight: 30)
+            }
+            .disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
+            .accessibilityLabel(Text(EL("markRead")))
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 
@@ -56,26 +78,71 @@ private struct EditorMessageGeometryKey: PreferenceKey {
     }
 }
 
+/// One row's presentation, derived once so grouping cannot disagree with the bubble.
+private struct EditorMessageItem: Identifiable {
+    let value: JSONValue
+    let mine: Bool
+    let showsTime: Bool
+    let dayLabel: String?
+    var id: String? { value["id"]?.string }
+}
+
+private func editorMessageDay(_ text: String?) -> String? {
+    guard let text else { return nil }
+    let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+    guard parts.count == 2, parts[0].contains("-") else { return nil }
+    return String(parts[0])
+}
+
+private func editorMessageClock(_ text: String?) -> String? {
+    guard let text else { return nil }
+    let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+    return parts.count == 2 ? String(parts[1]) : text
+}
+
 private struct EditorMessageHistory: View {
     let scope: EditorMessageFollowState.Scope
     let messages: [JSONValue]
+    let peer: String
     let quote: (String) -> Void
     @StateObject private var follow = EditorMessageFollowObservation()
     private var observation: UUID { follow.observation }
     private var lastID: String? { messages.last?["id"]?.string }
 
+    private var items: [EditorMessageItem] {
+        messages.indices.map { index in
+            let value = messages[index]
+            let mine = value["isMine"]?.bool == true
+            let next = index + 1 < messages.count ? messages[index + 1] : nil
+            let sameRun = next.map { ($0["isMine"]?.bool == true) == mine } ?? false
+            let day = editorMessageDay(value["sentAtText"]?.string)
+            let previousDay = index > 0 ? editorMessageDay(messages[index - 1]["sentAtText"]?.string) : nil
+            return EditorMessageItem(value: value, mine: mine, showsTime: !sameRun,
+                                     dayLabel: day != nil && day != previousDay ? day : nil)
+        }
+    }
+
     var body: some View {
         GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(messages.indices, id: \.self) { index in
-                            if let id = messages[index]["id"]?.string {
-                                EditorMessageRow(value: messages[index], quote: quote).id(id)
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(items) { item in
+                            if let day = item.dayLabel {
+                                Text(day).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            }
+                            if let id = item.id {
+                                EditorMessageBubble(value: item.value, mine: item.mine, showsTime: item.showsTime,
+                                                    peer: peer, maxWidth: max(160, viewport.size.width * 0.74),
+                                                    quote: quote)
+                                    .padding(.top, item.showsTime ? 8 : 0)
+                                    .id(id)
                             }
                         }
                     }
-                    .padding()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background {
                         GeometryReader { content in
                             Color.clear.preference(key: EditorMessageGeometryKey.self, value: EditorMessageGeometry(
@@ -119,39 +186,113 @@ private struct EditorMessageHistory: View {
     }
 }
 
-private struct EditorMessageRow: View {
+/// The sender-side bottom corner is tight, so a run of messages reads as one
+/// column without a separate tail view that would clip rich content.
+private struct ChatBubbleShape: Shape {
+    let mine: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let big = min(18, rect.height / 2)
+        let small = min(6, rect.height / 2)
+        let topLeft = big, topRight = big
+        let bottomRight = mine ? small : big
+        let bottomLeft = mine ? big : small
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
+        path.addArc(center: CGPoint(x: rect.maxX - topRight, y: rect.minY + topRight), radius: topRight,
+                    startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
+        path.addArc(center: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY - bottomRight), radius: bottomRight,
+                    startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
+        path.addArc(center: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY - bottomLeft), radius: bottomLeft,
+                    startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
+        path.addArc(center: CGPoint(x: rect.minX + topLeft, y: rect.minY + topLeft), radius: topLeft,
+                    startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct ChatAvatar: View {
+    let name: String
+    var size: CGFloat = 28
+
+    private var initial: String { name.first.map { String($0).uppercased() } ?? "?" }
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentColor.opacity(0.18))
+            .overlay(Text(initial).font(.system(size: size * 0.42, weight: .semibold))
+                .foregroundStyle(Color.accentColor))
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct EditorMessageBubble: View {
     @EnvironmentObject private var app: NativeAppModel
     let value: JSONValue
+    let mine: Bool
+    let showsTime: Bool
+    let peer: String
+    let maxWidth: CGFloat
     let quote: (String) -> Void
     @State private var nodes: [NativeRichNode]?
     @State private var failure: NativeFailure?
     @State private var retry = 0
+
+    private var text: String { value["content"]?.string ?? "" }
+    private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
+
     var body: some View {
-        HStack {
-            if value["isMine"]?.bool == true { Spacer(minLength: 30) }
-            VStack(alignment: .leading) {
-                if let time = value["sentAtText"]?.string { Text(time).font(.caption).foregroundStyle(.secondary) }
-                if value["isMarkdown"]?.bool == true {
-                    if let nodes { EditorRichPreview(nodes: nodes) }
-                    else if let failure { NativeFailureView(failure: failure, retry: { retry += 1 }) }
-                    else { ProgressView() }
-                } else { Text(value["content"]?.string ?? "").textSelection(.enabled) }
+        HStack(alignment: .bottom, spacing: 8) {
+            if !mine { ChatAvatar(name: peer) }
+            VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+                bubble
+                    .frame(maxWidth: maxWidth, alignment: mine ? .trailing : .leading)
+                if showsTime, let clock {
+                    Text(clock).font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 4)
+                }
+                if let failure { Text(failure.message).font(.caption2).foregroundStyle(.secondary) }
             }
-            .padding(10)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            .contextMenu { Button(EL("quote")) { quote(value["content"]?.string ?? "") } }
-            if value["isMine"]?.bool != true { Spacer(minLength: 30) }
+            Spacer(minLength: 0)
         }
-        .task(id: "\(app.generation):\(retry):\(value["content"]?.string ?? "")") {
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+        .task(id: "\(app.generation):\(retry):\(text)") {
             nodes = nil; failure = nil
-            guard value["isMarkdown"]?.bool == true, let text = value["content"]?.string else { return }
+            guard value["isMarkdown"]?.bool == true, let raw = value["content"]?.string else { return }
             do {
-                let json = try await app.request("editor.preview", ["body": .string(text)])
+                let json = try await app.request("editor.preview", ["body": .string(raw)])
                 let parsed = try JSONDecoder().decode([NativeRichNode].self, from: JSONEncoder().encode(json))
                 try Task.checkCancellation()
                 nodes = parsed
             } catch is CancellationError { }
             catch { failure = error as? NativeFailure ?? NativeFailure(code: "INVALID_DATA", message: "Message could not be decoded") }
+        }
+    }
+
+    private var bubble: some View {
+        content
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .background {
+                ChatBubbleShape(mine: mine)
+                    .fill(mine ? AnyShapeStyle(Color.accentColor.opacity(0.16)) : AnyShapeStyle(.quaternary))
+            }
+            .contentShape(ChatBubbleShape(mine: mine))
+            .contextMenu { Button(EL("quote")) { quote(text) } }
+    }
+
+    @ViewBuilder private var content: some View {
+        if value["isMarkdown"]?.bool == true {
+            if let nodes { EditorRichPreview(nodes: nodes) }
+            else if failure != nil { Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
+            else { ProgressView().controlSize(.small) }
+        } else {
+            Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
