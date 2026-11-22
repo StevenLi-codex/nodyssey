@@ -33,24 +33,19 @@ struct ContentPostList: View {
                 Text("native_settings_site_pending", tableName: "Settings").font(.caption).foregroundStyle(.secondary)
             }
             feedWithHomeChrome {
-                // Boards are pages of one pager, so a swipe has the neighbouring
-                // board's real list beside it instead of empty canvas.
-                ContentBoardPager(boards: pagerBoards, selection: boardSelection) { board in
-                    ContentPagedList(operation: "feed", arguments: pagerArguments(board),
-                                     restoreID: positions.position(board: board, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
-                                     replacePage: pagerReplaceTarget(board, generation: ownerGeneration),
-                                     pageJumpRequest: board == category ? $pageJumpRequest : .constant(nil),
-                                     homeBoardSlugs: homeBoardSlugs, paging: true,
-                                     selectHomeBoard: { target in
-                        guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                        selectBoard(target)
-                    }, visible: { id, rowPage in
-                        // The page reports its own board; the owner board above is
-                        // only whatever the rail selected at that instant.
-                        guard ownerGeneration == app.generation, ownerSort == sort else { return }
-                        positions.record(board: board, sort: ownerSort, postID: id, page: rowPage)
-                    })
-                }
+                ContentPagedList(operation: "feed", arguments: arguments,
+                                 restoreID: positions.position(board: category, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
+                                 replacePage: { target in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    page = target
+                }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs, boardMotion: boardMotion,
+                                 selectHomeBoard: { target in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    selectBoard(target)
+                }, visible: { id, rowPage in
+                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                    positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
+                })
             }
         }
         .background(ContentSurface(canvas: true))
