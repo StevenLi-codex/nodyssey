@@ -89,6 +89,7 @@ private struct EditorHost: View {
     @State private var sheet: EditorPanel?
     @State private var showPhotos = false
     @State private var showMessageAttachments = false
+    @State private var showMessageTools = false
     @State private var confirmPublish = false
     @State private var confirmDelete = false
     @State private var confirmRestore = false
@@ -186,7 +187,9 @@ private struct EditorHost: View {
                         Button {
                             showMessageAttachments = true
                         } label: {
-                            Image(systemName: "paperclip").frame(width: 44, height: 44)
+                            Image(systemName: "plus").font(.body.weight(.semibold))
+                                .frame(width: 44, height: 44)
+                                .background(.quaternary, in: Circle())
                         }
                         .accessibilityLabel(Text(EL("IMAGE")))
                         .disabled(!model.ready || session.busy)
@@ -205,7 +208,7 @@ private struct EditorHost: View {
                         }
 
                         composerField
-                            .modifier(MessageInputSurface(enabled: true))
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 22))
 
                         Button {
                             model.focus.handoff { confirmPublish = true }
@@ -226,14 +229,19 @@ private struct EditorHost: View {
                     composerField
                 }
             }
-            if isMessage {
-                Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() })).padding(.horizontal)
-                if model.acceptedResult != nil { Text(EL("acceptedMessage")).font(.caption).padding(.horizontal) }
+            if isMessage, model.acceptedResult != nil {
+                Text(EL("acceptedMessage")).font(.caption).padding(.horizontal)
             }
             attachmentRows
-            EditorToolbar(model: model, onPanel: { openPanel($0) }, onPhotos: {
-                model.focus.handoff { showPhotos = true }
-            }, compact: !isMessage)
+            if !isMessage || showMessageTools {
+                if isMessage {
+                    Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() }))
+                        .padding(.horizontal)
+                }
+                EditorToolbar(model: model, onPanel: { openPanel($0) }, onPhotos: {
+                    model.focus.handoff { showPhotos = true }
+                }, compact: !isMessage)
+            }
         }
         .disabled(routeLifetime.closing || app.departureRunning)
         .navigationTitle(EL(isMessage ? "messages" : (session.mode == .post ? "newPost" : "compose")))
@@ -252,6 +260,13 @@ private struct EditorHost: View {
                 }.disabled(routeLifetime.closing || session.busy)
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                if isMessage {
+                    Button { showMessageTools.toggle() } label: {
+                        Label(PCL("moreTools"), systemImage: showMessageTools ? "slider.horizontal.3" : "textformat")
+                            .labelStyle(.iconOnly)
+                    }
+                    .accessibilityAddTraits(showMessageTools ? [.isSelected] : [])
+                }
                 Button {
                     model.focus.handoff {
                         if model.previewing { model.previewing = false }
@@ -425,13 +440,3 @@ private struct EditorHost: View {
         onQuoteReference: { _, floor, url in app.openLink(url + (url.contains("#") ? "" : "#" + floor.trimmingCharacters(in: CharacterSet(charactersIn: "#")))) })
 }
 #endif
-
-private struct MessageInputSurface: ViewModifier {
-    let enabled: Bool
-
-    func body(content: Content) -> some View {
-        content.background {
-            if enabled { RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.quaternary) }
-        }
-    }
-}

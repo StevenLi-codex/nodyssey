@@ -31,36 +31,36 @@ struct EditorMessageThread: View {
         HStack(spacing: 10) {
             Button { app.open("UserSpace", ["uid": .integer(uid)]) } label: {
                 HStack(spacing: 8) {
-                    ChatAvatar(name: peerName, size: 26)
-                    Text(peerName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    ChatAvatar(name: peerName, size: 32)
+                    Text(peerName).font(.headline).lineLimit(1)
                 }
             }.buttonStyle(.plain)
             Spacer(minLength: 0)
-            Button {
-                Task {
-                    do { _ = try await app.request("messages.refresh"); retry += 1 }
-                    catch { model.report(error) }
-                }
+            Menu {
+                Button {
+                    Task {
+                        do { _ = try await app.request("messages.refresh"); retry += 1 }
+                        catch { model.report(error) }
+                    }
+                } label: { Label(EL("refresh"), systemImage: "arrow.clockwise") }
+                Button {
+                    guard let ids = store.value["unreadIds"]?.array, !ids.isEmpty else { return }
+                    reading = true
+                    Task {
+                        defer { reading = false }
+                        do {
+                            _ = try await app.request("messages.read", ["messageIds": .array(ids)])
+                            let value = try await app.request("messages.thread", ["uid": .integer(uid)])
+                            store.value = value
+                        } catch { model.report(error) }
+                    }
+                } label: { Label(EL("markRead"), systemImage: "checkmark.circle") }
+                .disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
             } label: {
-                Image(systemName: "arrow.clockwise").frame(minWidth: 30, minHeight: 30)
-            }.accessibilityLabel(Text(EL("refresh")))
-            Button {
-                guard let ids = store.value["unreadIds"]?.array, !ids.isEmpty else { return }
-                reading = true
-                Task {
-                    defer { reading = false }
-                    do {
-                        _ = try await app.request("messages.read", ["messageIds": .array(ids)])
-                        // Mutation invalidates observer. Re-read exact authoritative thread too.
-                        let value = try await app.request("messages.thread", ["uid": .integer(uid)])
-                        store.value = value
-                    } catch { model.report(error) }
-                }
-            } label: {
-                Image(systemName: "checkmark.circle").frame(minWidth: 30, minHeight: 30)
+                Image(systemName: "ellipsis.circle").font(.title3)
+                    .frame(minWidth: 44, minHeight: 44)
             }
-            .disabled(reading || (store.value["unreadIds"]?.array ?? []).isEmpty)
-            .accessibilityLabel(Text(EL("markRead")))
+            .accessibilityLabel(Text(PCL("moreTools")))
         }
         .font(.subheadline)
         .padding(.horizontal, 16)
@@ -92,17 +92,13 @@ private struct EditorMessageItem: Identifiable {
 }
 
 /// Conversation palette from the handoff artboard: a cool grey canvas, white
-/// incoming bubbles, and a pale blue tint for own rich bodies.
+/// incoming bubbles. Outgoing bubbles use the current app accent overlay.
 private enum ChatPalette {
     static func canvas(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(.sRGB, white: 0.07) : Color(.sRGB, red: 0.949, green: 0.949, blue: 0.973)
     }
     static func incoming(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(.sRGB, white: 0.14) : .white
-    }
-    static func ownRichTint(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(.sRGB, red: 0.13, green: 0.18, blue: 0.30)
-                        : Color(.sRGB, red: 0.894, green: 0.925, blue: 1.0)
     }
     static func dayPill(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(.sRGB, white: 0.16) : Color(.sRGB, red: 0.894, green: 0.910, blue: 0.945)
@@ -223,8 +219,6 @@ private struct EditorMessageHistory: View {
 /// column without a separate tail view that would clip rich content.
 private struct ChatBubbleShape: Shape {
     let mine: Bool
-    /// Telegram keeps a run of messages reading as one column and only the last
-    /// bubble takes the sender-side tail.
     var tail: Bool = true
 
     func path(in rect: CGRect) -> Path {
@@ -282,13 +276,12 @@ private struct EditorMessageBubble: View {
 
     private var text: String { value["content"]?.string ?? "" }
     private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
-    private var usesSolidFill: Bool { mine && value["isMarkdown"]?.bool != true }
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            // Telegram only shows a face beside the last bubble of a run; an
-            // empty slot keeps the column aligned for the rest.
+            // Show the avatar at the end of each incoming run. The reserved
+            // space keeps every bubble in the run in the same column.
             if mine {
                 Spacer(minLength: 0)
             } else {
@@ -324,7 +317,7 @@ private struct EditorMessageBubble: View {
                     if mine { Image(systemName: "checkmark") }
                 }
                 .font(.system(size: 10))
-                .foregroundStyle(usesSolidFill ? Color.white.opacity(0.85) : Color.secondary)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 13)
@@ -332,10 +325,13 @@ private struct EditorMessageBubble: View {
         .padding(.bottom, 6)
         .background {
             ChatBubbleShape(mine: mine, tail: runEnd)
-                // Rich bodies keep the light tint: their own text colours are not
-                // ours to invert, so a solid fill would make them unreadable.
-                .fill(mine ? AnyShapeStyle(usesSolidFill ? Color.accentColor : ChatPalette.ownRichTint(colorScheme))
-                      : AnyShapeStyle(ChatPalette.incoming(colorScheme)))
+                .fill(ChatPalette.incoming(colorScheme))
+                .overlay {
+                    if mine {
+                        ChatBubbleShape(mine: true, tail: runEnd)
+                            .fill(Color.accentColor.opacity(colorScheme == .dark ? 0.27 : 0.16))
+                    }
+                }
         }
         .contentShape(ChatBubbleShape(mine: mine, tail: runEnd))
         .contextMenu { Button(EL("quote")) { quote(text) } }
@@ -348,7 +344,7 @@ private struct EditorMessageBubble: View {
             else { ProgressView().controlSize(.small) }
         } else {
             Text(text)
-                .foregroundStyle(usesSolidFill ? Color.white : Color.primary)
+                .foregroundStyle(.primary)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }

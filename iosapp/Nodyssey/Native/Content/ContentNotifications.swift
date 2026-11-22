@@ -50,6 +50,7 @@ struct ContentNotifications: View {
                             if interactions.value.array?.isEmpty == true { NativeEmptyView(String(localized: "content.empty", table: "Content")) }
                         }
                     }
+                    .modifier(ConversationListStyle(isMessages: selection == "MESSAGES"))
                     .scrollContentBackground(.hidden)
                     .background(ContentSurface(canvas: true))
                     .nativeRefreshable(generation: app.generation,
@@ -106,7 +107,10 @@ struct ContentNotifications: View {
     }
     private func conversationButton(_ row: ContentIdentityRow) -> some View {
         Button { app.open("MessageThread", ["uid": .integer(row.id), "userName": .string(row.value.nativeString("userName") ?? "")]) }
-        label: { ContentConversationRow(value: row.value) }.buttonStyle(.plain)
+        label: { ContentConversationRow(value: row.value) }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
+        .listRowBackground(Color.clear)
     }
     private struct NotificationGroup: Identifiable { let id: String; var rows: [Row] }
     private var notificationGroups: [NotificationGroup] {
@@ -208,33 +212,67 @@ struct ContentNotificationRow: View {
     }
 }
 
+private struct ConversationListStyle: ViewModifier {
+    let isMessages: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if isMessages { content.listStyle(.plain) }
+        else { content }
+    }
+}
+
 struct ContentConversationRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let value: JSONValue
     var body: some View {
         let unread = max(0, value.nativeInt("unreadCount") ?? 0)
-        HStack(alignment: .top, spacing: 10) {
+        HStack(spacing: 12) {
             if value.nativeBool("isSystem") == true {
                 Image(systemName: "megaphone.fill").foregroundStyle(.tint)
-                    .frame(width: 40, height: 40).background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .frame(width: 46, height: 46)
+                    .background(.tint.opacity(0.12), in: Circle())
                     .accessibilityHidden(true)
-            } else { ContentAvatar(value: value) }
+            } else {
+                ContentAvatar(value: value, size: 46)
+            }
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(value.nativeString("userName") ?? "").font(.subheadline.weight(unread > 0 ? .semibold : .medium))
-                    if value.nativeBool("isSystem") == true { Image(systemName: "pin.fill").font(.caption).accessibilityLabel(Text("messages_pinned")) }
-                    Spacer(minLength: 0)
-                    if let date = value.nativeString("updatedAtText") { Text(date).font(.caption).foregroundStyle(unread > 0 ? Color.accentColor : Color.secondary) }
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(value.nativeString("userName") ?? "")
+                        .font(.body.weight(unread > 0 ? .semibold : .medium))
+                        .layoutPriority(1)
+                    if value.nativeBool("isSystem") == true {
+                        Image(systemName: "pin.fill").font(.caption2)
+                            .foregroundStyle(.secondary).accessibilityLabel(Text("messages_pinned"))
+                    }
+                    Spacer(minLength: 4)
+                    if let date = timestamp { date.font(.caption).foregroundStyle(.secondary) }
                 }
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 8) {
                     Text(snippet).font(.subheadline).foregroundStyle(.secondary)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                     Spacer(minLength: 0)
-                    if unread > 0 { Text("\(unread)").font(.caption.weight(.semibold)).foregroundStyle(.tint) }
+                    if unread > 0 {
+                        Text(unread, format: .number)
+                            .font(.caption2.weight(.semibold)).monospacedDigit()
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                    }
                 }
             }
-        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+        }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
     }
+
+    private var timestamp: Text? {
+        if let millis = value.nativeInt("updatedAtMillis"), millis > 0 {
+            let date = Date(timeIntervalSince1970: Double(millis) / 1_000)
+            return Calendar.current.isDateInToday(date)
+                ? Text(date, style: .time)
+                : Text(date, format: .dateTime.month(.abbreviated).day())
+        }
+        return value.nativeString("updatedAtText").map { Text(verbatim: $0) }
+    }
+
     private var snippet: String {
         let keys = ["IMAGE": "image", "STICKER": "sticker", "CODE": "code", "TABLE": "table", "VOTE": "vote", "PAYMENT": "payment"]
         let body = value.nativeArray("snippet").map { part in
