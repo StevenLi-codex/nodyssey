@@ -32,6 +32,14 @@ enum ContentBackSwipe {
         current - start - reported
     }
 
+    static func cardFrame(from start: CGRect, to target: CGRect, progress: CGFloat) -> CGRect {
+        let fraction = min(1, max(0, progress))
+        return CGRect(x: start.minX + (target.minX - start.minX) * fraction,
+                      y: start.minY + (target.minY - start.minY) * fraction,
+                      width: start.width + (target.width - start.width) * fraction,
+                      height: start.height + (target.height - start.height) * fraction)
+    }
+
     static func settleDuration(progress: Double, width: Double, velocity: Double, completing: Bool) -> Double {
         let remaining = width * (completing ? 1 - progress : progress)
         let speed = max(750, min(2_400, completing ? velocity : -velocity))

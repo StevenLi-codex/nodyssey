@@ -688,7 +688,7 @@ struct ContentPagedList: View {
                                                    onMenuStateChanged: { menu, active in
                                                        if active { previewMenus.insert(menu); boardMotion?.update { $0.revoke() } }
                                                        else { previewMenus.remove(menu) }
-                                                   }) : nil)
+                                                   }) : nil, returnCardID: isHome ? row.id : nil)
                             }
                         }.id(row.id)
                             .background {

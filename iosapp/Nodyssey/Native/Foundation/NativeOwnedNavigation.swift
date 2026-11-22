@@ -102,6 +102,24 @@ extension EnvironmentValues {
     }
 }
 
+/// The retained Home page owns this marker. It moves with the real row and
+/// disappears with List virtualization, leaving a natural slide fallback.
+struct NativePostReturnCard: UIViewRepresentable {
+    let postID: Int64
+
+    func makeUIView(context: Context) -> Marker {
+        let marker = Marker()
+        marker.isUserInteractionEnabled = false
+        return marker
+    }
+
+    func updateUIView(_ marker: Marker, context: Context) { marker.postID = postID }
+
+    final class Marker: UIView {
+        var postID: Int64?
+    }
+}
+
 @MainActor final class NativeOwnedNavigationController: UIViewController, UIGestureRecognizerDelegate {
     private final class Page: UIHostingController<AnyView> {
         let id: UUID?
@@ -146,6 +164,7 @@ extension EnvironmentValues {
         var translationCorrection = CGPoint.zero
         var releaseVelocity: CGFloat = 0
         var drivenByThread = false
+        var cardZoom: (clip: UIView, snapshot: UIView, start: CGRect, target: CGRect)?
         var startX: Double
         var dragOrigin: CGFloat = 0
         var progress: CGFloat = 0
@@ -503,7 +522,7 @@ extension EnvironmentValues {
         guard active, !identityRevoked, view.window != nil, let id = visible?.id,
               pages.count > 1, projection == nil, ordinaryBack == nil else { return false }
         if let motion {
-            guard motion.from.id == id, motion.width == view.bounds.width, motion.animator?.state == .active,
+            guard motion.cardZoom == nil, motion.from.id == id, motion.width == view.bounds.width, motion.animator?.state == .active,
                   app.canResumeInteractivePop(motion.lease) else { return false }
         } else if !app.canBeginInteractivePop(stack: stack, from: id) { return false }
         var controller: UIViewController? = visible
@@ -673,6 +692,9 @@ extension EnvironmentValues {
         to.surface.isUserInteractionEnabled = false
         to.surface.accessibilityElementsHidden = true
         view.bringSubviewToFront(from.surface)
+        if returningHome, !reduceMotion, let postID = app.homePath.last?.arguments["postId"]?.int {
+            installCardZoom(motion, postID: postID)
+        }
         return motion
     }
 
@@ -745,7 +767,54 @@ extension EnvironmentValues {
         return true
     }
 
+    private func installCardZoom(_ motion: Motion, postID: Int64) {
+        func visibleCard(in node: UIView) -> CGRect? {
+            guard !node.isHidden, node.alpha > 0.01 else { return nil }
+            if let marker = node as? NativePostReturnCard.Marker, marker.postID == postID {
+                let frame = marker.convert(marker.bounds, to: view)
+                var visible = frame.intersection(view.bounds)
+                var ancestor = marker.superview
+                while let parent = ancestor, parent !== view {
+                    if parent.clipsToBounds {
+                        visible = visible.intersection(parent.convert(parent.bounds, to: view))
+                    }
+                    ancestor = parent.superview
+                }
+                if visible.width >= frame.width - 1 && visible.height >= frame.height - 1,
+                   frame.width > 1, frame.height > 1 { return frame }
+            }
+            for child in node.subviews {
+                if let frame = visibleCard(in: child) { return frame }
+            }
+            return nil
+        }
+        guard let target = visibleCard(in: motion.to.surface),
+              let snapshot = motion.from.surface.snapshotView(afterScreenUpdates: false) else { return }
+        let start = motion.from.surface.frame
+        let clip = UIView(frame: start)
+        clip.isUserInteractionEnabled = false
+        clip.accessibilityElementsHidden = true
+        clip.clipsToBounds = true
+        snapshot.frame = clip.bounds
+        clip.addSubview(snapshot)
+        view.addSubview(clip)
+        motion.cardZoom = (clip, snapshot, start, target)
+        // The SwiftUI recognizer keeps its original hit surface. Only the
+        // captured presentation is transformed, so TextKit never remeasures.
+        motion.from.surface.layer.mask = CALayer()
+    }
+
     private func render(_ motion: Motion, progress: CGFloat) {
+        if let zoom = motion.cardZoom {
+            let frame = ContentBackSwipe.cardFrame(from: zoom.start, to: zoom.target, progress: progress)
+            zoom.clip.frame = frame
+            let scale = max(frame.width / zoom.start.width, frame.height / zoom.start.height)
+            zoom.snapshot.center = CGPoint(x: frame.width / 2, y: frame.height / 2)
+            zoom.snapshot.transform = CGAffineTransform(scaleX: scale, y: scale)
+            zoom.clip.layer.cornerRadius = 12 * progress
+            zoom.clip.alpha = min(1, (1 - progress) * 5)
+            return
+        }
         let span = motion.width * (motion.rightToLeft ? -1 : 1)
         motion.from.surface.transform = CGAffineTransform(translationX: span * progress, y: 0)
         let remaining = 1 - progress
@@ -820,6 +889,7 @@ extension EnvironmentValues {
         guard self.motion === motion else { return }
         if committed, motion.to.surface.superview === view, pages.last === motion.from,
            pages.dropLast().last === motion.to, app.commitInteractivePop(motion.lease, visible: motion.to.id) {
+            removeCardZoom(motion)
             self.motion = nil
             pages.removeLast()
             showOnly(motion.to)
@@ -828,6 +898,7 @@ extension EnvironmentValues {
             cancel(motion)
             return
         } else {
+            removeCardZoom(motion)
             self.motion = nil
             app.cancelInteractivePop(motion.lease)
             showOnly(motion.from)
@@ -839,6 +910,13 @@ extension EnvironmentValues {
         let reapply = deferredProjection
         deferredProjection = nil
         reapply?()
+    }
+
+    private func removeCardZoom(_ motion: Motion) {
+        guard let zoom = motion.cardZoom else { return }
+        zoom.clip.removeFromSuperview()
+        motion.from.surface.layer.mask = nil
+        motion.cardZoom = nil
     }
 
     private var deferredProjection: (() -> Void)?

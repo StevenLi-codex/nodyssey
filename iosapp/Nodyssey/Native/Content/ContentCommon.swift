@@ -71,6 +71,7 @@ struct ContentPostRow: View {
     var openAuthor: ((Int64) -> Void)? = nil
     var transitionSource: NativePostTransition.Source? = nil
     var previewItem: ContentPostPreviewItem? = nil
+    var returnCardID: Int64? = nil
     var body: some View {
         let summary = value["summary"] ?? value
         postAction {
@@ -100,6 +101,16 @@ struct ContentPostRow: View {
             }
         }
         .nativePostTransitionSource(transitionSource)
+        #if os(iOS)
+        .background {
+            if let returnCardID {
+                NativePostReturnCard(postID: returnCardID)
+                    .padding(.horizontal, NativeFeedLayout.horizontalInset)
+                    .padding(.vertical, 4)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        #endif
     }
     private func card(_ summary: JSONValue) -> some View {
         VStack(alignment: .leading, spacing: 6) {
