@@ -3,6 +3,11 @@ import Testing
 @testable import NativeContentState
 
 @Suite struct ContentBackSwipeTests {
+    @Test func fullWidthVerticalListDoesNotOwnHorizontalTravelWithSideInsets() {
+        #expect(!ContentBackSwipe.hasHorizontalContent(contentWidth: 390, boundsWidth: 390, leftInset: 16, rightInset: 16))
+        #expect(ContentBackSwipe.hasHorizontalContent(contentWidth: 520, boundsWidth: 390, leftInset: 16, rightInset: 16))
+    }
+
     @Test func deliberateLeadingEdgeSwipeRequestsReturn() {
         #expect(ContentBackSwipe.shouldReturn(startX: 8, width: 400,
             translationX: 240, translationY: 12, predictedX: 280))

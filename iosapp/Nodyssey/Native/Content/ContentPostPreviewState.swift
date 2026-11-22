@@ -114,6 +114,7 @@ struct ContentFeedBoardSwipeTrace {
         let origin: CGPoint
         let index: Int
         let rightToLeft: Bool
+        let pageWidth: CGFloat
         let animated: Bool
 
         func displacement(x: CGFloat, y: CGFloat) -> CGPoint { .init(x: x - origin.x, y: y - origin.y) }
@@ -124,7 +125,7 @@ struct ContentFeedBoardSwipeTrace {
             let maximum = CGFloat(min(last, index + 1))
             let direction: CGFloat = rightToLeft ? 1 : -1
             let travel = delta.x / 112
-            let position = base.boardPosition + direction * travel
+            let position = base.boardPosition + direction * delta.x / pageWidth
 
             // Clamp the resulting pose, not the direction. A caught settle may
             // start displaced even on an edge; reversal can always unwind it.
@@ -148,12 +149,12 @@ struct ContentFeedBoardSwipeTrace {
     func isSettling(on board: String) -> Bool { settle?.scope.board == board }
 
     mutating func begin(gesture: UUID, context: ContentFeedBoardSwipeContext, x: CGFloat, y: CGFloat,
-                        rightToLeft: Bool, now: TimeInterval, animated: Bool = true) {
+                        rightToLeft: Bool, now: TimeInterval, animated: Bool = true, pageWidth: CGFloat = 112) {
         guard gestureID == nil else { return }
         gestureID = gesture
         let scope = context.scope
         // Even a rejected first sample owns its sequence until a real terminal.
-        guard scope.isHomeRoot, x.isFinite, y.isFinite, x != 0,
+        guard scope.isHomeRoot, x.isFinite, y.isFinite, x != 0, pageWidth.isFinite, pageWidth > 0,
               abs(x) >= abs(y) * ContentFeedBoardSwipe.horizontalDominance,
               let index = scope.orderedBoards.firstIndex(of: scope.board) else { return }
         let current = context.current.flatMap { $0.scope == scope ? $0 : nil }
@@ -166,7 +167,7 @@ struct ContentFeedBoardSwipeTrace {
         let drag = Drag(scope: scope, owner: current, visualOwner: current,
                         base: grabbed ?? .init(offset: 0, boardPosition: CGFloat(index)),
                         origin: grabbed == nil ? .init(x: 0, y: 0) : .init(x: x, y: y), index: index,
-                        rightToLeft: rightToLeft, animated: animated)
+                        rightToLeft: rightToLeft, pageWidth: pageWidth, animated: animated)
         self.drag = drag
         if animated { held = drag.presentation(drag.displacement(x: x, y: y)) }
     }

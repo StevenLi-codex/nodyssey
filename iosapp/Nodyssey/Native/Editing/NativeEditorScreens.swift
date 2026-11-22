@@ -88,6 +88,7 @@ private struct EditorHost: View {
     @State private var generation: Int?
     @State private var sheet: EditorPanel?
     @State private var showPhotos = false
+    @State private var showMessageAttachments = false
     @State private var confirmPublish = false
     @State private var confirmDelete = false
     @State private var confirmRestore = false
@@ -113,6 +114,18 @@ private struct EditorHost: View {
     private var submitTitle: String {
         if case .edit = session.mode { return EL("save") }
         return EL(isMessage ? "send" : "publishReply")
+    }
+    private var submitDisabled: Bool {
+        !model.ready || session.busy || session.pendingRestore != nil ||
+            session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !model.attachments.isEmpty || (!isMessage && session.accepted)
+    }
+    private var composerField: some View {
+        NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
+                            hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
+            .frame(minHeight: isMessage ? 48 : 80, maxHeight: isMessage ? 120 : .infinity)
+            .padding(.horizontal, 7)
+            .padding(.top, 8)
     }
     private var permissionTitle: String {
         if session.permission == 0 { return PCL("permissionPublic") }
@@ -168,14 +181,50 @@ private struct EditorHost: View {
                     else if model.failure == nil { ProgressView() }
                 }
             } else {
-                NativeComposerField(buffer: bodyBinding, focus: model.focus, accessibilityLabel: EL("body"),
-                                    hint: session.mode.showsTitle ? PCL("bodyHint") : EL("body"))
-                    .frame(minHeight: isMessage ? 48 : 80, maxHeight: isMessage ? 120 : .infinity)
-                    .padding(.horizontal, 7)
-                    .padding(.top, 8)
-                    // A conversation answers in a single field, not a page body:
-                    // keep every control, give the input its own rounded surface.
-                    .modifier(MessageInputSurface(enabled: isMessage))
+                if isMessage {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        Button {
+                            showMessageAttachments = true
+                        } label: {
+                            Image(systemName: "paperclip").frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel(Text(EL("IMAGE")))
+                        .disabled(!model.ready || session.busy)
+                        .confirmationDialog(EL("IMAGE"), isPresented: $showMessageAttachments,
+                                            titleVisibility: .visible) {
+                            Button {
+                                model.focus.handoff { showPhotos = true }
+                            } label: {
+                                Label(EL("IMAGE"), systemImage: "photo")
+                            }
+                            Button {
+                                openPanel(.hosted)
+                            } label: {
+                                Label(EL("HOSTED_IMAGE"), systemImage: "photo.on.rectangle")
+                            }
+                        }
+
+                        composerField
+                            .modifier(MessageInputSurface(enabled: true))
+
+                        Button {
+                            model.focus.handoff { confirmPublish = true }
+                        } label: {
+                            if session.busy {
+                                ProgressView().frame(width: 44, height: 44)
+                            } else {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 32))
+                                    .frame(width: 44, height: 44)
+                            }
+                        }
+                        .accessibilityLabel(Text(submitTitle))
+                        .disabled(submitDisabled)
+                    }
+                    .padding(.horizontal, 12)
+                } else {
+                    composerField
+                }
             }
             if isMessage {
                 Toggle(EL("markdown"), isOn: Binding(get: { session.markdown }, set: { session.markdown = $0; session.changed() })).padding(.horizontal)
@@ -212,14 +261,16 @@ private struct EditorHost: View {
                     Label(EL(model.previewing ? "edit" : "preview"), systemImage: model.previewing ? "pencil" : "eye")
                         .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                 }
-                Button {
-                    model.focus.handoff { confirmPublish = true }
-                } label: {
-                    HStack(spacing: 6) {
-                        if session.busy { ProgressView().controlSize(.small) }
-                        Text(submitTitle)
-                    }.frame(minHeight: 44)
-                }.disabled(!model.ready || session.busy || session.pendingRestore != nil || session.body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty || (!isMessage && session.accepted))
+                if !isMessage || model.previewing {
+                    Button {
+                        model.focus.handoff { confirmPublish = true }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if session.busy { ProgressView().controlSize(.small) }
+                            Text(submitTitle)
+                        }.frame(minHeight: 44)
+                    }.disabled(submitDisabled)
+                }
             }
         }
         .sheet(item: $sheet) { panel in

@@ -567,11 +567,9 @@ extension EnvironmentValues {
     private static func ownsHorizontalDrag(_ scroll: UIScrollView) -> Bool {
         scroll.isScrollEnabled && (scroll.isPagingEnabled || scroll.alwaysBounceHorizontal ||
             scroll.maximumZoomScale > scroll.minimumZoomScale ||
-            // Content insets were being added to the content width, so an
-            // ordinary vertical list whose rows are exactly as wide as the view
-            // counted as horizontally scrollable and blocked Back over its whole
-            // body. Compare the content against the visible width instead.
-            scroll.contentSize.width > scroll.bounds.width - scroll.adjustedContentInset.left - scroll.adjustedContentInset.right + 1)
+            ContentBackSwipe.hasHorizontalContent(contentWidth: scroll.contentSize.width,
+                boundsWidth: scroll.bounds.width, leftInset: scroll.adjustedContentInset.left,
+                rightInset: scroll.adjustedContentInset.right))
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {

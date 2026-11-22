@@ -22,6 +22,9 @@
 "selected" = "当前上传图床";
 "selectHost" = "选用此图床";
 "testBrowse" = "测试连接并浏览";
+"testingConnection" = "正在测试连接…";
+"connectionSucceeded" = "连接成功";
+"remoteImageDeleted" = "图片已从图床删除";
 "uploadOnly" = "此服务商仅支持上传，不支持远端图库、删除或不上传的连接测试。";
 "disconnect" = "断开连接";
 "clearSecrets" = "清除所选已保存凭证？";

@@ -84,6 +84,7 @@ private struct EditorMessageItem: Identifiable {
     let mine: Bool
     /// Last bubble of one sender's run: carries the tail, incoming avatar and time.
     let runEnd: Bool
+    let startsRun: Bool
     let dayLabel: String?
     var id: String? { value["id"]?.string }
 }
@@ -114,11 +115,16 @@ private struct EditorMessageHistory: View {
         messages.indices.map { index in
             let value = messages[index]
             let mine = value["isMine"]?.bool == true
-            let next = index + 1 < messages.count ? messages[index + 1] : nil
-            let sameRun = next.map { ($0["isMine"]?.bool == true) == mine } ?? false
             let day = editorMessageDay(value["sentAtText"]?.string)
+            func belongsToRun(_ neighbor: Int) -> Bool {
+                guard messages.indices.contains(neighbor) else { return false }
+                let other = messages[neighbor]
+                return (other["isMine"]?.bool == true) == mine &&
+                    editorMessageDay(other["sentAtText"]?.string) == day
+            }
             let previousDay = index > 0 ? editorMessageDay(messages[index - 1]["sentAtText"]?.string) : nil
-            return EditorMessageItem(value: value, mine: mine, runEnd: !sameRun,
+            return EditorMessageItem(value: value, mine: mine, runEnd: !belongsToRun(index + 1),
+                                     startsRun: !belongsToRun(index - 1),
                                      dayLabel: day != nil && day != previousDay ? day : nil)
         }
     }
@@ -142,7 +148,7 @@ private struct EditorMessageHistory: View {
                                 EditorMessageBubble(value: item.value, mine: item.mine, runEnd: item.runEnd,
                                                     peer: peer, maxWidth: max(160, viewport.size.width * 0.76),
                                                     quote: quote)
-                                    .padding(.top, item.runEnd ? 8 : 1)
+                                    .padding(.top, item.startsRun && item.dayLabel == nil ? 8 : 1)
                                     .id(id)
                             }
                         }
@@ -255,12 +261,15 @@ private struct EditorMessageBubble: View {
 
     private var text: String { value["content"]?.string ?? "" }
     private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
+    private var usesSolidFill: Bool { mine && value["isMarkdown"]?.bool != true }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             // Telegram only shows a face beside the last bubble of a run; an
             // empty slot keeps the column aligned for the rest.
-            if !mine {
+            if mine {
+                Spacer(minLength: 0)
+            } else {
                 if runEnd { ChatAvatar(name: peer, size: 26) } else { Color.clear.frame(width: 26, height: 1) }
             }
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
@@ -268,7 +277,7 @@ private struct EditorMessageBubble: View {
                     .frame(maxWidth: maxWidth, alignment: mine ? .trailing : .leading)
                 if let failure { Text(failure.message).font(.caption2).foregroundStyle(.secondary) }
             }
-            Spacer(minLength: 0)
+            if !mine { Spacer(minLength: 0) }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         .task(id: "\(app.generation):\(retry):\(text)") {
@@ -287,13 +296,13 @@ private struct EditorMessageBubble: View {
     private var bubble: some View {
         VStack(alignment: .trailing, spacing: 3) {
             content
-            if let clock {
+            if runEnd, let clock {
                 HStack(spacing: 3) {
                     Text(clock)
                     if mine { Image(systemName: "checkmark") }
                 }
                 .font(.caption2)
-                .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
+                .foregroundStyle(usesSolidFill ? Color.white.opacity(0.85) : Color.secondary)
             }
         }
         .padding(.horizontal, 11)
@@ -317,7 +326,7 @@ private struct EditorMessageBubble: View {
             else { ProgressView().controlSize(.small) }
         } else {
             Text(text)
-                .foregroundStyle(mine && value["isMarkdown"]?.bool != true ? Color.white : Color.primary)
+                .foregroundStyle(usesSolidFill ? Color.white : Color.primary)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }

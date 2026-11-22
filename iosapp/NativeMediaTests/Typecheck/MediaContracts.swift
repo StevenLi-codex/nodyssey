@@ -12,6 +12,7 @@ import NodysseyNativeCore
     var value: JSONValue { fatalError("signature only") }
     var failure: NativeFailure? { fatalError("signature only") }
     var isLoading: Bool { fatalError("signature only") }
+    func load(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async { fatalError("signature only") }
     func observe(_ app: NativeAppModel, _ operation: String, _ arguments: [String: JSONValue] = [:]) async { fatalError("signature only") }
 }
 struct NativeRemoteImage: View {

@@ -1,5 +1,7 @@
 import SwiftUI
 
+#if os(iOS)
+
 /// Horizontal board pager for the Home feed.
 ///
 /// Boards are pages of one native page controller rather than a hand-rolled
@@ -35,3 +37,4 @@ struct ContentBoardPager<Page: View>: View {
                 })
     }
 }
+#endif

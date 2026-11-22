@@ -22,6 +22,9 @@
 "selected" = "Current upload host";
 "selectHost" = "Use this host";
 "testBrowse" = "Test connection and browse";
+"testingConnection" = "Testing connection…";
+"connectionSucceeded" = "Connection successful";
+"remoteImageDeleted" = "Image deleted from the host";
 "uploadOnly" = "This provider supports uploading only; no remote listing, deletion, or non-upload connection test is available.";
 "disconnect" = "Disconnect";
 "clearSecrets" = "Clear the selected saved credentials?";

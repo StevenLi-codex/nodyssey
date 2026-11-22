@@ -22,6 +22,9 @@
 "selected" = "目前上傳圖床";
 "selectHost" = "選用此圖床";
 "testBrowse" = "測試連線並瀏覽";
+"testingConnection" = "正在測試連線…";
+"connectionSucceeded" = "連線成功";
+"remoteImageDeleted" = "圖片已從圖床刪除";
 "uploadOnly" = "此服務商僅支援上傳，不支援遠端圖庫、刪除或不上傳的連線測試。";
 "disconnect" = "中斷連線";
 "clearSecrets" = "清除所選已儲存憑證？";

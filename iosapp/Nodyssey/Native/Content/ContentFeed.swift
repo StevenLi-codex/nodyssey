@@ -12,6 +12,7 @@ struct ContentPostList: View {
     @State private var manageBoards = false
     @State private var category = ""
     @State private var boardMotion = ContentFeedBoardMotion()
+    @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.nativeCardMotionDisabled) private var motionDisabled
     @State private var pageJumpRequest: ContentHomePageJumpIntent?
@@ -32,21 +33,7 @@ struct ContentPostList: View {
             if app.site.nativeBool("requiresRestart") == true {
                 Text("native_settings_site_pending", tableName: "Settings").font(.caption).foregroundStyle(.secondary)
             }
-            feedWithHomeChrome {
-                ContentPagedList(operation: "feed", arguments: arguments,
-                                 restoreID: positions.position(board: category, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
-                                 replacePage: { target in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    page = target
-                }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs, boardMotion: boardMotion,
-                                 selectHomeBoard: { target in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    selectBoard(target)
-                }, visible: { id, rowPage in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
-                })
-            }
+            feedWithHomeChrome { boardPages }
         }
         .background(ContentSurface(canvas: true))
         .navigationTitle(app.siteName ?? String(localized: "content.posts", table: "Content"))
@@ -185,8 +172,11 @@ struct ContentPostList: View {
             identityEpoch: app.session.nativeString("identityEpoch"), board: category, orderedBoards: homeBoardSlugs,
             isHomeRoot: app.selectedTab == .home && app.homePath.isEmpty && app.sheet == nil && !app.departureRunning,
             site: app.site.nativeString("current"), sort: sort)
+        let adjacent = zip(homeBoardSlugs, homeBoardSlugs.dropFirst()).contains {
+            ($0.0 == category && $0.1 == slug) || ($0.1 == category && $0.0 == slug)
+        }
         boardMotion.update { $0.tap(scope: scope, target: slug, now: ProcessInfo.processInfo.systemUptime,
-                                    animated: !reduceMotion && !motionDisabled) }
+                                    animated: adjacent && !reduceMotion && !motionDisabled) }
         selectBoard(slug)
     }
     private func selectBoard(_ slug: String) {
@@ -203,32 +193,55 @@ struct ContentPostList: View {
         case .compose(let arguments): app.open("PostComposer", arguments)
         }
     }
-    private var pagerBoards: [String] {
-        // The combined feed is the empty slug and must stay first.
-        homeBoardSlugs.isEmpty ? [""] : homeBoardSlugs
-    }
-    /// Only the board the rail is actually showing may drive the shared page
-    /// state; a neighbour replacing its own window must not move it.
-    private func pagerReplaceTarget(_ board: String, generation: Int) -> ((Int64) -> Void)? {
-        guard board == category else { return nil }
-        return { target in
-            guard board == category, generation == app.generation, sort == self.sort else { return }
-            page = target
+    private var boardPages: some View {
+        let boards = homeBoardSlugs
+        let selectedIndex = boards.firstIndex(of: category) ?? 0
+        let adjacentBoards = boards.enumerated().filter { abs($0.offset - selectedIndex) <= 1 }.map(\.element)
+        let mountedBoards = adjacentBoards.contains(category) ? adjacentBoards : [category]
+        return GeometryReader { geometry in
+            ContentFeedBoardFrame(motion: boardMotion, board: category) { pose in
+                let position = pose?.boardPosition ?? CGFloat(selectedIndex)
+                let direction: CGFloat = layoutDirection == .rightToLeft ? -1 : 1
+                ZStack {
+                    ForEach(mountedBoards, id: \.self) { board in
+                        let index = boards.firstIndex(of: board) ?? selectedIndex
+                        let offset = (CGFloat(index) - position) * geometry.size.width * direction
+                        boardPage(board)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .offset(x: offset)
+                            .allowsHitTesting(board == category)
+                            .accessibilityHidden(board != category)
+                    }
+                }
+            }
         }
     }
-    /// Each page owns its own feed arguments; a neighbour opens on its saved
-    /// page, never on the page the current board happens to be showing.
-    private func pagerArguments(_ board: String) -> [String: JSONValue] {
-        var value: [String: JSONValue] = ["sort": .string(sort),
-                                          "page": .integer(board == category ? page : (positions.position(board: board, sort: sort)?.page ?? 1))]
-        if !board.isEmpty { value["categorySlug"] = .string(board) }
-        return value
+
+    private func boardPage(_ board: String) -> some View {
+        let active = board == category
+        let ownerSort = sort
+        let ownerGeneration = app.generation
+        let saved = positions.position(board: board, sort: ownerSort)
+        let boardPage = active ? page : (saved?.page ?? 1)
+        var arguments: [String: JSONValue] = ["sort": .string(ownerSort), "page": .integer(boardPage)]
+        if !board.isEmpty { arguments["categorySlug"] = .string(board) }
+
+        return ContentPagedList(operation: "feed", arguments: arguments,
+                                restoreID: saved.flatMap { $0.page == boardPage ? $0.postID : nil },
+                                replacePage: active ? { target in
+            guard ownerGeneration == app.generation, board == category, ownerSort == sort else { return }
+            page = target
+        } : nil, pageJumpRequest: active ? $pageJumpRequest : .constant(nil),
+                                homeBoardSlugs: homeBoardSlugs, boardMotion: active ? boardMotion : nil,
+                                selectHomeBoard: { target in
+            guard ownerGeneration == app.generation, board == category, ownerSort == sort else { return }
+            selectBoard(target)
+        }, visible: { id, rowPage in
+            guard ownerGeneration == app.generation, board == category, ownerSort == sort else { return }
+            positions.record(board: board, sort: ownerSort, postID: id, page: rowPage)
+        })
     }
-    private var arguments: [String: JSONValue] {
-        var value: [String: JSONValue] = ["sort": .string(sort), "page": .integer(page)]
-        if !category.isEmpty { value["categorySlug"] = .string(category) }
-        return value
-    }
+
     private func refreshCategories() async {
         do { _ = try await app.request("categories.refresh") }
         catch is CancellationError { }
@@ -332,24 +345,6 @@ private struct ContentFeedBoardFrame<Frame: View>: View {
     var body: some View {
         TimelineView(.animation(paused: motion.visual.settleID == nil)) { _ in
             frame(motion.visual.presentation(board: board, now: ProcessInfo.processInfo.systemUptime))
-        }
-    }
-}
-
-private struct ContentFeedBoardOffset: ViewModifier {
-    let motion: ContentFeedBoardMotion?
-    let board: String
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if let motion {
-            ContentFeedBoardFrame(motion: motion, board: board) { pose in
-                let presentation = pose ?? .init(offset: 0, boardPosition: 0)
-                // The owned host clips to the window. Clipping here would
-                // instead crop the List at the tab and toolbar safe areas.
-                content.offset(x: presentation.offset)
-            }
-        } else {
-            content
         }
     }
 }
@@ -718,7 +713,7 @@ struct ContentPagedList: View {
                 }
                 loadState("append", proxy: proxy)
                 loadState("refresh", proxy: proxy)
-                if !isHome, let total = store.value.nativeInt("totalPages") { Text("\(total)").accessibilityLabel(Text(String(localized: "content.totalPages", table: "Content"))) }
+                if operation != "feed", let total = store.value.nativeInt("totalPages") { Text("\(total)").accessibilityLabel(Text(String(localized: "content.totalPages", table: "Content"))) }
               }
               .listRowBackground(ContentSurface(canvas: true))
             }
@@ -727,12 +722,11 @@ struct ContentPagedList: View {
             #if os(iOS)
             .background {
                 if let boardMotion {
-                    ContentFeedBoardPan { event in handleBoardPan(event, motion: boardMotion) }
+                    ContentFeedBoardPan { event in handleBoardPan(event, motion: boardMotion, pageWidth: viewport.size.width) }
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             #endif
-            .modifier(ContentFeedBoardOffset(motion: boardMotion, board: pageJumpScope.board))
             // This separate gesture only restores the existing vertical Paging hints.
             .simultaneousGesture(DragGesture(minimumDistance: 10, coordinateSpace: .global)
                 .onChanged { gesture in
@@ -957,7 +951,7 @@ struct ContentPagedList: View {
         .onAppear { isVisible = true }
     }
     #if os(iOS)
-    private func handleBoardPan(_ event: ContentFeedBoardPan.Event, motion: ContentFeedBoardMotion) {
+    private func handleBoardPan(_ event: ContentFeedBoardPan.Event, motion: ContentFeedBoardMotion, pageWidth: CGFloat) {
         let context = boardSwipeContext
         let now = ProcessInfo.processInfo.systemUptime
         var target: String?
@@ -965,7 +959,7 @@ struct ContentPagedList: View {
             switch event {
             case .began(let id, let point):
                 trace.begin(gesture: id, context: context, x: point.x, y: point.y,
-                            rightToLeft: layoutDirection == .rightToLeft, now: now, animated: animateBoardSwipe)
+                            rightToLeft: layoutDirection == .rightToLeft, now: now, animated: animateBoardSwipe, pageWidth: pageWidth)
             case .changed(let id, let point):
                 trace.change(gesture: id, context: context, x: point.x, y: point.y)
             case .ended(let id, let point):

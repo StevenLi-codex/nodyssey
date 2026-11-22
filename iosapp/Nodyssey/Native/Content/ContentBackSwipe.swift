@@ -3,6 +3,14 @@ import Foundation
 /// Geometry shared by the owned container's admission, live slide and release.
 /// The start coordinate is bounded to the content, not to a leading-edge strip.
 enum ContentBackSwipe {
+    static func hasHorizontalContent(contentWidth: Double, boundsWidth: Double,
+                                     leftInset: Double, rightInset: Double) -> Bool {
+        // Insets may reduce the effective content area, but cannot make a
+        // full-width vertical list a horizontal gesture owner.
+        let availableWidth = max(boundsWidth, boundsWidth - leftInset - rightInset)
+        return contentWidth > availableWidth + 1
+    }
+
     static func begins(velocityX: Double, velocityY: Double, rightToLeft: Bool) -> Bool {
         velocityX.isFinite && velocityY.isFinite && directed(velocityX, rightToLeft) > abs(velocityY) * 1.5
     }

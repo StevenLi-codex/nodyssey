@@ -28,6 +28,9 @@ saveNotTest|Saving does not verify remote credentials. Select this host before b
 selected|Current upload host|当前上传图床|目前上傳圖床
 selectHost|Use this host|选用此图床|選用此圖床
 testBrowse|Test connection and browse|测试连接并浏览|測試連線並瀏覽
+testingConnection|Testing connection…|正在测试连接…|正在測試連線…
+connectionSucceeded|Connection successful|连接成功|連線成功
+remoteImageDeleted|Image deleted from the host|图片已从图床删除|圖片已從圖床刪除
 uploadOnly|This provider supports uploading only; no remote listing, deletion, or non-upload connection test is available.|此服务商仅支持上传，不支持远端图库、删除或不上传的连接测试。|此服務商僅支援上傳，不支援遠端圖庫、刪除或不上傳的連線測試。
 disconnect|Disconnect|断开连接|中斷連線
 clearSecrets|Clear the selected saved credentials?|清除所选已保存凭证？|清除所選已儲存憑證？
