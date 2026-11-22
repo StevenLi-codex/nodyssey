@@ -59,10 +59,14 @@ struct NativeRootView: View {
         case .profile: app.selectedTab == .profile && app.sheet == nil
         case .sheet: app.sheet?.id == rootID
         }
-        // Keep the native tab bar. Only the Home root's scroll surface needs
-        // to reach behind it; destinations and sheet keyboard layout do not.
-        let scrollEdges: Edge.Set = if #available(iOS 26.0, *), stack == .home, app.homePath.isEmpty, app.sheet == nil {
-            [.top, .bottom]
+        // The floating tab bar overlays the Home and Notifications root scroll
+        // surfaces. Only Home's rail extends into the top container edge.
+        let scrollEdges: Edge.Set = if #available(iOS 26.0, *), app.sheet == nil, app.path(for: stack).isEmpty {
+            switch stack {
+            case .home: [.top, .bottom]
+            case .notifications: .bottom
+            case .profile, .sheet: []
+            }
         } else { [] }
         NativeOwnedNavigation(app: app, stack: stack, rootID: rootID, path: app.path(for: stack),
                               isActive: active, root: AnyView(root()))
