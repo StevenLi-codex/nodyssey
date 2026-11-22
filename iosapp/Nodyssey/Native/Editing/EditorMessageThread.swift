@@ -123,6 +123,7 @@ private func editorMessageClock(_ text: String?) -> String? {
 }
 
 private struct EditorMessageHistory: View {
+    @Environment(\.colorScheme) private var colorScheme
     let scope: EditorMessageFollowState.Scope
     let messages: [JSONValue]
     let peer: String
