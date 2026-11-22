@@ -149,7 +149,8 @@ final class NativeSelectableTextView: UITextView {
 
     override func loadView() {
         textView.isEditable = false
-        textView.isSelectable = true
+        textView.isSelectable = false
+        textView.selectionActive = false
         textView.isScrollEnabled = false
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
@@ -169,9 +170,11 @@ final class NativeSelectableTextView: UITextView {
         guard environment.nativeRichSelectionActive else { revoke(); return }
         let contentChanged = inlines != nodes
         if contentChanged { revoke() }
-        isActive = true
-        textView.selectionActive = true
-        textView.isSelectable = true
+        if !isActive {
+            isActive = true
+            textView.selectionActive = true
+            textView.isSelectable = true
+        }
         inlines = nodes
         self.actions = actions
         let category = environment.dynamicTypeSize.nativeContentSizeCategory
@@ -182,6 +185,7 @@ final class NativeSelectableTextView: UITextView {
         let base = UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traits)
         let color: UIColor = role == .signature ? .secondaryLabel : .label
         let output = NSMutableAttributedString(string: "")
+        var attachmentGeometryChanged = false
         for (index, node) in nodes.enumerated() {
             var style = NativeInlineStyle()
             let string: String
@@ -201,7 +205,11 @@ final class NativeSelectableTextView: UITextView {
                 let size: CGSize
                 if case .sticker = node { size = CGSize(width: stickerSize, height: stickerSize) }
                 else { size = CGSize(width: inTable ? 120 : 96, height: inTable ? 90 : 72) }
-                attachment.renderingBounds = CGRect(origin: CGPoint(x: 0, y: base.descender), size: size)
+                let bounds = CGRect(origin: CGPoint(x: 0, y: base.descender), size: size)
+                if attachment.renderingBounds != bounds {
+                    attachment.renderingBounds = bounds
+                    attachmentGeometryChanged = true
+                }
                 var fenced = actions
                 let token = revision
                 fenced.onImage = actions.onImage.map { action in { [weak self] url, alt in
@@ -231,8 +239,11 @@ final class NativeSelectableTextView: UITextView {
             let sameString = textView.attributedText.string == output.string
             textView.attributedText = output
             if sameString && NSMaxRange(selection) <= output.length { textView.selectedRange = selection }
+        } else if attachmentGeometryChanged {
+            textView.invalidateIntrinsicContentSize()
         }
-        textView.invalidateIntrinsicContentSize()
+        // Assigning attributedText already invalidates UIKit layout. Repeated
+        // SwiftUI updates with the same paragraph must not request another pass.
     }
 
     func dispose() {
@@ -243,6 +254,7 @@ final class NativeSelectableTextView: UITextView {
 
     /// Discard hidden copy data and hosted image actions before fold/tab/identity transitions.
     func revoke() {
+        guard isActive else { return }
         isActive = false
         inlines = []
         actions = NativeRichTextActions()
