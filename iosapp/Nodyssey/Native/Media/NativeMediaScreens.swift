@@ -159,6 +159,20 @@ private struct MediaHostConfiguration: View {
                         TextField(MediaL.text("urlPath"), text: field(\.urlPath))
                         TextField(MediaL.text("urlPrefix"), text: field(\.urlPrefix))
                     }
+                } footer: {
+                    Text(MediaL.text("saveNotTest"))
+                }.disabled(action.busy)
+                Section {
+                    Label(MediaL.text(store.value["isConfigured"]?.bool == true ? "configured" : "notConfigured"), systemImage: store.value["isConfigured"]?.bool == true ? "checkmark.shield" : "exclamationmark.shield")
+                    if let problem = store.value["problem"]?.string { Text(MediaL.text("problem") + ": " + problem).font(.caption) }
+                    if !selected {
+                        Button(MediaL.text("selectHost")) { action.request(app, "imageHost.select", ["provider": .string(provider)], refresh: "imageHost.get") }
+                    }
+                }.disabled(action.busy)
+
+                // The artboard stacks its three actions under the form, primary
+                // filled, test neutral, disconnect as plain red text.
+                Section {
                     Button {
                         if draft?.token == .clear || draft?.headerValue == .clear || draft?.formFields == .clear { clearConfirmation = true }
                         else { save() }
@@ -167,27 +181,28 @@ private struct MediaHostConfiguration: View {
                             if action.busy { ProgressView().controlSize(.small) }
                             Text(MediaL.text("save")).frame(maxWidth: .infinity)
                         }
+                        .frame(minHeight: 34)
                     }
                     .buttonStyle(.borderedProminent)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                }.disabled(action.busy)
-                Section {
-                    Label(MediaL.text(store.value["isConfigured"]?.bool == true ? "configured" : "notConfigured"), systemImage: store.value["isConfigured"]?.bool == true ? "checkmark.shield" : "exclamationmark.shield")
-                    if let problem = store.value["problem"]?.string { Text(MediaL.text("problem") + ": " + problem).font(.caption) }
-                    Text(MediaL.text("saveNotTest")).font(.caption).foregroundStyle(.secondary)
-                    if selected { Label(MediaL.text("selected"), systemImage: "checkmark") }
-                    else { Button(MediaL.text("selectHost")) { action.request(app, "imageHost.select", ["provider": .string(provider)], refresh: "imageHost.get") } }
                     if capability["browsable"]?.bool == true {
                         Button {
                             showGallery = true
                         } label: {
-                            Label(MediaL.text("testBrowse"), systemImage: "bolt.horizontal.circle")
-                                .frame(maxWidth: .infinity, minHeight: 32)
+                            HStack(spacing: 6) {
+                                Image(systemName: "bolt.horizontal.circle")
+                                Text(MediaL.text("testBrowse"))
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 34)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.bordered)
                         .disabled(!selected || store.value["isConfigured"]?.bool != true)
-                    } else { Text(MediaL.text("uploadOnly")).font(.callout).foregroundStyle(.secondary) }
-                    Button(MediaL.text("disconnect"), role: .destructive) { showDisconnect = true }
+                    }
+                    Button(role: .destructive) { showDisconnect = true } label: {
+                        Text(MediaL.text("disconnect")).frame(maxWidth: .infinity, minHeight: 34)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.red)
+                } footer: {
+                    if capability["browsable"]?.bool != true { Text(MediaL.text("uploadOnly")) }
                 }.disabled(action.busy)
             }
             MediaFeedback(action: action)
