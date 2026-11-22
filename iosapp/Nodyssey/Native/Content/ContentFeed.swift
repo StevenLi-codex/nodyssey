@@ -33,19 +33,24 @@ struct ContentPostList: View {
                 Text("native_settings_site_pending", tableName: "Settings").font(.caption).foregroundStyle(.secondary)
             }
             feedWithHomeChrome {
-                ContentPagedList(operation: "feed", arguments: arguments,
-                                 restoreID: positions.position(board: category, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
-                                 replacePage: { target in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    page = target
-                }, pageJumpRequest: $pageJumpRequest, homeBoardSlugs: homeBoardSlugs, boardMotion: boardMotion,
-                                 selectHomeBoard: { target in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    selectBoard(target)
-                }, visible: { id, rowPage in
-                    guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
-                    positions.record(board: ownerBoard, sort: ownerSort, postID: id, page: rowPage)
-                })
+                // Boards are pages of one pager, so a swipe has the neighbouring
+                // board's real list beside it instead of empty canvas.
+                ContentBoardPager(boards: pagerBoards, selection: boardSelection) { board in
+                    ContentPagedList(operation: "feed", arguments: pagerArguments(board),
+                                     restoreID: positions.position(board: board, sort: sort).flatMap { $0.page == page ? $0.postID : nil },
+                                     replacePage: pagerReplaceTarget(board, generation: ownerGeneration),
+                                     pageJumpRequest: board == category ? $pageJumpRequest : .constant(nil),
+                                     homeBoardSlugs: homeBoardSlugs, paging: true,
+                                     selectHomeBoard: { target in
+                        guard ownerGeneration == app.generation, ownerBoard == category, ownerSort == sort else { return }
+                        selectBoard(target)
+                    }, visible: { id, rowPage in
+                        // The page reports its own board; the owner board above is
+                        // only whatever the rail selected at that instant.
+                        guard ownerGeneration == app.generation, ownerSort == sort else { return }
+                        positions.record(board: board, sort: ownerSort, postID: id, page: rowPage)
+                    })
+                }
             }
         }
         .background(ContentSurface(canvas: true))
@@ -201,6 +206,27 @@ struct ContentPostList: View {
         case .signIn: app.showSignIn()
         case .compose(let arguments): app.open("PostComposer", arguments)
         }
+    }
+    private var pagerBoards: [String] {
+        // The combined feed is the empty slug and must stay first.
+        homeBoardSlugs.isEmpty ? [""] : homeBoardSlugs
+    }
+    /// Only the board the rail is actually showing may drive the shared page
+    /// state; a neighbour replacing its own window must not move it.
+    private func pagerReplaceTarget(_ board: String, generation: Int) -> ((Int64) -> Void)? {
+        guard board == category else { return nil }
+        return { target in
+            guard board == category, generation == app.generation, sort == self.sort else { return }
+            page = target
+        }
+    }
+    /// Each page owns its own feed arguments; a neighbour opens on its saved
+    /// page, never on the page the current board happens to be showing.
+    private func pagerArguments(_ board: String) -> [String: JSONValue] {
+        var value: [String: JSONValue] = ["sort": .string(sort),
+                                          "page": .integer(board == category ? page : (positions.position(board: board, sort: sort)?.page ?? 1))]
+        if !board.isEmpty { value["categorySlug"] = .string(board) }
+        return value
     }
     private var arguments: [String: JSONValue] {
         var value: [String: JSONValue] = ["sort": .string(sort), "page": .integer(page)]
@@ -560,6 +586,7 @@ struct ContentPagedList: View {
     init(operation: String, arguments: [String: JSONValue], restoreID: Int64? = nil,
          clearSearch: (() -> Void)? = nil, replacePage: ((Int64) -> Void)? = nil,
          pageJumpRequest: Binding<ContentHomePageJumpIntent?> = .constant(nil), homeBoardSlugs: [String] = [],
+         paging: Bool = false,
          boardMotion: ContentFeedBoardMotion? = nil,
          selectHomeBoard: ((String) -> Void)? = nil,
          visible: @escaping (Int64, Int64?) -> Void = { _, _ in }) {
@@ -567,7 +594,9 @@ struct ContentPagedList: View {
         self.replacePage = replacePage
         self._pageJumpRequest = pageJumpRequest
         self.homeBoardSlugs = homeBoardSlugs
-        self.boardMotion = boardMotion
+        // Inside the pager the page controller owns horizontal travel; leaving
+        // the board pan on the list would let it steal the swipe.
+        self.boardMotion = paging ? nil : boardMotion
         self.selectHomeBoard = selectHomeBoard
         self.requestedRestoreID = restoreID
         _restoreID = State(initialValue: restoreID)
