@@ -100,7 +100,7 @@ struct ContentThreadOpening {
     init(floor: String?, page: Int64?, status: JSONValue) {
         let seen = status["seenRepliesIfUnread"]?.int
         firstNewFloor = seen.flatMap { $0 > 0 && $0 < Int64(Int32.max) ? $0 + 1 : nil }
-        target = ContentReadingTarget(floor: floor ?? (page == nil ? firstNewFloor.map { "#\($0)" } : nil), page: page)
+        target = ContentReadingTarget(floor: floor ?? (page == nil ? "#0" : nil), page: page)
         let first = status["firstLoadedPage"]?.int
         let last = status["lastLoadedPage"]?.int
         needsLoad = status["isThreadFresh"]?.bool != true || seen != nil || first == nil || last == nil || target.page < (first ?? 1) || target.page > (last ?? 1)

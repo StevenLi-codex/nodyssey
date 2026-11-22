@@ -11,10 +11,12 @@ import NodysseyNativeCore
     #expect(ContentReadingTarget(floor: "#127", page: 13).clamped(to: 4) == ContentReadingTarget(floor: nil, page: 4))
 }
 
-@Test func unreadOpeningOverridesFreshCacheButNamedPageWins() {
+@Test func ordinaryOpeningShowsBodyAndPreservesUnreadMarkerAndExplicitTargets() {
     let fresh: JSONValue = .object(["isThreadFresh": .bool(true), "seenRepliesIfUnread": .integer(20), "firstLoadedPage": .integer(1), "lastLoadedPage": .integer(5)])
     let unread = ContentThreadOpening(floor: nil, page: nil, status: fresh)
-    #expect(unread.target == ContentReadingTarget(floor: "#21", page: nil))
+    #expect(unread.target == ContentReadingTarget(floor: "#0", page: nil))
+    #expect(unread.firstNewFloor == 21)
+    #expect(ContentThreadOpening(floor: "#21", page: nil, status: fresh).target.page == 3)
     #expect(unread.needsLoad)
     let named = ContentThreadOpening(floor: nil, page: 2, status: fresh)
     #expect(named.target.page == 2)

@@ -15,6 +15,13 @@ enum ContentBackSwipe {
         velocityX.isFinite && velocityY.isFinite && directed(velocityX, rightToLeft) > abs(velocityY) * 1.5
     }
 
+    static func beginsAfterTouchDown(velocityX: Double, velocityY: Double, travelX: Double, travelY: Double,
+                                     rightToLeft: Bool) -> Bool {
+        begins(velocityX: velocityX, velocityY: velocityY, rightToLeft: rightToLeft) ||
+            (travelX.isFinite && travelY.isFinite && directed(travelX, rightToLeft) > 4 &&
+                abs(travelX) > abs(travelY) * 1.25)
+    }
+
     static func progress(translationX: Double, width: Double, rightToLeft: Bool) -> Double {
         guard translationX.isFinite, width.isFinite, width > 0 else { return 0 }
         return min(1, max(0, directed(translationX, rightToLeft) / width))

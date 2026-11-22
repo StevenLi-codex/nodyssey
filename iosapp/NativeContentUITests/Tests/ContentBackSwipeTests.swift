@@ -107,6 +107,12 @@ import Testing
         #expect(ContentBackSwipe.progress(translationX: 10, width: 400, rightToLeft: true) == 0)
     }
 
+    @Test func initialTravelAdmitsSlowHorizontalSwipeWhenUIKitHasNoVelocity() {
+        #expect(ContentBackSwipe.beginsAfterTouchDown(velocityX: 0, velocityY: 0, travelX: 16, travelY: 5, rightToLeft: false))
+        #expect(ContentBackSwipe.beginsAfterTouchDown(velocityX: 0, velocityY: 0, travelX: -16, travelY: 5, rightToLeft: true))
+        #expect(!ContentBackSwipe.beginsAfterTouchDown(velocityX: 0, velocityY: 0, travelX: 5, travelY: 16, rightToLeft: false))
+    }
+
     @Test func recognizingPanAfterInitialMovementPreservesFingerTravel() {
         let correction = ContentBackSwipe.initialTranslationCorrection(start: 120, current: 139, reported: 0)
         #expect(correction == 19)
