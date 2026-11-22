@@ -8,6 +8,7 @@ struct EditorMessageThread: View {
     @StateObject private var store = NativeStore()
     @State private var retry = 0
     @State private var reading = false
+    @Environment(\.colorScheme) private var colorScheme
     private var messages: [JSONValue] { store.value["messages"]?.array ?? [] }
     private var peerName: String { store.value["userName"]?.string ?? String(uid) }
 
@@ -18,6 +19,7 @@ struct EditorMessageThread: View {
             EditorMessageHistory(scope: .init(generation: app.generation, uid: uid),
                                  messages: messages, peer: peerName, quote: model.quote)
                 .id(EditorMessageFollowState.Scope(generation: app.generation, uid: uid))
+                .background(ChatPalette.canvas(colorScheme))
             if store.isLoading { ProgressView() }
         }
         .task(id: "\(app.generation):\(uid):\(retry)") { await store.observe(app, "messages.thread", ["uid": .integer(uid)]) }
@@ -89,6 +91,24 @@ private struct EditorMessageItem: Identifiable {
     var id: String? { value["id"]?.string }
 }
 
+/// Conversation palette from the handoff artboard: a cool grey canvas, white
+/// incoming bubbles, and a pale blue tint for own rich bodies.
+private enum ChatPalette {
+    static func canvas(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(.sRGB, white: 0.07) : Color(.sRGB, red: 0.949, green: 0.949, blue: 0.973)
+    }
+    static func incoming(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(.sRGB, white: 0.14) : .white
+    }
+    static func ownRichTint(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(.sRGB, red: 0.13, green: 0.18, blue: 0.30)
+                        : Color(.sRGB, red: 0.894, green: 0.925, blue: 1.0)
+    }
+    static func dayPill(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(.sRGB, white: 0.16) : Color(.sRGB, red: 0.894, green: 0.910, blue: 0.945)
+    }
+}
+
 private func editorMessageDay(_ text: String?) -> String? {
     guard let text else { return nil }
     let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
@@ -137,18 +157,18 @@ private struct EditorMessageHistory: View {
                         ForEach(items) { item in
                             if let day = item.dayLabel {
                                 Text(day)
-                                    .font(.caption2.weight(.medium))
+                                    .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                    .background(.quaternary, in: Capsule())
+                                    .padding(.horizontal, 12).padding(.vertical, 5)
+                                    .background(ChatPalette.dayPill(colorScheme), in: Capsule())
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 10)
                             }
                             if let id = item.id {
                                 EditorMessageBubble(value: item.value, mine: item.mine, runEnd: item.runEnd,
-                                                    peer: peer, maxWidth: max(160, viewport.size.width * 0.76),
+                                                    peer: peer, maxWidth: max(150, viewport.size.width * 0.70),
                                                     quote: quote)
-                                    .padding(.top, item.startsRun && item.dayLabel == nil ? 8 : 1)
+                                    .padding(.top, item.startsRun && item.dayLabel == nil ? 12 : 4)
                                     .id(id)
                             }
                         }
@@ -262,15 +282,16 @@ private struct EditorMessageBubble: View {
     private var text: String { value["content"]?.string ?? "" }
     private var clock: String? { editorMessageClock(value["sentAtText"]?.string) }
     private var usesSolidFill: Bool { mine && value["isMarkdown"]?.bool != true }
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .bottom, spacing: 8) {
             // Telegram only shows a face beside the last bubble of a run; an
             // empty slot keeps the column aligned for the rest.
             if mine {
                 Spacer(minLength: 0)
             } else {
-                if runEnd { ChatAvatar(name: peer, size: 26) } else { Color.clear.frame(width: 26, height: 1) }
+                if runEnd { ChatAvatar(name: peer, size: 28) } else { Color.clear.frame(width: 28, height: 1) }
             }
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
                 bubble
@@ -301,19 +322,19 @@ private struct EditorMessageBubble: View {
                     Text(clock)
                     if mine { Image(systemName: "checkmark") }
                 }
-                .font(.caption2)
+                .font(.system(size: 10))
                 .foregroundStyle(usesSolidFill ? Color.white.opacity(0.85) : Color.secondary)
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.top, 7)
-        .padding(.bottom, 5)
+        .padding(.horizontal, 13)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
         .background {
             ChatBubbleShape(mine: mine, tail: runEnd)
                 // Rich bodies keep the light tint: their own text colours are not
                 // ours to invert, so a solid fill would make them unreadable.
-                .fill(mine ? AnyShapeStyle(value["isMarkdown"]?.bool == true ? Color.accentColor.opacity(0.18) : Color.accentColor)
-                      : AnyShapeStyle(.quaternary))
+                .fill(mine ? AnyShapeStyle(usesSolidFill ? Color.accentColor : ChatPalette.ownRichTint(colorScheme))
+                      : AnyShapeStyle(ChatPalette.incoming(colorScheme)))
         }
         .contentShape(ChatBubbleShape(mine: mine, tail: runEnd))
         .contextMenu { Button(EL("quote")) { quote(text) } }
