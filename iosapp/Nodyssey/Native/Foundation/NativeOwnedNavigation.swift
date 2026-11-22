@@ -29,8 +29,16 @@ struct NativeOwnedNavigation: UIViewControllerRepresentable {
                     rightToLeft: direction == .rightToLeft, reduceMotion: reduceMotion || motionDisabled) { [weak owner] id, destination in
             let screen = destination.map { AnyView(NativeScreen(destination: $0)) } ?? root
             let needsBack = destination.map { !["PostComposer", "MessageThread"].contains($0.route) } == true
+            let threadBackDrag: (@MainActor (DragGesture.Value?, Bool) -> Void)?
+            if destination?.route == "PostDetail" {
+                threadBackDrag = { [weak owner] sample, ended in
+                    owner?.trackThreadDrag(from: id, sample: sample, ended: ended)
+                }
+            } else {
+                threadBackDrag = nil
+            }
             return AnyView(NavigationStack {
-                screen.toolbar {
+                screen.environment(\.nativeThreadBackDrag, threadBackDrag).toolbar {
                     if needsBack {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button { owner?.requestBack(from: id) } label: {
@@ -62,11 +70,24 @@ private struct NativeOwnedPageEnvironment: ViewModifier {
             let pageActive = values.nativeRichSelectionActive
             let pageLifetimes = values.nativeRichSelectionLifetimes
             let homeEndPageScope = values.homeEndPageScope
+            let threadBackDrag = values.nativeThreadBackDrag
             values = inherited
+            values.nativeThreadBackDrag = threadBackDrag
             values.homeEndPageScope = homeEndPageScope
             values.nativeRichSelectionActive = pageActive && inherited.nativeRichSelectionActive
             values.nativeRichSelectionLifetimes = inherited.nativeRichSelectionLifetimes + pageLifetimes
         }
+    }
+}
+
+private struct NativeThreadBackDragKey: EnvironmentKey {
+    static let defaultValue: (@MainActor (DragGesture.Value?, Bool) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var nativeThreadBackDrag: (@MainActor (DragGesture.Value?, Bool) -> Void)? {
+        get { self[NativeThreadBackDragKey.self] }
+        set { self[NativeThreadBackDragKey.self] = newValue }
     }
 }
 
@@ -124,6 +145,7 @@ extension EnvironmentValues {
         let returnsToHomeFromPost: Bool
         var translationCorrection = CGPoint.zero
         var releaseVelocity: CGFloat = 0
+        var drivenByThread = false
         var startX: Double
         var dragOrigin: CGFloat = 0
         var progress: CGFloat = 0
@@ -616,24 +638,13 @@ extension EnvironmentValues {
                 drag(motion, sender)
                 return
             }
-            guard let start, let from = visible, let id = from.id, let to = pages.dropLast().last,
-                  view.bounds.width > 0, let lease = app.beginInteractivePop(stack: stack, from: id) else { return }
-            guard to.id == lease.to else { app.cancelInteractivePop(lease); return }
-            let returnsToHomeFromPost = stack == .home && to.id == nil &&
-                app.homePath.last?.route == "PostDetail"
-            let motion = Motion(lease: lease, from: from, to: to, width: view.bounds.width, rtl: rtl, startX: start.x,
-                                returnsToHomeFromPost: returnsToHomeFromPost)
+            guard let start, let motion = beginMotion(at: start.x) else { return }
             captureTranslationOrigin(motion, sender, start: start)
-            self.motion = motion
-            attach(to)
-            to.surface.isUserInteractionEnabled = false
-            to.surface.accessibilityElementsHidden = true
-            view.bringSubviewToFront(from.surface)
             drag(motion, sender)
         case .changed:
-            if let motion { drag(motion, sender) }
+            if let motion, !motion.drivenByThread { drag(motion, sender) }
         case .ended:
-            guard let motion, !motion.cancelling else { return }
+            guard let motion, !motion.drivenByThread, !motion.cancelling else { return }
             let distance = translation(motion, sender)
             let velocity = sender.velocity(in: view).x
             motion.releaseVelocity = motion.rightToLeft ? -velocity : velocity
@@ -644,8 +655,53 @@ extension EnvironmentValues {
                 release(motion)
             } else { cancel(motion) }
         case .cancelled, .failed:
-            if let motion { cancel(motion) }
+            if let motion, !motion.drivenByThread { cancel(motion) }
         default: break
+        }
+    }
+
+    private func beginMotion(at startX: CGFloat) -> Motion? {
+        guard let from = visible, let id = from.id, let to = pages.dropLast().last,
+              view.bounds.width > 0, let lease = app.beginInteractivePop(stack: stack, from: id) else { return nil }
+        guard to.id == lease.to else { app.cancelInteractivePop(lease); return nil }
+        homeEnd.clear()
+        let returningHome = stack == .home && to.id == nil && isPostDetail
+        let motion = Motion(lease: lease, from: from, to: to, width: view.bounds.width, rtl: rtl,
+                            startX: startX, returnsToHomeFromPost: returningHome)
+        self.motion = motion
+        attach(to)
+        to.surface.isUserInteractionEnabled = false
+        to.surface.accessibilityElementsHidden = true
+        view.bringSubviewToFront(from.surface)
+        return motion
+    }
+
+    func trackThreadDrag(from id: UUID?, sample: DragGesture.Value?, ended: Bool) {
+        guard let id, visible?.id == id, isPostDetail else { return }
+        guard let sample else {
+            if let motion, motion.drivenByThread, motion.animator == nil, motion.prepare == nil { cancel(motion) }
+            return
+        }
+        let distance = sample.translation
+        if motion == nil, !ended, canReceive, let root = visible?.view,
+           ContentBackSwipe.beginsAfterTouchDown(velocityX: 0, velocityY: 0,
+               travelX: distance.width, travelY: distance.height, rightToLeft: rtl) {
+            let start = view.convert(sample.startLocation, from: root)
+            guard admitsStart(at: start), let created = beginMotion(at: start.x) else { return }
+            created.drivenByThread = true
+        }
+        guard let motion, motion.drivenByThread, motion.animator == nil, !motion.cancelling,
+              app.isInteractivePopCurrent(motion.lease) else { return }
+        motion.progress = ContentBackSwipe.progress(translationX: distance.width, width: motion.width, rightToLeft: rtl)
+        render(motion, progress: motion.progress)
+        if ended {
+            let projected = sample.predictedEndTranslation.width
+            let velocity = (projected - distance.width) / 0.18
+            motion.releaseVelocity = rtl ? -velocity : velocity
+            if ContentBackSwipe.shouldReturn(startX: motion.startX, width: motion.width, translationX: distance.width,
+                translationY: distance.height, predictedX: projected, rightToLeft: rtl) {
+                release(motion)
+            } else { cancel(motion) }
         }
     }
 

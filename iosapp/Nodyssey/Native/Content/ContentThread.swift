@@ -8,6 +8,10 @@ struct ContentPostDetail: View {
     @EnvironmentObject private var app: NativeAppModel
     @Environment(\.nativeDestinationID) private var destinationID
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.nativeThreadBackDrag) private var nativeThreadBackDrag
+    @GestureState private var threadDragActive = false
+    #endif
     let postID: Int64
     let initialFloor: String?
     let initialPage: Int64?
@@ -101,9 +105,26 @@ struct ContentPostDetail: View {
                 .coordinateSpace(name: "thread.viewport")
                 .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(ContentThreadFrames.self) { frames in updateViewport(frames, height: viewport.size.height) }
+                #if os(iOS)
+                .simultaneousGesture(DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                    .updating($threadDragActive) { _, active, _ in active = true }
+                    .onChanged { value in
+                        if abs(value.translation.height) > abs(value.translation.width), !hasRead { hasRead = true }
+                        nativeThreadBackDrag?(value, false)
+                    }
+                    .onEnded { nativeThreadBackDrag?($0, true) })
+                .onChange(of: threadDragActive) { active in
+                    guard !active else { return }
+                    Task { @MainActor in
+                        await Task.yield()
+                        nativeThreadBackDrag?(nil, false)
+                    }
+                }
+                #else
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in
                     if !hasRead { hasRead = true }
                 })
+                #endif
             }
             .onChange(of: thread.value) { _ in restoreScroll(proxy) }
             .onChange(of: target) { _ in restoreScroll(proxy) }
