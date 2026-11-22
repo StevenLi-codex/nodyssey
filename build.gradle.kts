@@ -10,6 +10,34 @@ plugins {
     alias(libs.plugins.spotless)
 }
 
+// CMP-10727 is an iOS keyboard-layout defect. Keep Android/desktop production graphs unchanged;
+// only iOS targets consume alpha02's official fix. The JVM test configurations of :designsys
+// and :ui exercise the same iOS shared implementation without requiring an iPhone.
+val iosImeComposeVersion = libs.versions.composeIosIme.get()
+val upstreamComposeVersion = libs.versions.composeMultiplatform.get()
+subprojects {
+    // Simulator tests are iOS checks, not another application build. CI supplies an available
+    // booted device UDID rather than relying on a model name that changes with Xcode images.
+    tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+        providers.gradleProperty("iosTestDevice").orNull?.let { device.set(it) }
+    }
+    configurations.configureEach {
+        val iosTarget = name.startsWith("iosArm64") || name.startsWith("iosSimulatorArm64")
+        val keyboardRegression = project.name in setOf("designsys", "ui") &&
+            name in setOf("jvmTestCompileClasspath", "jvmTestRuntimeClasspath")
+        if (iosTarget || keyboardRegression) {
+            resolutionStrategy.eachDependency {
+                if (requested.group.startsWith("org.jetbrains.compose.") &&
+                    requested.version == upstreamComposeVersion
+                ) {
+                    useVersion(iosImeComposeVersion)
+                    because("iOS keyboard-offset settling fix: CMP-10727, compose-multiplatform-core #3406")
+                }
+            }
+        }
+    }
+}
+
 /**
  * ktlint rule configuration.
  *

@@ -1,0 +1,100 @@
+name: iOS IME regression and unsigned build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ios-wechat-ime-freeze]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    # Standard free Intel Mac pool; cross-compiles the ARM64 iPhone app.
+    # ARM64 simulator execution remains explicitly unverified on this host.
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify Apple toolchain
+        run: |
+          test -d "$DEVELOPER_DIR"
+          test "$(uname -m)" = x86_64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      # The shared Gradle modules apply AGP even for an iOS archive. SDK setup is configuration
+      # only: this workflow never runs Android tests or builds an APK/AAB.
+      - uses: android-actions/setup-android@v4
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: ios-ime-konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: ios-ime-konan-${{ runner.os }}-${{ runner.arch }}-
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: false
+      - name: Verify formatting and iOS regressions on JVM
+        run: ./gradlew spotlessCheck :designsys:jvmTest :shared:jvmTest :ui:jvmTest
+      - name: Compile iOS native integration tests without executing ARM binaries
+        run: |
+          ./gradlew :designsys:compileTestKotlinIosSimulatorArm64 :iosapp:compileTestKotlinIosSimulatorArm64
+          {
+            echo '### Intel Mac verification boundary'
+            echo 'JVM regressions executed. iOS integration tests compiled only.'
+            echo 'ARM64 simulator and macosArm64Test execution are NOT verified on this Intel host.'
+            echo 'The unsigned IPA is a test build pending native/device acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Build unsigned iOS test app
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8"
+        run: |
+          xcodebuild \
+            -project iosapp/Nodyssey.xcodeproj \
+            -scheme Nodyssey \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Nodyssey.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="1.2.22-ime.2" \
+            CURRENT_PROJECT_VERSION="53"
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/Nodyssey.xcarchive/Products/Applications/Nodyssey.app" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry nodyssey-1.2.22-ime.2-unsigned.ipa Payload)
+          shasum -a 256 "$RUNNER_TEMP/nodyssey-1.2.22-ime.2-unsigned.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nodyssey-ios-ime-unsigned
+          path: ${{ runner.temp }}/nodyssey-1.2.22-ime.2-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ime-test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Stop Gradle daemons
+        if: always()
+        run: ./gradlew --stop

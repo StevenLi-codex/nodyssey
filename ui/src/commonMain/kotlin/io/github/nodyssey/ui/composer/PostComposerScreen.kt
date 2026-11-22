@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -293,6 +294,11 @@ fun PostComposerScreen(
     payeeUid: () -> Long? = { null },
     onInsertReceiveCode: (Int, Long, String, Boolean) -> Unit = { _, _, _, _ -> },
 ) {
+    val inputStates = listOf(titleState, bodyState)
+    val closeInput = composerInputAction(inputStates, action = onClose)
+    val publishInput = composerInputAction(inputStates, action = onPublish)
+    val previewInput = composerInputAction(inputStates) { onViewModeChange(ComposerViewMode.PREVIEW) }
+    val compareInput = composerInputAction(inputStates) { onViewModeChange(ComposerViewMode.COMPARE) }
     // While a publish is in flight the request may already have created the topic; leaving now would
     // cancel the ViewModel, keep the draft, and set up a duplicate post on the next attempt. Preview
     // reuses the same handler so system back mirrors the top bar's arrow instead of closing.
@@ -319,9 +325,15 @@ fun PostComposerScreen(
                     state.savedAtMillis?.let { stringResource(Res.string.composer_draft_saved, formatTime(it)) }
                         ?: stringResource(Res.string.composer_draft_saving)
                 },
-                onClose = onClose,
-                onViewModeChange = onViewModeChange,
-                onPublish = onPublish,
+                onClose = closeInput,
+                onViewModeChange = { mode ->
+                    when (mode) {
+                        ComposerViewMode.PREVIEW -> previewInput()
+                        ComposerViewMode.COMPARE -> compareInput()
+                        ComposerViewMode.CONTENT -> onViewModeChange(mode)
+                    }
+                },
+                onPublish = publishInput,
             )
         },
     ) { padding ->
@@ -526,6 +538,7 @@ private fun EditorContent(
     modifier: Modifier = Modifier,
 ) {
     val editorState = rememberMarkdownEditorState()
+    val panelInput = composerInputAction(listOf(titleState, bodyState)) {}
     val focusRequester = remember { FocusRequester() }
     var customizing by rememberSaveable { mutableStateOf(false) }
     var composingVote by rememberSaveable { mutableStateOf(false) }
@@ -543,6 +556,7 @@ private fun EditorContent(
                 titleState = titleState,
                 length = state.title.length,
                 onNext = { focusRequester.requestFocus() },
+                onFocused = { if (iosComposerFocusHandoff) editorState.closePanels() },
             )
         }
         // One value for the field and the panel's backspace, so the two agree on what a sticker is.
@@ -552,7 +566,9 @@ private fun EditorContent(
             bodyState = bodyState,
             stickerPictures = stickerPictures,
             focusRequester = focusRequester,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).onFocusChanged {
+                if (iosComposerFocusHandoff && it.isFocused) editorState.closePanels()
+            },
         )
         AttachmentTray(
             attachments = state.attachments,
@@ -563,6 +579,7 @@ private fun EditorContent(
             actions = state.toolbar.enabled,
             bodyState = bodyState,
             editorState = editorState,
+            beforePanel = if (iosComposerFocusHandoff) panelInput else null,
             // The column the title and the body are in, so on a tablet the eight format keys are not
             // stretched across the window into bars a few hundred dp wide each. The bar only: the
             // emoji panel under it stands in for the keyboard, and spans the window as one does.
@@ -690,6 +707,7 @@ private fun TitleField(
     length: Int,
     /** The keyboard's action key: on to the body, as a single-line title's used to. */
     onNext: () -> Unit,
+    onFocused: () -> Unit,
 ) {
     // Borderless and large (1d): the title is the first line of the page rather than a form field,
     // and at 22sp it already reads as the heading the thread will show. It wraps instead of
@@ -709,7 +727,9 @@ private fun TitleField(
         // Multi-line fields get a return key by default, and here it would only ever be dropped.
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
         onKeyboardAction = { onNext() },
-        modifier = Modifier.readableWidth().padding(start = PageMargin, end = PageMargin, top = Spacing.lg),
+        modifier = Modifier.readableWidth()
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .padding(start = PageMargin, end = PageMargin, top = Spacing.lg),
         container = { content ->
             Row(verticalAlignment = Alignment.Bottom) {
                 Box(Modifier.weight(1f)) { content() }

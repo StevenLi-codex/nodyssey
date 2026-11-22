@@ -80,6 +80,9 @@ kotlin {
     }
 
     sourceSets {
+        iosTest.dependencies {
+            implementation(kotlin("test"))
+        }
         iosMain.dependencies {
             // The screens, and through them `:designsys`, `:shared` and Compose Resources — the same
             // three faces `:app` reads.

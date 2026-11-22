@@ -65,7 +65,8 @@ class MarkdownEditorState(
         if (emojiOpen) formatOpen = false
     }
 
-    fun toggleFormat() {
+    fun toggleFormat(beforePanel: (() -> Unit)? = null) {
+        if (!formatOpen) beforePanel?.invoke()
         formatOpen = !formatOpen
         if (formatOpen) emojiOpen = false
     }
@@ -101,8 +102,8 @@ fun rememberMarkdownEditorState(): MarkdownEditorState =
 /**
  * What a key does, for every editor: toggle the panel, hand the picker back, or rewrite the text.
  *
- * [hideKeyboard] runs only when the emoji panel has just opened — the panel takes the keyboard's
- * place, and the two stacked leave two lines of the text visible.
+ * [beforePanel] is an optional synchronous input handoff, called before an emoji panel becomes
+ * visible. Without one, [hideKeyboard] retains the legacy behavior after the panel opens.
  */
 fun MarkdownEditorState.dispatch(
     action: EditorAction,
@@ -110,12 +111,14 @@ fun MarkdownEditorState.dispatch(
     onPickImages: () -> Unit,
     onPickHostedImages: () -> Unit,
     onFormatted: () -> Unit,
+    beforePanel: (() -> Unit)? = null,
     hideKeyboard: () -> Unit,
 ) {
     when (action) {
         EditorAction.EMOJI -> {
+            if (!emojiOpen) beforePanel?.invoke()
             toggleEmoji()
-            if (emojiOpen) hideKeyboard()
+            if (emojiOpen && beforePanel == null) hideKeyboard()
         }
 
         EditorAction.IMAGE -> onPickImages()
