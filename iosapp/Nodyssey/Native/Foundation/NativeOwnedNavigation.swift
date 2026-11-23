@@ -359,7 +359,8 @@ struct NativePostReturnCard: UIViewRepresentable {
             page.surface.addSubview(page.view)
 
         }
-        if page.surface.superview !== view {
+        let needsInsertion = page.surface.superview !== view
+        if needsInsertion {
             page.surface.transform = .identity
             page.surface.frame = view.bounds
             page.view.frame = page.surface.bounds
@@ -374,13 +375,15 @@ struct NativePostReturnCard: UIViewRepresentable {
         page.homeEndScope?.finishAttach()
         // A retained hidden paragraph has synchronously discarded copy data.
         // Rebuild its live content before the first drag frame reveals it.
-        page.view.setNeedsLayout()
         if stack == .home, pages.first === page {
             page.homeDidLayout = { [weak self, weak page] in
                 if let page { self?.restoreHomeEnd(page) }
             }
         }
-        page.view.layoutIfNeeded()
+        if needsInsertion {
+            page.view.setNeedsLayout()
+            page.view.layoutIfNeeded()
+        }
         restoreHomeEnd(page)
     }
 

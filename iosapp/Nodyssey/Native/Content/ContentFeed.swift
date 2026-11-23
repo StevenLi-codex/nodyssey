@@ -199,20 +199,21 @@ struct ContentPostList: View {
         let adjacentBoards = boards.enumerated().filter { abs($0.offset - selectedIndex) <= 1 }.map(\.element)
         let mountedBoards = adjacentBoards.contains(category) ? adjacentBoards : [category]
         return GeometryReader { geometry in
+            let direction: CGFloat = layoutDirection == .rightToLeft ? -1 : 1
+            let stride = geometry.size.width * direction
+            let pages = ZStack {
+                ForEach(mountedBoards, id: \.self) { board in
+                    let index = boards.firstIndex(of: board) ?? selectedIndex
+                    boardPage(board)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .offset(x: CGFloat(index - selectedIndex) * stride)
+                        .allowsHitTesting(board == category)
+                        .accessibilityHidden(board != category)
+                }
+            }
             ContentFeedBoardFrame(motion: boardMotion, board: category) { pose in
                 let position = pose?.boardPosition ?? CGFloat(selectedIndex)
-                let direction: CGFloat = layoutDirection == .rightToLeft ? -1 : 1
-                ZStack {
-                    ForEach(mountedBoards, id: \.self) { board in
-                        let index = boards.firstIndex(of: board) ?? selectedIndex
-                        let offset = (CGFloat(index) - position) * geometry.size.width * direction
-                        boardPage(board)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .offset(x: offset)
-                            .allowsHitTesting(board == category)
-                            .accessibilityHidden(board != category)
-                    }
-                }
+                pages.offset(x: (CGFloat(selectedIndex) - position) * stride)
             }
         }
     }
@@ -695,15 +696,17 @@ struct ContentPagedList: View {
                                 if let owner {
                                     GeometryReader { geometry in
                                         Color.clear.preference(key: ContentFeedRowsPreference.self, value: [
-                                            ContentFeedVisibleRow(ticket: owner, id: row.id, page: row.page, frame: geometry.frame(in: .global))
+                                            ContentFeedVisibleRow(ticket: owner, id: row.id, page: row.page, frame: geometry.frame(in: .named(transitionFeedID)))
                                         ])
                                     }.allowsHitTesting(false)
                                 }
                             }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                             .listRowSeparator(.hidden).listRowBackground(ContentSurface(canvas: true))
-                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)|\(store.isReplacingPagingWindow)|\(homeTopHintSuppression == owner)") {
-                                // Row tasks are prefetch hints, never visibility observations.
+                            .task(id: "\(window.pagerID ?? "")|\(row.globalIndex)|\(store.isReplacingPagingWindow)|\(homeTopHintSuppression == owner)|\(isHome)") {
+                                // Adjacent boards preload their initial window. Only a
+                                // selected feed or Search generates row-level paging hints.
+                                guard operation != "feed" || isHome else { return }
                                 guard let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
                                       homeTopHintSuppression != ticket else { return }
                                 guard let arguments = window.accessArguments(for: row.id) else { return }
@@ -761,13 +764,13 @@ struct ContentPagedList: View {
                 if isHome, let ticket = owner, owns(ticket), case .success(let currentWindow) = currentWindow, let first = currentWindow.rows.first {
                     let frame = rows.first { $0.ticket == ticket && $0.id == first.id }?.frame
                     let atTop = NativeHomeTabInteraction.isAtTop(firstMinY: frame.map { Double($0.minY) },
-                                                                  viewportMinY: Double(viewport.frame(in: .global).minY))
+                                                                  viewportMinY: 0)
                     if homeTopPosition?.ticket != ticket || homeTopPosition?.id != first.id || homeTopPosition?.atTop != atTop {
                         homeTopPosition = (ticket, first.id, atTop)
                     }
                 } else if homeTopPosition != nil { homeTopPosition = nil }
                 guard isVisible, restored, let ticket = owner, owns(ticket), !store.isReplacingPagingWindow,
-                      let first = ContentFeedViewport.firstVisible(rows, viewport: viewport.frame(in: .global), ticket: ticket),
+                      let first = ContentFeedViewport.firstVisible(rows, viewport: CGRect(origin: .zero, size: viewport.size), ticket: ticket),
                       case .success(let currentWindow) = currentWindow,
                       let row = currentWindow.rows.first(where: { $0.id == first.id && $0.page == first.page }) else { return }
                 // Do not open a mutable @State access on every pixel of travel.
@@ -878,6 +881,7 @@ struct ContentPagedList: View {
             }
           }
         }
+        .coordinateSpace(name: transitionFeedID)
         .nativeRefreshable(generation: app.generation,
                            scope: String(data: (try? JSONEncoder().encode([operation, arguments["categorySlug"]?.string ?? "", arguments["sort"]?.string ?? ""])) ?? Data(), encoding: .utf8) ?? "",
                            requestID: homeRefreshRequest, failure: { store.failure != nil }, completion: {
